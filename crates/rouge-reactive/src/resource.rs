@@ -1,0 +1,61 @@
+use crate::effect::effect;
+use crate::scope::untrack;
+use crate::signal::{Signal, signal};
+use crate::task::spawn;
+use std::future::Future;
+
+pub struct Resource<T> {
+    loading: Signal<bool>,
+    latest: Signal<Option<T>>,
+    generation: Signal<u64>,
+}
+
+impl<T> Clone for Resource<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Resource<T> {}
+
+#[track_caller]
+pub fn resource<T, U: 'static, V: Future<Output = U> + 'static>(
+    source: impl Fn() -> T + 'static,
+    fetch: impl Fn(T) -> V + 'static,
+) -> Resource<U> {
+    let loading = signal(true);
+    let latest = signal(None);
+    let generation = signal(0);
+    effect(move || {
+        generation.get();
+        let input = source();
+        loading.set_if_changed(true);
+        let future = untrack(|| fetch(input));
+        spawn(async move {
+            latest.set(Some(future.await));
+            loading.set(false);
+        });
+    });
+    Resource {
+        loading,
+        latest,
+        generation,
+    }
+}
+
+impl<T: Clone + 'static> Resource<T> {
+    #[track_caller]
+    pub fn get(&self) -> Option<T> {
+        self.latest.get()
+    }
+
+    #[track_caller]
+    pub fn loading(&self) -> bool {
+        self.loading.get()
+    }
+
+    #[track_caller]
+    pub fn refetch(&self) {
+        self.generation.update(|g| *g += 1);
+    }
+}
