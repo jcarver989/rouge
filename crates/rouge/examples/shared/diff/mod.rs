@@ -61,7 +61,7 @@ struct Selection {
     key: RowKey,
     side: Side,
     file: usize,
-    number: Option<u32>,
+    number: Option<usize>,
     tone: Tone,
 }
 
@@ -406,8 +406,8 @@ fn selection_hud(review: Review) -> Div {
             let kind = match (tone, side) {
                 (Tone::Added, _) => "added",
                 (Tone::Removed, _) => "removed",
-                (Tone::Context, Side::Old) => "old side",
-                (Tone::Context, Side::New) => "unchanged",
+                (_, Side::Old) => "old side",
+                (_, Side::New) => "unchanged",
             };
             format!("{}{line} · {kind}", files[file].name())
         }
@@ -620,15 +620,14 @@ fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div 
         .w(GUTTER_WIDTH)
         .pr(12.0)
         .children(number);
-    let mut content = String::new();
+    let content = cell.line.text.clone();
     let spans = cell
+        .line
         .spans
         .iter()
         .map(|span| {
-            let start = content.len();
-            content.push_str(&span.text);
             (
-                start..content.len(),
+                span.range.clone(),
                 SpanStyle {
                     color: Some(theme::token(span.token)),
                     ..Default::default()
@@ -705,7 +704,7 @@ fn stats(added: usize, removed: usize) -> Div {
 }
 
 fn status_code(status: Status) -> Text {
-    code(status.code(), theme::status(status))
+    code(status.code().to_string(), theme::status(status))
         .font(CODE_FONT)
         .text_size(rem(0.75))
 }

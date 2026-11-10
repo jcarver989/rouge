@@ -1,5 +1,5 @@
-use super::patch::{FileDiff, Hunk, Line, Patch, Tone};
-use super::syntax::{Language, Span, highlight};
+use super::patch::{FileDiff, Hunk, Patch, Tone};
+use super::syntax::{HighlightedLine, Language, highlight};
 use std::iter::repeat_n;
 use std::mem::take;
 use std::ops::Range;
@@ -18,8 +18,8 @@ pub(super) enum RowKey {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Cell {
     pub tone: Tone,
-    pub number: Option<u32>,
-    pub spans: Rc<[Span]>,
+    pub number: Option<usize>,
+    pub line: Rc<HighlightedLine>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -62,16 +62,21 @@ impl Document {
     pub(super) fn new(patch: Patch) -> Document {
         let files = patch.files.into_iter().enumerate().map(|(file, diff)| {
             let language = Language::from_path(&diff.path);
-            let kinds = |split: bool| {
-                diff.hunks
-                    .iter()
-                    .flat_map(move |hunk| hunk_rows(hunk, language, split))
-            };
+            let (mut unified, mut split) = (Vec::new(), Vec::new());
+            for hunk in &diff.hunks {
+                let (hunk_unified, hunk_split) = hunk_rows(hunk, language);
+                unified.extend(hunk_unified);
+                split.extend(hunk_split);
+            }
             let row = move |key: RowKey, kind: RowKind| Rc::new(Row { key, file, kind });
             FileRows {
                 header: row(RowKey::Header(file), RowKind::Header),
-                unified: zip(kinds(false), |index| RowKey::Unified(file, index), row),
-                split: zip(kinds(true), |index| RowKey::Split(file, index), row),
+                unified: zip(
+                    unified.into_iter(),
+                    |index| RowKey::Unified(file, index),
+                    row,
+                ),
+                split: zip(split.into_iter(), |index| RowKey::Split(file, index), row),
                 diff: Rc::new(diff),
             }
         });
@@ -143,34 +148,36 @@ fn zip<T>(
         .collect()
 }
 
-fn hunk_rows(hunk: &Hunk, language: Language, split: bool) -> Vec<RowKind> {
-    let cell = |line: &Line, number: Option<u32>| Cell {
-        tone: line.tone,
-        number,
-        spans: highlight(&line.text.replace('\t', "    "), language),
-    };
-    let mut rows = vec![RowKind::Hunk(hunk.header.clone())];
-    if !split {
-        let unified = |line| RowKind::Unified(cell(line, line.new.or(line.old)));
-        rows.extend(hunk.lines.iter().map(unified));
-        return rows;
-    }
+fn hunk_rows(hunk: &Hunk, language: Language) -> (Vec<RowKind>, Vec<RowKind>) {
+    let mut unified = vec![RowKind::Hunk(hunk.header.clone())];
+    let mut split = vec![RowKind::Hunk(hunk.header.clone())];
     let (mut removed, mut added) = (Vec::new(), Vec::new());
     for line in &hunk.lines {
-        match line.tone {
-            Tone::Removed => removed.push(cell(line, line.old)),
-            Tone::Added => added.push(cell(line, line.new)),
+        let cell = Cell {
+            tone: line.kind,
+            number: line.new_line_no.or(line.old_line_no),
+            line: highlight(&line.text, language),
+        };
+        unified.push(RowKind::Unified(cell.clone()));
+        match line.kind {
+            Tone::HunkHeader | Tone::Meta => {
+                split.extend(pair(take(&mut removed), take(&mut added)));
+                split.push(RowKind::Hunk(line.text.to_string()));
+            }
+            Tone::Removed => removed.push(cell),
+            Tone::Added => added.push(cell),
             Tone::Context => {
-                rows.extend(pair(take(&mut removed), take(&mut added)));
-                rows.push(RowKind::Split(
-                    Some(cell(line, line.old)),
-                    Some(cell(line, line.new)),
-                ));
+                split.extend(pair(take(&mut removed), take(&mut added)));
+                let old = Cell {
+                    number: line.old_line_no,
+                    ..cell.clone()
+                };
+                split.push(RowKind::Split(Some(old), Some(cell)));
             }
         }
     }
-    rows.extend(pair(removed, added));
-    rows
+    split.extend(pair(removed, added));
+    (unified, split)
 }
 
 fn pair(removed: Vec<Cell>, added: Vec<Cell>) -> impl Iterator<Item = RowKind> {

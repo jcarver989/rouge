@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::rc::Rc;
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -21,7 +22,7 @@ pub(crate) enum Token {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Span {
-    pub text: String,
+    pub range: Range<usize>,
     pub token: Token,
 }
 
@@ -54,26 +55,37 @@ impl Language {
     }
 }
 
-pub(super) fn highlight(line: &str, language: Language) -> Rc<[Span]> {
-    if language == Language::Plain {
-        return Rc::new([Span {
-            text: line.to_owned(),
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct HighlightedLine {
+    pub text: String,
+    pub spans: Vec<Span>,
+}
+
+pub(super) fn highlight(line: &str, language: Language) -> Rc<HighlightedLine> {
+    let text = line.replace('\t', "    ");
+    let spans = if language == Language::Plain {
+        vec![Span {
+            range: 0..text.len(),
             token: Token::Plain,
-        }]);
-    }
-    let mut lexer = Lexer {
-        rest: line,
-        gap: "",
-        language,
-        spans: Vec::new(),
+        }]
+    } else {
+        let mut lexer = Lexer {
+            rest: &text,
+            offset: 0,
+            start: 0,
+            language,
+            spans: Vec::new(),
+        };
+        lexer.run();
+        lexer.spans
     };
-    lexer.run();
-    lexer.spans.into()
+    Rc::new(HighlightedLine { text, spans })
 }
 
 struct Lexer<'a> {
     rest: &'a str,
-    gap: &'a str,
+    offset: usize,
+    start: usize,
     language: Language,
     spans: Vec<Span>,
 }
@@ -81,7 +93,7 @@ struct Lexer<'a> {
 impl<'a> Lexer<'a> {
     fn run(&mut self) {
         loop {
-            self.gap = self.take_while(char::is_whitespace);
+            self.take_while(char::is_whitespace);
             let Some(first) = self.rest.chars().next() else {
                 break;
             };
@@ -120,6 +132,7 @@ impl<'a> Lexer<'a> {
     fn take(&mut self, len: usize) -> &'a str {
         let (head, tail) = self.rest.split_at(len);
         self.rest = tail;
+        self.offset += len;
         head
     }
 
@@ -129,18 +142,15 @@ impl<'a> Lexer<'a> {
     }
 
     fn push(&mut self, len: usize, token: Token) {
-        let text = self.take(len);
+        self.take(len);
         match self.spans.last_mut() {
-            Some(last) if last.token == token => {
-                last.text.push_str(self.gap);
-                last.text.push_str(text);
-            }
+            Some(last) if last.token == token => last.range.end = self.offset,
             _ => self.spans.push(Span {
-                text: format!("{}{text}", self.gap),
+                range: self.start..self.offset,
                 token,
             }),
         }
-        self.gap = "";
+        self.start = self.offset;
     }
 }
 

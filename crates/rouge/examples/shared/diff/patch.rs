@@ -1,42 +1,7 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Status {
-    Added,
-    Deleted,
-    Modified,
-    Renamed,
-}
-
-impl Status {
-    pub(crate) fn code(self) -> &'static str {
-        match self {
-            Status::Added => "A",
-            Status::Deleted => "D",
-            Status::Modified => "M",
-            Status::Renamed => "R",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Tone {
-    Context,
-    Added,
-    Removed,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Line {
-    pub tone: Tone,
-    pub old: Option<u32>,
-    pub new: Option<u32>,
-    pub text: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Hunk {
-    pub header: String,
-    pub lines: Vec<Line>,
-}
+use clankerdiff_core::FileDiff as CoreFileDiff;
+pub(crate) use clankerdiff_core::{
+    FileStatus as Status, Hunk, PatchLine as Line, PatchLineKind as Tone,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FileDiff {
@@ -100,8 +65,20 @@ impl Patch {
                 (old, new) = ranges;
                 file.hunks.push(Hunk {
                     header: line.to_owned(),
+                    function_context: line
+                        .split("@@")
+                        .nth(2)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned),
+                    old_start: old.number,
+                    old_count: old.left,
+                    new_start: new.number,
+                    new_count: new.left,
                     lines: Vec::new(),
                 });
+            } else if line.starts_with("\\ No newline") {
+                file.push_line(line, &mut old, &mut new);
             } else if line.starts_with("new file mode") || line == "--- /dev/null" {
                 file.status = Status::Added;
             } else if line.starts_with("deleted file mode") || line == "+++ /dev/null" {
@@ -127,7 +104,12 @@ impl FileDiff {
         let (tone, text) = match line.split_at_checked(1) {
             Some(("+", text)) => (Tone::Added, text),
             Some(("-", text)) => (Tone::Removed, text),
-            Some(("\\", _)) => return,
+            Some(("\\", _)) => {
+                if let Some(line) = hunk.lines.last_mut() {
+                    line.no_newline = true;
+                }
+                return;
+            }
             Some((_, text)) => (Tone::Context, text),
             None => (Tone::Context, ""),
         };
@@ -135,26 +117,28 @@ impl FileDiff {
             Tone::Context => (old.next(), new.next()),
             Tone::Added => (None, new.next()),
             Tone::Removed => (old.next(), None),
+            Tone::HunkHeader | Tone::Meta => return,
         };
         self.added += usize::from(tone == Tone::Added);
         self.removed += usize::from(tone == Tone::Removed);
         hunk.lines.push(Line {
-            tone,
-            old,
-            new,
-            text: text.to_owned(),
+            kind: tone,
+            old_line_no: old,
+            new_line_no: new,
+            text: text.into(),
+            no_newline: false,
         });
     }
 }
 
 #[derive(Clone, Copy, Default)]
 struct Remaining {
-    number: u32,
-    left: u32,
+    number: usize,
+    left: usize,
 }
 
 impl Remaining {
-    fn next(&mut self) -> Option<u32> {
+    fn next(&mut self) -> Option<usize> {
         let number = self.number;
         self.number += 1;
         self.left = self.left.saturating_sub(1);
@@ -193,4 +177,25 @@ fn range(text: &str) -> Option<Remaining> {
         number: start.parse().ok()?,
         left: len.parse().ok()?,
     })
+}
+
+impl From<CoreFileDiff> for FileDiff {
+    fn from(file: CoreFileDiff) -> Self {
+        Self {
+            renamed_from: file.renamed_from().map(|path| path.as_str().to_owned()),
+            added: file.additions(),
+            removed: file.deletions(),
+            path: file.path.as_str().to_owned(),
+            status: file.status,
+            hunks: file.hunks,
+        }
+    }
+}
+
+impl From<Vec<CoreFileDiff>> for Patch {
+    fn from(files: Vec<CoreFileDiff>) -> Self {
+        Self {
+            files: files.into_iter().map(FileDiff::from).collect(),
+        }
+    }
 }
