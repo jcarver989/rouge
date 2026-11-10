@@ -1,0 +1,25 @@
+[package]
+name = "rouge-core"
+description = "Element tree, styles, layout and views for Rouge."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rouge-reactive.workspace = true
+rouge-render.workspace = true
+rouge-text.workspace = true
+taffy.workspace = true
+slotmap.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+zeno.workspace = true
+image.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "tree_edit_test"
+path = "tests/tree/edit_test.rs"
