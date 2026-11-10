@@ -2,13 +2,68 @@ use rouge_core::testing::{
     BLACK, BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, WHITE, counter,
 };
 use rouge_core::{
-    Align, Color, Point, ScrollEvent, ScrollState, Scrollable, Size, Styled, View, div, scroll,
-    virtual_list, virtual_list_handle,
+    Align, Color, Point, ScrollEvent, ScrollState, Scrollable, Size, Styled, View, div, dynamic,
+    scroll, virtual_list, virtual_list_handle,
 };
 use rouge_reactive::{Runtime, Signal, effect, on_cleanup, signal};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+
+#[test]
+fn dynamic_rebuild_preserves_virtual_list_and_ordinary_scroll_offsets() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let version = signal(false);
+    let state = signal(ScrollState::default());
+    let (mut ui, handle) = TestUiBuilder::default().size(220.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        let branch = dynamic(move || {
+            let color = if version.get() {
+                Color::RED
+            } else {
+                Color::BLUE
+            };
+            div()
+                .size_full()
+                .flex()
+                .child(
+                    virtual_list(|| 100, 20.0, move |_| div().size_full().bg(color))
+                        .handle(handle)
+                        .w(100.0)
+                        .h_full(),
+                )
+                .child(
+                    scroll()
+                        .scroll_state(state)
+                        .w(100.0)
+                        .h_full()
+                        .child(div().h(1000.0).bg(color)),
+                )
+        });
+        (div().size_full().child(branch), handle)
+    });
+    handle.scroll_to(Point::new(0.0, 435.0));
+    state.update(|state| state.scroll_to(Point::new(0.0, 250.0)));
+    ui.advance(0.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 435.0);
+    assert_eq!(state.get().offset.y, 250.0);
+    version.set(true);
+    assert_eq!(
+        handle.row_top(30),
+        0.0,
+        "disposed row memos are not read between builds"
+    );
+    ui.advance(0.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 435.0);
+    assert_eq!(handle.top_row().get(), 22);
+    assert_eq!(state.get().offset.y, 250.0);
+    assert_eq!(handle.row_top(30), 600.0);
+    assert!(handle.row_bounds(22).is_some());
+    handle.scroll_to_row(30, Align::Top);
+    ui.advance(0.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 600.0);
+    Ok(())
+}
 
 #[test]
 fn scrolling_moves_content_in_the_compositor_and_clamps() -> TestResult {

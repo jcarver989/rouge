@@ -1,8 +1,122 @@
-use rouge_core::testing::{BLUE, LINEAR, RED, TestResult, TestUi, assert_near, counter};
-use rouge_core::{Color, Point, Pose, Styled, View, div, dynamic, each, overlay, show};
+use rouge_core::testing::{
+    BLUE, LINEAR, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
+};
+use rouge_core::{
+    Color, EditAction, Key, Point, Pose, Styled, View, div, dynamic, each, editable, focus_handle,
+    overlay, show,
+};
 use rouge_reactive::{ReadSignal, Runtime, Signal, on_cleanup, signal};
 use std::cell::RefCell;
 use std::rc::Rc;
+
+#[test]
+fn dynamic_replacement_with_a_fresh_focus_handle_does_not_steal_focus() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let replace = signal(false);
+    let (mut ui, original) = TestUiBuilder::default().build_with(|| {
+        let original = focus_handle();
+        let branch = dynamic(move || {
+            let handle = if replace.get() {
+                focus_handle()
+            } else {
+                original
+            };
+            editable(signal("field".to_owned()))
+                .track_focus(handle)
+                .w(150.0)
+                .test_id("field")
+        });
+        (div().size_full().child(branch), original)
+    });
+    ui.click_on("field")?;
+    assert!(original.is_focused());
+    replace.set(true);
+    ui.advance(0.0);
+    assert!(!original.is_focused());
+    assert!(!ui.has_focus());
+    Ok(())
+}
+
+#[test]
+fn nested_dynamic_replacement_restores_handles_but_genuine_unmount_does_not() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let version = signal(0);
+    let visible = signal(true);
+    let value = signal("abc".to_owned());
+    let (mut ui, focus) = TestUiBuilder::default().build_with(|| {
+        let focus = focus_handle();
+        let outer = dynamic(move || {
+            let generation = version.get();
+            div().child(show(
+                move || visible.get(),
+                move || {
+                    div().child(dynamic(move || {
+                        editable(value)
+                            .track_focus(focus)
+                            .w(150.0 + generation as f32)
+                            .test_id("nested")
+                    }))
+                },
+            ))
+        });
+        (div().size_full().child(outer), focus)
+    });
+    ui.click_on("nested")?;
+    ui.press(Key::End);
+    ui.press(Key::ArrowLeft);
+    version.set(1);
+    version.set(2);
+    ui.advance(0.0);
+    assert!(focus.is_focused());
+    ui.type_text("!");
+    assert_eq!(value.get(), "ab!c");
+    visible.set(false);
+    ui.advance(0.0);
+    assert!(!focus.is_focused());
+    assert!(!ui.has_focus());
+    visible.set(true);
+    ui.advance(0.0);
+    assert!(
+        !focus.is_focused(),
+        "a later mount is not an in-place replacement"
+    );
+    Ok(())
+}
+
+#[test]
+fn dynamic_replacement_reuses_focus_identity_editor_selection_and_history() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let version = signal(false);
+    let value = signal("hello".to_owned());
+    let (mut ui, focus) = TestUiBuilder::default().build_with(|| {
+        let focus = focus_handle();
+        let branch = dynamic(move || {
+            let width = if version.get() { 180.0 } else { 150.0 };
+            editable(value)
+                .track_focus(focus)
+                .w(width)
+                .test_id("editor")
+        });
+        (div().size_full().child(branch), focus)
+    });
+    ui.click_on("editor")?;
+    ui.press(Key::End);
+    ui.press(Key::ArrowLeft);
+    ui.type_text("!");
+    assert_eq!(value.get(), "hell!o");
+    let caret = ui.text_cursor_area().ok_or("caret")?;
+    version.set(true);
+    ui.advance(0.0);
+    assert!(focus.is_focused());
+    assert_eq!(ui.text_cursor_area(), Some(caret));
+    ui.type_text("?");
+    assert_eq!(value.get(), "hell!?o");
+    ui.dispatch_action(EditAction::Undo);
+    assert_eq!(value.get(), "hell!o");
+    ui.dispatch_action(EditAction::Undo);
+    assert_eq!(value.get(), "hello");
+    Ok(())
+}
 
 #[test]
 fn show_mounts_and_unmounts_in_place() {

@@ -4,7 +4,7 @@ use crate::style::Styled;
 use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, View, div};
-use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal};
+use rouge_reactive::{Memo, ReadSignal, Signal, effect, memo, on_cleanup, signal};
 use rouge_render::{Point, Rect, ScrollState};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -111,7 +111,7 @@ pub fn virtual_list_handle() -> VirtualListHandle {
     let top = memo(move || {
         let offset = state.get().offset.y;
         rows.with(|rows| {
-            rows.map_or(0, |rows| {
+            rows.filter(ReadSignal::is_alive).map_or(0, |rows| {
                 rows.with(|rows| {
                     rows.starting_before(offset, false)
                         .min(rows.count().saturating_sub(1))
@@ -147,8 +147,10 @@ impl VirtualListHandle {
     }
 
     pub fn row_top(self, index: usize) -> f32 {
-        self.rows
-            .with(|rows| rows.map_or(0.0, |rows| rows.with(|rows| rows.top(index))))
+        self.rows.with(|rows| {
+            rows.filter(ReadSignal::is_alive)
+                .map_or(0.0, |rows| rows.with(|rows| rows.top(index)))
+        })
     }
 
     pub fn row_bounds(self, index: usize) -> Option<Rect> {
@@ -250,6 +252,11 @@ impl<T: View> View for VirtualList<T> {
         });
         if let Some(handle) = handle {
             handle.rows.set(Some(rows));
+            on_cleanup(move || {
+                if handle.rows.is_alive() && handle.rows.get_untracked() == Some(rows) {
+                    handle.rows.set(None);
+                }
+            });
             if state != handle.state {
                 effect(move || {
                     handle.state.set_if_changed(state.get());

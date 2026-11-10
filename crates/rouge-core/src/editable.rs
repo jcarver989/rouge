@@ -182,6 +182,7 @@ impl View for Editable {
             }
         }));
         let data = div.spec.text.get_or_insert_default();
+        data.content = value.get_untracked();
         data.edit = Some(state);
         data.style.wrap = multiline;
 

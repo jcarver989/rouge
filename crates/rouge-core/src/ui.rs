@@ -154,14 +154,19 @@ impl Ui {
 
     fn tree(&mut self) -> &mut Tree {
         poll_tasks();
-        while let Ok(patch) = self.pending.try_recv() {
-            let text = &mut self.text_system;
-            patch(&mut BuildCx {
-                tree: &mut self.tree,
-                patches: &self.patches,
-                text,
+        self.scope.run(|| {
+            batch(|| {
+                while let Ok(patch) = self.pending.try_recv() {
+                    let text = &mut self.text_system;
+                    patch(&mut BuildCx {
+                        tree: &mut self.tree,
+                        patches: &self.patches,
+                        text,
+                    });
+                }
+                self.tree.restore_replaced_focus();
             });
-        }
+        });
         self.tree.publish_bindings();
         if let Some(commit) = self.tree.take_commit() {
             self.compositor.apply(commit);

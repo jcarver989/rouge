@@ -320,6 +320,7 @@ pub(crate) struct Tree {
     scrolled: Vec<ElementId>,
     motions: HashMap<MotionId, Signal<f32>>,
     focused: Option<ElementId>,
+    replaced_focus: Option<(u64, Option<(String, EditState)>)>,
     focus_visible: bool,
     restore: Vec<(ElementId, Option<ElementId>)>,
     handles: HashMap<u64, (ElementId, Signal<bool>)>,
@@ -350,6 +351,7 @@ impl Tree {
             scrolled: Vec::new(),
             motions: HashMap::new(),
             focused: None,
+            replaced_focus: None,
             focus_visible: false,
             restore: Vec::new(),
             handles: HashMap::new(),
@@ -560,6 +562,9 @@ impl Tree {
             let Some(element) = self.elements.get_mut(*id) else {
                 continue;
             };
+            if element.scroll_target.is_some() {
+                continue;
+            }
             let layer = element.layers[Slot::Content as usize].as_ref();
             let state = layer.and_then(|layer| compositor.scroll(layer.id));
             if let (Some(state), Some(scroll)) = (state, element.spec.scroll.as_mut()) {
@@ -881,6 +886,30 @@ impl Tree {
         self.place_followers(anchor);
     }
 
+    pub(crate) fn restore_replaced_focus(&mut self) {
+        let Some((handle, edit)) = self.replaced_focus.take() else {
+            return;
+        };
+        let Some((new, _)) = self
+            .handles
+            .get(&handle)
+            .copied()
+            .filter(|(id, _)| self.is_focusable(*id))
+        else {
+            return;
+        };
+        if let (Some((content, old)), Some(text)) = (
+            edit,
+            self.elements
+                .get_mut(new)
+                .and_then(|element| element.spec.text.as_mut()),
+        ) && let Some(edit) = &mut text.edit
+        {
+            edit.restore(old, content == text.content);
+        }
+        self.set_focus(Some(new), self.focus_visible);
+    }
+
     pub(crate) fn clear_followers(&mut self, anchor: ElementId, exit: Option<(Pose, Timing)>) {
         let followers = self
             .elements
@@ -965,6 +994,20 @@ impl Tree {
         }
         let mut tops = vec![id];
         self.flat_followers(id, &mut tops);
+        if let Some(focused) = self
+            .focused
+            .filter(|id| self.chain(*id).iter().any(|id| tops.contains(id)))
+        {
+            let element = &mut self.elements[focused];
+            if let Some((handle, _)) = element.spec.focus.and_then(|focus| focus.handle) {
+                let state = element
+                    .spec
+                    .text
+                    .as_mut()
+                    .and_then(|text| text.edit.take().map(|edit| (text.content.clone(), edit)));
+                self.replaced_focus = Some((handle, state));
+            }
+        }
         for top in &tops {
             self.detach(*top);
         }

@@ -89,6 +89,18 @@ impl Default for EditState {
 }
 
 impl EditState {
+    pub(super) fn restore(&mut self, previous: EditState, same_content: bool) {
+        self.selection = previous.selection;
+        self.stale = true;
+        self.scroll = previous.scroll;
+        if same_content {
+            self.undo = previous.undo;
+            self.redo = previous.redo;
+            self.composition = previous.composition;
+            self.compose = previous.compose;
+        }
+    }
+
     pub(super) fn clear_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
