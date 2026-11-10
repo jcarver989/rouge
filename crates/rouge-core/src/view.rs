@@ -8,6 +8,7 @@ use crate::prop::{IntoEffect, IntoProp, Prop};
 use crate::scroll::Scrollable;
 use crate::style::{Dirty, Style, Styled};
 use crate::styled;
+use crate::theme::use_theme;
 use crate::tree::{ElementId, ElementSpec, Event, Interaction, On, TextData, Tree};
 use rouge_reactive::{Signal, effect};
 use rouge_render::{
@@ -16,7 +17,6 @@ use rouge_render::{
 };
 use rouge_text::{SpanStyle, TextAlign, TextStyle, TextSystem};
 use std::any::{Any, TypeId};
-use std::borrow::Cow;
 use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -378,6 +378,18 @@ impl Styled for Div {
 
 impl View for Div {
     fn build(mut self, cx: &mut BuildCx<'_>) -> ElementId {
+        if let Some(text) = &mut self.spec.text {
+            let theme = use_theme();
+            text.theme = Some(theme);
+            self.bindings.push(Box::new(move |patches, id| {
+                let patches = patches.clone();
+                effect(move || {
+                    theme.text.get();
+                    theme.text_size.get();
+                    send(&patches, move |cx| cx.tree.refresh_text_subtree(id));
+                });
+            }));
+        }
         if self.spec.scroll.is_some() {
             self.spec.style.layout.overflow = Axes {
                 x: Overflow::Scroll,
@@ -450,36 +462,19 @@ impl Text {
     }
 
     pub fn text_size<U>(self, size: impl IntoProp<Length, U>) -> Self {
-        self.text_prop(size, Dirty::Layout, |text, size| {
-            text.size_length = Some(size);
-            text.style.size = size.resolve(16.0);
-        })
+        Styled::text_size(self, size)
     }
 
     pub fn color<U>(self, color: impl IntoProp<Color, U>) -> Self {
-        self.text_prop(color, Dirty::Paint, |text, color| text.color = color)
+        self.text_color(color)
     }
 
     pub fn weight<U>(self, weight: impl IntoProp<f32, U>) -> Self {
-        self.text_prop(weight, Dirty::Layout, |text, weight| {
-            text.style.weight = weight;
-        })
+        self.font_weight(weight)
     }
 
     pub fn bold(self) -> Self {
-        self.weight(700.0)
-    }
-
-    pub fn italic(self) -> Self {
-        self.text_style(|style| style.italic = true)
-    }
-
-    pub fn font(self, family: impl Into<Cow<'static, str>>) -> Self {
-        self.text_style(|style| style.family = family.into())
-    }
-
-    pub fn line_height(self, multiple: f32) -> Self {
-        self.text_style(|style| style.line_height = multiple)
+        self.font_weight(700.0)
     }
 
     pub fn align(self, align: TextAlign) -> Self {

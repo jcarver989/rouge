@@ -654,6 +654,7 @@ fn a_range_colors_only_its_glyphs_and_background_is_behind_them() -> TestResult 
                 },
             )],
         )
+        .color(Color::BLACK)
         .text_size(32.0)
         .font("monospace")
     });

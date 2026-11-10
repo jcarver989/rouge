@@ -4,9 +4,9 @@ use crate::event::{
     Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, PointerEvent, ScrollEvent,
 };
 use crate::image::{Fit, ImageSpec};
-use crate::length::Length;
 use crate::path::Path;
 use crate::style::{Dirty, Style};
+use crate::theme::Theme;
 use edit::{CARET_WIDTH, EditState};
 use rouge_reactive::{Signal, batch};
 use rouge_render::{
@@ -113,7 +113,7 @@ pub(crate) struct TextData {
     pub content: String,
     pub style: TextStyle,
     pub color: Color,
-    pub size_length: Option<Length>,
+    pub theme: Option<Theme>,
     pub edit: Option<EditState>,
     layout: Option<TextLayout>,
     inset: Point,
@@ -127,7 +127,7 @@ impl Default for TextData {
             content: String::new(),
             style: TextStyle::default(),
             color: Color::BLACK,
-            size_length: None,
+            theme: None,
             edit: None,
             layout: None,
             inset: Point::ZERO,
@@ -511,15 +511,8 @@ impl Tree {
                     .expect("taffy set style");
                 self.mark_element(id, Dirty::Layout);
             }
-            if self.elements[id]
-                .spec
-                .text
-                .as_ref()
-                .is_some_and(|text| matches!(text.size_length, Some(Length::Rem(_))))
-            {
-                self.update_text(id, Dirty::Layout, |_| {});
-            }
         }
+        self.refresh_text_subtree(self.root);
     }
 
     pub(crate) fn create_motion(&mut self, id: MotionId, value: Signal<f32>) {
@@ -593,11 +586,6 @@ impl Tree {
     }
 
     pub(crate) fn create_element(&mut self, mut spec: ElementSpec) -> ElementId {
-        if let Some(text) = &mut spec.text
-            && let Some(size) = text.size_length
-        {
-            text.style.size = size.resolve(self.root_font_size);
-        }
         let taffy = self
             .taffy
             .new_leaf(spec.style.resolved_layout(self.root_font_size))
@@ -692,9 +680,6 @@ impl Tree {
             return;
         };
         f(text);
-        if let Some(size) = text.size_length {
-            text.style.size = size.resolve(self.root_font_size);
-        }
         if dirty.needs_layout() {
             text.layout = None;
             if let Some(edit) = &mut text.edit {
@@ -757,14 +742,83 @@ impl Tree {
         }
     }
 
+    pub(crate) fn refresh_text_subtree(&mut self, id: ElementId) {
+        let Some(element) = self.elements.get(id) else {
+            return;
+        };
+        let children = element.children.clone();
+        if let Some(text) = &element.spec.text {
+            let mut ancestors = Vec::new();
+            let mut current = Some(id);
+            while let Some(id) = current {
+                let element = &self.elements[id];
+                ancestors.push(element.effective_style());
+                current = element.parent;
+            }
+            let mut style = text.style.clone();
+            let default = TextStyle::default();
+            style.size = ancestors.iter().find_map(|s| s.text_size).map_or_else(
+                || {
+                    text.theme
+                        .map_or(default.size, |theme| theme.text_size.get_untracked())
+                },
+                |size| size.resolve(self.root_font_size),
+            );
+            style.family = ancestors
+                .iter()
+                .find_map(|s| s.text_font.clone())
+                .map_or(default.family, Into::into);
+            style.weight = ancestors
+                .iter()
+                .find_map(|s| s.text_weight)
+                .unwrap_or(default.weight);
+            style.italic = ancestors
+                .iter()
+                .find_map(|s| s.text_italic)
+                .unwrap_or(default.italic);
+            style.line_height = ancestors
+                .iter()
+                .find_map(|s| s.text_line_height)
+                .unwrap_or(default.line_height);
+            let color = ancestors
+                .iter()
+                .find_map(|s| s.text_color)
+                .unwrap_or_else(|| {
+                    text.theme
+                        .map_or(Color::BLACK, |theme| theme.text.get_untracked())
+                });
+            let dirty = if style != text.style {
+                Dirty::Layout
+            } else if color != text.color {
+                Dirty::Paint
+            } else {
+                Dirty::None
+            };
+            if dirty != Dirty::None {
+                self.update_text(id, dirty, |text| {
+                    text.style = style;
+                    text.color = color;
+                });
+            }
+        }
+        for child in children {
+            self.refresh_text_subtree(child);
+        }
+    }
+
     pub(crate) fn update_style(&mut self, id: ElementId, dirty: Dirty, f: impl FnOnce(&mut Style)) {
         let Some(element) = self.elements.get_mut(id) else {
             return;
         };
-        let filled = element.effective_style().background.is_some();
+        let old = element.effective_style().clone();
+        let filled = old.background.is_some();
         f(&mut element.spec.style);
         if element.resolved.is_some() {
             element.resolved = element.resolve();
+        }
+        if old.same_box(element.effective_style()) {
+            self.refresh_text_subtree(id);
+            return;
         }
         if dirty.needs_layout() {
             let layout = element
@@ -783,6 +837,7 @@ impl Tree {
         };
         self.mark_element(id, dirty);
         self.sync_backing(id);
+        self.refresh_text_subtree(id);
     }
 
     fn flat_followers(&self, anchor: ElementId, out: &mut Vec<ElementId>) {
@@ -869,6 +924,7 @@ impl Tree {
             .insert_child_at_index(p.taffy, index, child_node)
             .expect("taffy insert");
         self.elements[child].parent = Some(parent);
+        self.refresh_text_subtree(child);
         self.mark_layer(parent, true);
         self.mark(Dirty::Layout);
     }
@@ -1268,6 +1324,11 @@ impl Tree {
         let resolved = element.resolve();
         let new = resolved.as_ref().unwrap_or(&element.spec.style);
         let old = element.effective_style();
+        if new.same_box(old) {
+            element.resolved = resolved;
+            self.refresh_text_subtree(id);
+            return;
+        }
         let repainted = new.border_color != old.border_color
             || new.shadows != old.shadows
             || new.background.is_some() != old.background.is_some();
@@ -1284,6 +1345,7 @@ impl Tree {
         element.resolved = resolved;
         self.mark_element(id, dirty);
         self.sync_backing(id);
+        self.refresh_text_subtree(id);
     }
 
     pub(crate) fn update(&mut self, cache: &mut PaintCache, text_system: &mut TextSystem) -> bool {

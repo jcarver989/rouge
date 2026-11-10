@@ -2,10 +2,10 @@ use crate::event::{Cursor, ImeEvent, Key, KeyEvent, PointerButton};
 use crate::focus::FocusHandle;
 use crate::length::Length;
 use crate::prop::IntoProp;
-use crate::styled;
 use crate::tree::ElementId;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Text, View, send, text};
+use crate::{Styled, styled};
 use rouge_reactive::Signal;
 use rouge_render::Color;
 use rouge_text::Movement;
@@ -66,7 +66,7 @@ impl Editable {
     }
 
     pub fn font(mut self, family: impl Into<Cow<'static, str>>) -> Self {
-        self.text = self.text.font(family);
+        self.text = self.text.font(family.into().into_owned());
         self
     }
 

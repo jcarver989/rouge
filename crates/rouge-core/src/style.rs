@@ -67,6 +67,12 @@ impl BoxShadow {
 pub struct Style {
     pub layout: Layout,
     pub rem_lengths: BTreeMap<&'static str, f32>,
+    pub text_color: Option<Color>,
+    pub text_size: Option<Length>,
+    pub text_font: Option<String>,
+    pub text_weight: Option<f32>,
+    pub text_italic: Option<bool>,
+    pub text_line_height: Option<f32>,
     pub background: Option<Color>,
     pub border_color: Color,
     pub corner_radii: Corners,
@@ -81,6 +87,12 @@ impl Default for Style {
                 ..Default::default()
             },
             rem_lengths: BTreeMap::new(),
+            text_color: None,
+            text_size: None,
+            text_font: None,
+            text_weight: None,
+            text_italic: None,
+            text_line_height: None,
             background: None,
             border_color: Color::BLACK,
             corner_radii: Corners::ZERO,
@@ -90,6 +102,15 @@ impl Default for Style {
 }
 
 impl Style {
+    pub(crate) fn same_box(&self, other: &Self) -> bool {
+        self.layout == other.layout
+            && self.rem_lengths == other.rem_lengths
+            && self.background == other.background
+            && self.border_color == other.border_color
+            && self.corner_radii == other.corner_radii
+            && self.shadows == other.shadows
+    }
+
     fn length(&mut self, value: Length, key: &'static str) -> Length {
         if let Length::Rem(value) = value {
             self.rem_lengths.insert(key, value);
@@ -263,7 +284,18 @@ pub trait Styled: Sized {
         };
     }
 
+    fn italic(self) -> Self {
+        self.prop(true, Dirty::Layout, |style, value| {
+            style.text_italic = Some(value);
+        })
+    }
+
     props! {
+        text_color(Color) [Paint] |s, v| s.text_color = Some(v);
+        text_size(Length) [Layout] |s, v| s.text_size = Some(v);
+        font(String) [Layout] |s, v| s.text_font = Some(v);
+        font_weight(f32) [Layout] |s, v| s.text_weight = Some(v);
+        line_height(f32) [Layout] |s, v| s.text_line_height = Some(v);
         w(Length) [Layout] |s, v| s.layout.size.width = s.length(v, "size.width").into();
         h(Length) [Layout] |s, v| s.layout.size.height = s.length(v, "size.height").into();
         size(Length) [Layout] |s, v| s.layout.size = Extent { width: s.length(v, "size.width").into(), height: s.length(v, "size.height").into() };
