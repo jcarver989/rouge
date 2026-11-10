@@ -157,6 +157,45 @@ pub struct Chord {
 }
 
 impl Chord {
+    pub fn parse(value: &str) -> Result<Self, ChordError> {
+        value.parse()
+    }
+
+    pub fn display(&self) -> String {
+        let mac = cfg!(target_os = "macos");
+        let mut parts = Vec::new();
+        for (enabled, label) in [
+            (self.modifiers.ctrl, if mac { "⌃" } else { "Ctrl" }),
+            (self.modifiers.alt, if mac { "⌥" } else { "Alt" }),
+            (self.modifiers.shift, if mac { "⇧" } else { "Shift" }),
+            (self.modifiers.meta, if mac { "⌘" } else { "Super" }),
+        ] {
+            if enabled {
+                parts.push(label.to_owned());
+            }
+        }
+        parts.push(match &self.key {
+            Key::Character(text) => text.to_uppercase(),
+            Key::Enter => if mac { "↩" } else { "Enter" }.into(),
+            Key::Tab => if mac { "⇥" } else { "Tab" }.into(),
+            Key::Space => "Space".into(),
+            Key::Backspace => if mac { "⌫" } else { "Backspace" }.into(),
+            Key::Delete => if mac { "⌦" } else { "Delete" }.into(),
+            Key::Escape => if mac { "⎋" } else { "Esc" }.into(),
+            Key::ArrowLeft => "←".into(),
+            Key::ArrowRight => "→".into(),
+            Key::ArrowUp => "↑".into(),
+            Key::ArrowDown => "↓".into(),
+            Key::Home => "Home".into(),
+            Key::End => "End".into(),
+            Key::PageUp => "Page Up".into(),
+            Key::PageDown => "Page Down".into(),
+            Key::F(number) => format!("F{number}"),
+            Key::Other => "?".into(),
+        });
+        parts.join(if mac { "" } else { "+" })
+    }
+
     pub fn new(key: Key, modifiers: Modifiers) -> Self {
         Chord { key, modifiers }
     }
@@ -178,7 +217,7 @@ impl FromStr for Chord {
         for part in chord.split('-').map(str::trim) {
             let lower = part.to_lowercase();
             let named = match lower.as_str() {
-                "cmd" | "command" => Err(Modifiers::COMMAND),
+                "cmd" | "command" | "secondary" => Err(Modifiers::COMMAND),
                 "shift" => Err(Modifiers::SHIFT),
                 "ctrl" | "control" => Err(Modifiers::CTRL),
                 "alt" | "option" => Err(Modifiers::ALT),

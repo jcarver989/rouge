@@ -5,6 +5,7 @@ mod editable;
 mod event;
 mod focus;
 mod image;
+mod keymap;
 mod length;
 mod motion;
 mod path;
@@ -27,6 +28,7 @@ pub use event::{
 };
 pub use focus::{FocusHandle, focus_handle};
 pub use image::{Fit, Image, ImageLoadError, ImageSource, decode_image, image};
+pub use keymap::use_binding;
 pub use length::{Length, auto, pct, px, rem};
 pub use motion::{Animation, Motion, MotionProp, motion};
 pub use path::{Path, PathBuilder};

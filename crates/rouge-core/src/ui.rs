@@ -1,8 +1,9 @@
 use crate::clipboard::Clipboard;
 use crate::event::{
-    Cursor, DragEvent, DragPhase, ImeEvent, Key, KeyEvent, Modifiers, PointerButton, PointerEvent,
-    ScrollEvent,
+    Chord, Cursor, DragEvent, DragPhase, ImeEvent, Key, KeyEvent, Modifiers, PointerButton,
+    PointerEvent, ScrollEvent,
 };
+use crate::keymap::Keymap;
 use crate::motion::UiContext;
 use crate::style::Dirty;
 use crate::theme::{Palette, provide_theme};
@@ -13,6 +14,7 @@ use rouge_reactive::{
 };
 use rouge_render::{Atlas, Compositor, Item, LayerCommand, LayerId, Point, Rect, Size};
 use rouge_text::TextSystem;
+use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::time::Instant;
@@ -103,6 +105,9 @@ impl Ui {
                 send(&root_patches, move |cx| cx.tree.set_root_font_size(size));
             });
             provide_context(UiContext::new(patches.clone()));
+            let keymap = Keymap(signal(Vec::new()));
+            provide_context(keymap);
+            tree.observe_keymap(keymap);
             provide_theme(Palette::default());
             let mut cx = BuildCx {
                 tree: &mut tree,
@@ -145,6 +150,7 @@ impl Ui {
                 text,
             });
         }
+        self.tree.publish_bindings();
         if let Some(commit) = self.tree.take_commit() {
             self.compositor.apply(commit);
         }
@@ -308,6 +314,22 @@ impl Ui {
     pub fn accepts_text(&mut self) -> bool {
         let path = self.tree().focus_path();
         self.tree.focused().is_some() && !self.tree.listeners(&path, On::Ime).is_empty()
+    }
+
+    pub fn binding_for<T: Any>(&mut self) -> Option<Chord> {
+        self.tree()
+            .effective_bindings()
+            .into_iter()
+            .find(|(kind, _)| *kind == TypeId::of::<T>())
+            .map(|(_, chord)| chord)
+    }
+
+    pub fn dispatch_action<T: Any>(&mut self, action: T) -> bool {
+        let path = self.tree().focus_path();
+        let handlers = self.tree.action_handlers(&path, TypeId::of::<T>());
+        batch(|| handlers.iter().for_each(|handler| handler(&action)));
+        self.tree();
+        !handlers.is_empty()
     }
 
     pub fn key_down(&mut self, event: KeyEvent) -> bool {

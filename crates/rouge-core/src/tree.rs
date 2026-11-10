@@ -4,6 +4,7 @@ use crate::event::{
     Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, PointerEvent, ScrollEvent,
 };
 use crate::image::{Fit, ImageSpec};
+use crate::keymap::Keymap;
 use crate::path::Path;
 use crate::style::{Dirty, Style};
 use crate::theme::Theme;
@@ -322,6 +323,7 @@ pub(crate) struct Tree {
     measured: Vec<ElementId>,
     overlay: Option<ElementId>,
     clipboard: Box<dyn Clipboard>,
+    keymap: Option<Keymap>,
 }
 
 impl Tree {
@@ -350,6 +352,7 @@ impl Tree {
             measured: Vec::new(),
             overlay: None,
             clipboard: Box::new(MemoryClipboard::new()),
+            keymap: None,
         };
         tree.root = tree.create_element(ElementSpec {
             style: root_style(size),
@@ -1086,6 +1089,7 @@ impl Tree {
             self.set_interaction(id, Interaction::Focus, true);
             self.set_interaction(id, Interaction::FocusVisible, visible);
         }
+        self.publish_bindings();
         let event = FocusEvent { visible };
         batch(|| {
             for (handlers, handle, on) in &calls {
@@ -1223,6 +1227,53 @@ impl Tree {
             .collect()
     }
 
+    pub(crate) fn observe_keymap(&mut self, keymap: Keymap) {
+        self.keymap = Some(keymap);
+    }
+
+    pub(crate) fn publish_bindings(&self) {
+        if let Some(keymap) = self.keymap {
+            keymap.0.set_if_changed(self.effective_bindings());
+        }
+    }
+
+    pub(crate) fn effective_bindings(&self) -> Vec<(TypeId, Chord)> {
+        let path = self.focus_path();
+        let mut bindings = Vec::new();
+        let mut seen: Vec<Chord> = Vec::new();
+        for element in path.iter().rev().filter_map(|id| self.elements.get(*id)) {
+            for (chord, action) in &element.spec.bindings {
+                let event = KeyEvent::new(chord.key.clone()).with_modifiers(chord.modifiers);
+                if seen.iter().any(|chord| chord.matches(&event)) {
+                    continue;
+                }
+                seen.push(chord.clone());
+                let kind = (**action).type_id();
+                if !self.action_handlers(&path, kind).is_empty() {
+                    bindings.push((kind, chord.clone()));
+                }
+            }
+        }
+        bindings
+    }
+
+    pub(crate) fn action_handlers(&self, path: &[ElementId], kind: TypeId) -> Vec<ActionHandler> {
+        path.iter()
+            .rev()
+            .filter_map(|id| self.elements.get(*id))
+            .find_map(|element| {
+                let handlers: Vec<_> = element
+                    .spec
+                    .actions
+                    .iter()
+                    .filter(|(id, _)| *id == kind)
+                    .map(|(_, handler)| handler.clone())
+                    .collect();
+                (!handlers.is_empty()).then_some(handlers)
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn binding(
         &self,
         path: &[ElementId],
@@ -1237,12 +1288,10 @@ impl Tree {
                 .find(|(chord, _)| chord.matches(event));
             bound.map(|(_, action)| action.clone())
         })?;
-        let kind = (*action).type_id();
-        let handlers = elements().find_map(|element| {
-            let handlers = element.spec.actions.iter().filter(|(id, _)| *id == kind);
-            let handlers: Vec<_> = handlers.map(|(_, handler)| handler.clone()).collect();
-            (!handlers.is_empty()).then_some(handlers)
-        })?;
+        let handlers = self.action_handlers(path, (*action).type_id());
+        if handlers.is_empty() {
+            return None;
+        }
         Some((action, handlers))
     }
 
