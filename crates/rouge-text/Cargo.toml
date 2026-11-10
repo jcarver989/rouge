@@ -1,0 +1,14 @@
+[package]
+name = "rouge-text"
+description = "Text layout and glyph rasterization for Rouge."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+parley = "0.12"
+swash = "0.2"
+
+[lints]
+workspace = true
