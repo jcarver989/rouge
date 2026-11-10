@@ -192,12 +192,19 @@ fn diff_shots(camera: &mut Camera) -> Result<(), DemoError> {
     camera.ui.scroll(Point::new(0.0, -2610.0));
     camera.ui.run(0.1);
     camera.save("diff-scrolled")?;
-    camera.click(1212.0, 32.0);
+    camera.ui.click_on("diff-split")?;
     camera.ui.run(0.5);
     camera.save("diff-split")?;
-    camera.click(700.0, 500.0);
+    camera.ui.click_on("diff-file-0")?;
+    camera.ui.click_on("diff-line-Split(0, 1)-New")?;
     camera.ui.run(0.15);
-    camera.save("diff-selected")
+    camera.save("diff-selected")?;
+    camera.ui.click_on("diff-line-Split(0, 1)-New-comment")?;
+    camera
+        .ui
+        .type_text("Keep the shared key bindings in the public prelude.");
+    camera.ui.run(0.1);
+    camera.save("diff-comment")
 }
 
 fn settings_shots(camera: &mut Camera) -> Result<(), DemoError> {

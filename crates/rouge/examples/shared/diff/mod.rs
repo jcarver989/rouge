@@ -71,7 +71,10 @@ struct Review {
     split: Signal<bool>,
     collapsed: Signal<Vec<bool>>,
     selected: Signal<Option<Selection>>,
-    scroll: Signal<ScrollState>,
+    list: VirtualListHandle,
+    commenting: Signal<bool>,
+    draft: Signal<String>,
+    comments: Signal<Vec<(Selection, String)>>,
     rows: Signal<Range<usize>>,
     presentation: Memo<Rc<Presentation>>,
     offset: Memo<f32>,
@@ -84,18 +87,22 @@ impl Review {
         let document = signal(Rc::new(document)).read_only();
         let split = signal(false);
         let collapsed = signal(vec![false; files]);
-        let scroll = signal(ScrollState::default());
+        let list = virtual_list_handle();
 
         let presentation =
             memo(move || Rc::new(document.with(|d| collapsed.with(|c| d.present(split.get(), c)))));
-        let offset = memo(move || scroll.with(|state| state.offset.y.round()));
-        let active_file = memo(move || presentation.with(|p| p.file_at(offset.get())));
+        let offset = memo(move || list.scroll_state().with(|state| state.offset.y.round()));
+        let active_file =
+            memo(move || presentation.with(|p| p.file_at(offset.get(), |row| list.row_top(row))));
         Review {
             document,
             split,
             collapsed,
             selected: signal(None),
-            scroll,
+            list,
+            commenting: signal(false),
+            draft: signal(String::new()),
+            comments: signal(Vec::new()),
             rows: signal(0..0),
             presentation,
             offset,
@@ -107,25 +114,22 @@ impl Review {
         self.document.with_untracked(|document| document.files())
     }
 
-    fn file_span(self, file: usize) -> (f32, f32) {
-        self.presentation
-            .with_untracked(|presentation| presentation.file_span(file))
-    }
-
-    fn scroll_to(self, offset: f32) {
-        self.scroll.update(|state| state.offset.y = offset);
-    }
-
     fn scroll_to_file(self, file: usize) {
-        self.scroll_to(self.file_span(file).0);
+        let row = self
+            .presentation
+            .with_untracked(|p| p.file_rows(file).start);
+        self.list.scroll_to_row(row, Align::Top);
     }
 
     fn toggle_file(self, file: usize) {
-        let top = self.file_span(file).0;
+        let row = self
+            .presentation
+            .with_untracked(|p| p.file_rows(file).start);
+        let top = self.list.row_top(row);
         self.collapsed
             .update(|collapsed| collapsed[file] = !collapsed[file]);
         if top < self.offset.get_untracked() {
-            self.scroll_to(top);
+            self.list.scroll_to_row(row, Align::Top);
         }
     }
 
@@ -133,15 +137,17 @@ impl Review {
         if self.split.get_untracked() == split {
             return;
         }
-        let (file, offset) = (
-            self.active_file.get_untracked(),
-            self.offset.get_untracked(),
-        );
-        let (top, bottom) = self.file_span(file);
-        let progress = (offset - top) / (bottom - top).max(1.0);
+        let file = self.active_file.get_untracked();
+        let previous = self.presentation.with_untracked(|p| p.file_rows(file));
+        let row = self
+            .list
+            .top_row()
+            .get_untracked()
+            .clamp(previous.start, previous.end.saturating_sub(1));
         self.split.set(split);
-        let (top, bottom) = self.file_span(file);
-        self.scroll_to(top + progress * (bottom - top));
+        let current = self.presentation.with_untracked(|p| p.file_rows(file));
+        let index = current.start + (row - previous.start) * current.len() / previous.len().max(1);
+        self.list.scroll_to_row(index, Align::Top);
     }
 }
 
@@ -161,6 +167,9 @@ pub(crate) fn diff_view(patch: Patch) -> AnyView {
     div()
         .size_full()
         .relative()
+        .font(UI_FONT)
+        .text_size(rem(13.0 / 16.0))
+        .text_color(TEXT)
         .bg(BASE)
         .child(diff_pane(review))
         .child(sidebar(review))
@@ -175,8 +184,8 @@ fn toolbar(review: Review) -> Div {
         let rows = review.rows.get();
         format!(
             "rows {}–{} of {} in view",
-            rows.start.max(1),
-            rows.end.saturating_sub(1),
+            review.list.top_row().get() + 1,
+            rows.end,
             review.presentation.with(|p| p.len())
         )
     };
@@ -197,7 +206,21 @@ fn toolbar(review: Review) -> Div {
         .child(label(format!("{} files changed", files.len()), 13.0, MUTED))
         .child(stats(added, removed))
         .child(div().flex_1())
-        .child(code(in_view, MUTED))
+        .child(
+            div()
+                .font(CODE_FONT)
+                .text_size(rem(0.75))
+                .child(code(in_view, MUTED)),
+        )
+        .child(show(
+            move || review.comments.with(|c| !c.is_empty()),
+            move || {
+                div().test_id("diff-comments-saved").child(code(
+                    move || format!("{} comments", review.comments.with(Vec::len)),
+                    GREEN,
+                ))
+            },
+        ))
         .child(layout_switch(review))
 }
 
@@ -216,6 +239,7 @@ fn layout_switch(review: Review) -> Div {
             .justify_center()
             .w(SEGMENT_WIDTH)
             .h(SEGMENT_HEIGHT)
+            .test_id(if split { "diff-split" } else { "diff-unified" })
             .on_click(move |_| review.set_split(split))
             .child(label(name, 12.0, TEXT).weight(500.0).color(color))
     };
@@ -267,6 +291,7 @@ fn sidebar(review: Review) -> Div {
                 }
             })
             .hover(|style| style.bg(LIFT))
+            .test_id(format!("diff-file-{index}"))
             .on_click(move |_| review.scroll_to_file(index))
             .child(status_code(file.status))
             .child(clipped(label(file.name(), 13.0, TEXT)))
@@ -296,20 +321,25 @@ fn sidebar(review: Review) -> Div {
 
 fn diff_pane(review: Review) -> Div {
     let presentation = review.presentation;
-    let height = move |index: usize| match index.checked_sub(1) {
-        Some(index) => presentation.with(|p| p.row(index).map_or(0.0, |row| row.height())),
-        None => CHROME,
-    };
     let rows = virtual_list(
-        move || presentation.with(|p| p.len()) + 1,
-        height,
+        move || presentation.with(|p| p.len()),
+        move |index| presentation.with(|p| p.row(index).map_or(0.0, |row| row.height())),
         move |index| row(review, index),
     )
+    .handle(review.list)
     .track_rows(review.rows);
-    let rows = scroll_view(rows)
-        .scroll_state(review.scroll)
+    let rows = div()
+        .test_id("diff-scroll")
         .absolute()
-        .inset(0.0);
+        .top(CHROME)
+        .left(0.0)
+        .right(0.0)
+        .bottom(0.0)
+        .child(
+            scroll_view(rows)
+                .scroll_state(review.list.scroll_state())
+                .size_full(),
+        );
     div()
         .absolute()
         .top(0.0)
@@ -320,22 +350,29 @@ fn diff_pane(review: Review) -> Div {
         .child(sticky_header(review))
         .child(toolbar(review))
         .child(selection_hud(review))
+        .child(show(
+            move || review.commenting.get(),
+            move || comment_editor(review),
+        ))
 }
 
 fn sticky_header(review: Review) -> Div {
     let push = memo(move || {
-        let (_, bottom) = review
+        let rows = review
             .presentation
-            .with(|p| p.file_span(review.active_file.get()));
+            .with(|p| p.file_rows(review.active_file.get()));
+        let bottom = review.list.row_top(rows.end);
         (bottom - review.offset.get() - HEADER_HEIGHT).min(0.0)
     });
     let bar = move || {
         header_bar(review, review.active_file.get())
+            .test_id(format!("diff-sticky-file-{}", review.active_file.get()))
             .border_color(RIM)
             .hover(|style| style.bg(LIFT))
             .backdrop(HEADER_GLASS)
     };
     div()
+        .test_id("diff-sticky")
         .absolute()
         .top(CHROME)
         .left(0.0)
@@ -349,7 +386,7 @@ fn sticky_header(review: Review) -> Div {
 }
 
 fn selection_hud(review: Review) -> Div {
-    let shown = memo(move || review.selected.with(Option::is_some));
+    let shown = memo(move || review.selected.with(Option::is_some) && !review.commenting.get());
     let latest = signal(None);
     effect(move || {
         if let Some(selection) = review.selected.get() {
@@ -400,15 +437,69 @@ fn selection_hud(review: Review) -> Div {
         .transition(Spring::bouncy())
         .on_click(move |_| review.selected.set(None))
         .child(div().size(8.0).rounded(4.0).flex_none().bg(dot))
-        .child(clipped(code(describe, TEXT)))
+        .child(
+            clipped(code(describe, TEXT))
+                .font(CODE_FONT)
+                .text_size(rem(0.75)),
+        )
         .child(label("click to clear", 12.0, MUTED))
 }
 
+fn comment_editor(review: Review) -> Div {
+    div()
+        .test_id("diff-comment-editor")
+        .absolute()
+        .bottom(rem(1.5))
+        .left(rem(1.0))
+        .right(rem(1.5))
+        .flex()
+        .col()
+        .gap(rem(0.5))
+        .p(rem(0.75))
+        .rounded(12.0)
+        .bg(BASE)
+        .border(1.0)
+        .border_color(ACCENT)
+        .child(label(
+            "Comment · Enter to save, Shift-Enter for a newline",
+            12.0,
+            MUTED,
+        ))
+        .child(
+            editable(review.draft)
+                .test_id("diff-comment-draft")
+                .autofocus()
+                .multiline()
+                .min_rows(2)
+                .max_rows(5)
+                .submit_on_enter(true)
+                .on_submit(move |value| {
+                    if let Some(selection) = review.selected.get_untracked()
+                        && !value.trim().is_empty()
+                    {
+                        review.comments.update(|comments| {
+                            if let Some((_, text)) =
+                                comments.iter_mut().find(|(line, _)| *line == selection)
+                            {
+                                value.clone_into(text);
+                            } else {
+                                comments.push((selection, value.to_owned()));
+                            }
+                        });
+                        review.commenting.set(false);
+                    }
+                }),
+        )
+        .child(
+            div()
+                .test_id("diff-comment-cancel")
+                .on_click(move |_| review.commenting.set(false))
+                .child(label("Cancel", 12.0, MUTED)),
+        )
+}
+
 fn row(review: Review, index: usize) -> impl View {
-    let current = memo(move || {
-        let index = index.checked_sub(1)?;
-        review.presentation.with(|p| p.row(index))
-    });
+    let current = memo(move || review.presentation.with(|p| p.row(index)));
     dynamic(move || {
         let Some(row) = current.get() else {
             return div();
@@ -490,11 +581,17 @@ fn hunk_header(header: &str) -> Div {
         .pl(INDICATOR_WIDTH + GUTTER_WIDTH)
         .overflow_hidden()
         .bg(HUNK)
+        .font(CODE_FONT)
+        .text_size(rem(0.75))
         .child(code(header, ACCENT))
 }
 
 fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div {
     let frame = div()
+        .relative()
+        .group("diff-line")
+        .font(CODE_FONT)
+        .text_size(rem(0.75))
         .flex()
         .items_center()
         .flex_1()
@@ -523,11 +620,50 @@ fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div 
         .w(GUTTER_WIDTH)
         .pr(12.0)
         .children(number);
+    let mut content = String::new();
     let spans = cell
         .spans
         .iter()
-        .map(|span| code(span.text.as_str(), theme::token(span.token)));
+        .map(|span| {
+            let start = content.len();
+            content.push_str(&span.text);
+            (
+                start..content.len(),
+                SpanStyle {
+                    color: Some(theme::token(span.token)),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let id = format!("diff-line-{:?}-{side:?}", row.key);
+    let comment = div()
+        .test_id(format!("{id}-comment"))
+        .absolute()
+        .right(rem(0.25))
+        .top(1.0)
+        .size(20.0)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(4.0)
+        .bg(Color::TRANSPARENT)
+        .text_color(Color::TRANSPARENT)
+        .group_hover("diff-line", |style| style.bg(ACCENT).text_color(BASE))
+        .on_click(move |event| {
+            event.stop_propagation();
+            review.selected.set(Some(selection));
+            review.draft.set(review.comments.with_untracked(|comments| {
+                comments
+                    .iter()
+                    .find(|(line, _)| *line == selection)
+                    .map_or_else(String::new, |(_, text)| text.clone())
+            }));
+            review.commenting.set(true);
+        })
+        .child(text("+"));
     frame
+        .test_id(id.clone())
         .bg(move || {
             if selected.get() {
                 SELECTION
@@ -545,7 +681,13 @@ fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div 
                 .bg(colors.indicator),
         )
         .child(gutter)
-        .children(spans)
+        .child(
+            div()
+                .test_id(format!("{id}-text"))
+                .flex_none()
+                .child(rich_text(content, spans).no_wrap()),
+        )
+        .child(comment)
 }
 
 fn stats(added: usize, removed: usize) -> Div {
@@ -553,15 +695,19 @@ fn stats(added: usize, removed: usize) -> Div {
         (count > 0).then(|| code(format!("{sign}{count}"), color))
     };
     div()
+        .font(CODE_FONT)
+        .text_size(rem(0.75))
         .flex()
         .flex_none()
-        .gap(6.0)
+        .gap(rem(0.375))
         .children(stat(added, '+', GREEN))
         .children(stat(removed, '−', RED))
 }
 
 fn status_code(status: Status) -> Text {
     code(status.code(), theme::status(status))
+        .font(CODE_FONT)
+        .text_size(rem(0.75))
 }
 
 fn clipped(content: impl View) -> Div {
@@ -570,18 +716,12 @@ fn clipped(content: impl View) -> Div {
 
 fn label<T>(content: impl IntoProp<String, T>, size: f32, color: Color) -> Text {
     text(content)
-        .font(UI_FONT)
-        .text_size(size)
+        .text_size(rem(size / 16.0))
         .color(color)
         .no_wrap()
         .flex_none()
 }
 
 fn code<T>(content: impl IntoProp<String, T>, color: Color) -> Text {
-    text(content)
-        .font(CODE_FONT)
-        .text_size(12.0)
-        .color(color)
-        .no_wrap()
-        .flex_none()
+    text(content).color(color).no_wrap().flex_none()
 }

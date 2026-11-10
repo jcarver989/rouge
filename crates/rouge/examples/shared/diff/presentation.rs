@@ -2,6 +2,7 @@ use super::patch::{FileDiff, Hunk, Line, Patch, Tone};
 use super::syntax::{Language, Span, highlight};
 use std::iter::repeat_n;
 use std::mem::take;
+use std::ops::Range;
 use std::rc::Rc;
 
 pub(super) const ROW_HEIGHT: f32 = 22.0;
@@ -86,7 +87,7 @@ impl Document {
     pub(super) fn present(&self, split: bool, collapsed: &[bool]) -> Presentation {
         let mut presentation = Presentation::default();
         for (index, file) in self.files.iter().enumerate() {
-            presentation.file_tops.push(presentation.height);
+            presentation.file_rows.push(presentation.rows.len());
             presentation.push(&file.header);
             let rows = if split { &file.split } else { &file.unified };
             if !collapsed.get(index).copied().unwrap_or_default() {
@@ -102,14 +103,12 @@ impl Document {
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Presentation {
     rows: Vec<Rc<Row>>,
-    file_tops: Vec<f32>,
-    height: f32,
+    file_rows: Vec<usize>,
 }
 
 impl Presentation {
     fn push(&mut self, row: &Rc<Row>) {
         self.rows.push(row.clone());
-        self.height += row.height();
     }
 
     pub(super) fn len(&self) -> usize {
@@ -120,17 +119,15 @@ impl Presentation {
         self.rows.get(index).cloned()
     }
 
-    pub(super) fn file_span(&self, file: usize) -> (f32, f32) {
-        let top = self.file_tops.get(file).copied().unwrap_or(self.height);
-        (
-            top,
-            self.file_tops.get(file + 1).copied().unwrap_or(self.height),
-        )
+    pub(super) fn file_rows(&self, file: usize) -> Range<usize> {
+        let start = self.file_rows.get(file).copied().unwrap_or(self.len());
+        let end = self.file_rows.get(file + 1).copied().unwrap_or(self.len());
+        start..end
     }
 
-    pub(super) fn file_at(&self, offset: f32) -> usize {
-        self.file_tops
-            .partition_point(|top| *top <= offset)
+    pub(super) fn file_at(&self, offset: f32, top: impl Fn(usize) -> f32) -> usize {
+        self.file_rows
+            .partition_point(|row| top(*row) <= offset)
             .saturating_sub(1)
     }
 }
