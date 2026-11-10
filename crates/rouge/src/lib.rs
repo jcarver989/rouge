@@ -25,10 +25,12 @@ pub mod prelude {
         overlay, pct, provide_theme, px, rem, rich_text, root_font_size, scroll, show, text,
         use_binding, use_theme, virtual_list, virtual_list_handle, window_handle, window_size,
     };
+    #[cfg(feature = "tokio-rt")]
+    pub use rouge_reactive::spawn_on;
     pub use rouge_reactive::{
-        Effect, Memo, ReadSignal, Resource, Runtime, Scope, Signal, Task, background, batch,
-        effect, expect_context, memo, on_cleanup, provide_context, resource, signal, sleep, spawn,
-        untrack, use_context,
+        Effect, Memo, ReadSignal, Resource, Runtime, Scope, Signal, Task, TaskError, background,
+        batch, effect, expect_context, memo, on_cleanup, provide_context, resource, signal, sleep,
+        spawn, untrack, use_context,
     };
     pub use rouge_widgets::{
         Placement, Side, button, checkbox, context_menu, menu_bar, menu_item, modal, popover,

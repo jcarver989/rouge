@@ -789,6 +789,13 @@ Milestones M0 to M5 are implemented, and the S0 spike has been run on macOS. Eve
 - Focused carets blink every 500ms, reset on edit/navigation/focus, and stop after ten idle seconds with the caret visible. Blink invalidates paint, not layout; while blinking, the platform requests frames but unchanged blink phases do not repaint. Tests use the deterministic UI clock. Password masking remains unimplemented.
 - Public-API tests cover grouped undo/redo, selection restoration/replacement and UTF-8 clamping, IME transactions, row growth/caps, vertical caret geometry, submit mode, widget forwarding and blink/idle invalidation. The previously unregistered `tests/tree/edit_test.rs` is now included in the editable test entrypoint, so its five existing editing regressions actually run.
 
+### API gap closure: Tokio bridge (item 10)
+
+- Enable `rouge-reactive/tokio-rt` (or `rouge/tokio-rt`) for `spawn_on(tokio::runtime::Handle, future) -> Task<T>`. The future and output must be `Send + 'static`; the work runs on the supplied runtime, so Tokio timers/I/O have their runtime context. Completion wakes Rouge and is delivered by the existing UI executor when it polls. Awaiting yields `Result<T, TaskError>`; Tokio panics/shutdown errors are surfaced rather than panicking the UI executor.
+- Dropping a bridge task, explicitly cancelling it, disposing its Rouge scope, or dropping the Rouge runtime aborts its Tokio future. Abort is cooperative (it cannot interrupt synchronous work inside a poll). This holds before the bridge's first UI poll as well. Retain/await the returned task: discarding it immediately cancels the work.
+- The existing `Task` is now `Task<T = ()>` and is no longer `Copy`. Both `spawn` and `spawn_on` share this typed join API and executor path. `spawn` still has its existing scope-owned lifetime: ignoring/dropping a local task handle does not cancel it, preserving fire-and-forget UI tasks. `spawn_on` is owned by its returned handle as well as its scope. No second UI executor or locks were added.
+- `spawn(async move { let result = spawn_on(handle, io_future).await; value.set(result); })` delivers into a UI signal. For progress from the worker, capture `value.sender()` before spawning and call `sender.set(progress)` there; it marshals writes back to the UI thread. Use `background(future)` for non-Tokio off-thread work when no supplied executor is needed (it still starts one OS thread per call). Feature-enabled tests use a real multi-thread Tokio runtime to cover timers, signal senders, UI-thread completion, panic propagation and abort-on-drop/scope cleanup.
+
 ### Done
 
 | Area | What exists |

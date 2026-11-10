@@ -1986,6 +1986,7 @@ name = "rouge-reactive"
 version = "0.1.0"
 dependencies = [
  "slotmap",
+ "thiserror 2.0.21",
  "tokio",
 ]
 

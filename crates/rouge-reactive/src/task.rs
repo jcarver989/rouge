@@ -7,8 +7,14 @@ use std::mem::take;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Wake, Waker};
+use std::task::{Context, Poll, Wake, Waker};
+use thiserror::Error;
+#[cfg(feature = "tokio-rt")]
+use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot::{Receiver, channel};
+#[cfg(feature = "tokio-rt")]
+use tokio::task::AbortHandle;
 
 new_key_type! {
     struct TaskId;
@@ -188,16 +194,69 @@ impl Graph {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Task {
+#[derive(Debug, Error)]
+pub enum TaskError {
+    #[error("task was cancelled before completing")]
+    Cancelled,
+    #[cfg(feature = "tokio-rt")]
+    #[error("Tokio task failed: {0}")]
+    Tokio(#[from] tokio::task::JoinError),
+}
+
+pub struct Task<T = ()> {
     id: TaskId,
+    result: Receiver<Result<T, TaskError>>,
+    #[cfg(feature = "tokio-rt")]
+    abort: Option<AbortHandle>,
     marker: PhantomData<*const ()>,
 }
 
-pub fn spawn(future: impl Future<Output = ()> + 'static) -> Task {
+pub fn spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> Task<T> {
+    let (sender, result) = channel();
     Task {
-        id: with_rt(|rt| rt.spawn(Box::pin(future))),
+        id: with_rt(|rt| {
+            rt.spawn(Box::pin(async move {
+                let _ = sender.send(Ok(future.await));
+            }))
+        }),
+        result,
+        #[cfg(feature = "tokio-rt")]
+        abort: None,
         marker: PhantomData,
+    }
+}
+
+#[cfg(feature = "tokio-rt")]
+#[must_use = "Tokio bridge tasks abort when dropped; await or retain the task"]
+pub fn spawn_on<T: Send + 'static>(
+    handle: TokioHandle,
+    future: impl Future<Output = T> + Send + 'static,
+) -> Task<T> {
+    let join = handle.spawn(future);
+    let abort = join.abort_handle();
+    let guard = AbortOnDrop(abort.clone());
+    let (sender, result) = channel();
+    let id = with_rt(|rt| {
+        rt.spawn(Box::pin(async move {
+            let _guard = guard;
+            let _ = sender.send(join.await.map_err(TaskError::from));
+        }))
+    });
+    Task {
+        id,
+        result,
+        abort: Some(abort),
+        marker: PhantomData,
+    }
+}
+
+#[cfg(feature = "tokio-rt")]
+struct AbortOnDrop(AbortHandle);
+
+#[cfg(feature = "tokio-rt")]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -205,12 +264,35 @@ pub fn poll_tasks() -> bool {
     with_rt(Graph::poll_tasks)
 }
 
-impl Task {
+impl<T> Task<T> {
     pub fn cancel(&self) {
+        #[cfg(feature = "tokio-rt")]
+        if let Some(abort) = &self.abort {
+            abort.abort();
+        }
         try_with_rt(|rt| rt.cancel_task(self.id));
     }
 
     pub fn is_finished(&self) -> bool {
         try_with_rt(|rt| rt.is_task_finished(self.id)).unwrap_or(true)
+    }
+}
+
+impl<T> Future for Task<T> {
+    type Output = Result<T, TaskError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.result)
+            .poll(cx)
+            .map(|result| result.unwrap_or(Err(TaskError::Cancelled)))
+    }
+}
+
+impl<T> Drop for Task<T> {
+    fn drop(&mut self) {
+        #[cfg(feature = "tokio-rt")]
+        if self.abort.is_some() {
+            self.cancel();
+        }
     }
 }

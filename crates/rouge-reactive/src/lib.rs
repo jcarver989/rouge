@@ -19,5 +19,7 @@ pub use runtime::{Entered, Runtime};
 pub use scope::{Scope, batch, expect_context, on_cleanup, provide_context, untrack, use_context};
 pub use sender::SignalSender;
 pub use signal::{ReadSignal, Signal, signal};
-pub use task::{Task, poll_tasks, spawn};
+#[cfg(feature = "tokio-rt")]
+pub use task::spawn_on;
+pub use task::{Task, TaskError, poll_tasks, spawn};
 pub use timer::{Sleep, sleep};

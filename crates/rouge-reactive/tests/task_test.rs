@@ -1,6 +1,6 @@
 use rouge_reactive::testing::{Driver, TestResult, recorder};
 use rouge_reactive::{Runtime, Scope, Task, effect, on_cleanup, poll_tasks, signal, spawn};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::thread;
 use tokio::sync::oneshot::channel;
@@ -118,18 +118,18 @@ fn cancel_drops_the_future() {
 #[test]
 fn task_can_cancel_itself_while_running() {
     let _driver = Driver::new();
-    let handle = Rc::new(Cell::new(None::<Task>));
+    let handle = Rc::new(RefCell::new(None::<Task>));
     let handle2 = handle.clone();
     let (tx, rx) = channel::<()>();
     let task = spawn(async move {
-        if let Some(task) = handle2.get() {
+        if let Some(task) = &*handle2.borrow() {
             task.cancel();
         }
         let _ = rx.await;
     });
-    handle.set(Some(task));
+    *handle.borrow_mut() = Some(task);
     poll_tasks();
-    assert!(task.is_finished());
+    assert!(handle.borrow().as_ref().is_some_and(Task::is_finished));
     assert!(tx.send(()).is_err());
 }
 

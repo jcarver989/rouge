@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [features]
 open-url = ["dep:open"]
+tokio-rt = ["rouge-reactive/tokio-rt"]
 
 [dependencies]
 open = { version = "5", optional = true }
