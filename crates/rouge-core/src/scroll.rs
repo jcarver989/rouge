@@ -4,8 +4,10 @@ use crate::style::Styled;
 use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, View, div};
-use rouge_reactive::{Signal, effect, memo, signal};
-use rouge_render::ScrollState;
+use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal};
+use rouge_render::{Point, Rect, ScrollState};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -38,18 +40,24 @@ impl<T: Fn(usize) -> f32 + 'static> IntoProp<RowHeight, markers::Indexed> for T 
 }
 
 #[derive(PartialEq)]
+enum Heights {
+    Uniform(f32, usize),
+    Each(Vec<Memo<f32>>),
+}
+
+#[derive(Clone, PartialEq)]
 enum Rows {
     Uniform(f32, usize),
     Tops(Vec<f32>),
 }
 
 impl Rows {
-    fn new(height: &RowHeight, count: usize) -> Rows {
-        match height {
-            RowHeight::Uniform(height) => Rows::Uniform(*height, count),
-            RowHeight::Each(height) => {
-                let tops = (0..count).scan(0.0, |top, index| {
-                    *top += height(index);
+    fn new(heights: &Heights) -> Rows {
+        match heights {
+            Heights::Uniform(height, count) => Rows::Uniform(*height, *count),
+            Heights::Each(heights) => {
+                let tops = heights.iter().scan(0.0, |top, height| {
+                    *top += height.get().max(0.0);
                     Some(*top)
                 });
                 Rows::Tops([0.0].into_iter().chain(tops).collect())
@@ -80,6 +88,75 @@ impl Rows {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Top,
+    Center,
+    Bottom,
+    Visible,
+}
+
+#[derive(Clone, Copy)]
+pub struct VirtualListHandle {
+    state: Signal<ScrollState>,
+    rows: Signal<Option<Memo<Rows>>>,
+    bounds: Signal<HashMap<usize, Signal<Rect>>>,
+    request: Signal<Option<(usize, Align)>>,
+    top: Memo<usize>,
+}
+
+pub fn virtual_list_handle() -> VirtualListHandle {
+    let state = signal(ScrollState::default());
+    let rows: Signal<Option<Memo<Rows>>> = signal(None);
+    let top = memo(move || {
+        let offset = state.get().offset.y;
+        rows.with(|rows| {
+            rows.map_or(0, |rows| {
+                rows.with(|rows| {
+                    rows.starting_before(offset, false)
+                        .min(rows.count().saturating_sub(1))
+                })
+            })
+        })
+    });
+    VirtualListHandle {
+        state,
+        rows,
+        bounds: signal(HashMap::new()),
+        request: signal(None),
+        top,
+    }
+}
+
+impl VirtualListHandle {
+    pub fn scroll_to_row(self, index: usize, align: Align) {
+        self.request.set(Some((index, align)));
+    }
+
+    pub fn scroll_to(self, offset: Point) {
+        self.request.set(None);
+        self.state.update(|state| state.scroll_to(offset));
+    }
+
+    pub fn scroll_state(self) -> Signal<ScrollState> {
+        self.state
+    }
+
+    pub fn top_row(self) -> Memo<usize> {
+        self.top
+    }
+
+    pub fn row_top(self, index: usize) -> f32 {
+        self.rows
+            .with(|rows| rows.map_or(0.0, |rows| rows.with(|rows| rows.top(index))))
+    }
+
+    pub fn row_bounds(self, index: usize) -> Option<Rect> {
+        self.bounds
+            .with(|bounds| bounds.get(&index).map(|bounds| bounds.get()))
+    }
+}
+
 pub struct VirtualList<T> {
     container: Div,
     count: Box<dyn Fn() -> usize>,
@@ -88,6 +165,7 @@ pub struct VirtualList<T> {
     overscan: usize,
     state: Option<Signal<ScrollState>>,
     visible: Option<Signal<Range<usize>>>,
+    handle: Option<VirtualListHandle>,
 }
 
 pub fn virtual_list<T: View, U>(
@@ -103,10 +181,16 @@ pub fn virtual_list<T: View, U>(
         overscan: OVERSCAN,
         state: None,
         visible: None,
+        handle: None,
     }
 }
 
 impl<T> VirtualList<T> {
+    pub fn handle(mut self, handle: VirtualListHandle) -> Self {
+        self.handle = Some(handle);
+        self
+    }
+
     pub fn overscan(mut self, rows: usize) -> Self {
         self.overscan = rows.max(1);
         self
@@ -131,8 +215,79 @@ impl<T: View> View for VirtualList<T> {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
         let (row, overscan) = (self.row, self.overscan);
         let (count, row_height) = (self.count, self.row_height);
-        let state = self.state.unwrap_or_else(|| signal(ScrollState::default()));
-        let rows = memo(move || Rows::new(&row_height.get(), count()));
+        let handle = self.handle;
+        let state = self
+            .state
+            .or_else(|| handle.map(|handle| handle.state))
+            .unwrap_or_else(|| signal(ScrollState::default()));
+        let heights = memo(move || {
+            let count = count();
+            match row_height.get() {
+                RowHeight::Uniform(height) => Heights::Uniform(height.max(0.001), count),
+                RowHeight::Each(height) => Heights::Each(
+                    (0..count)
+                        .map(|index| {
+                            let height = height.clone();
+                            memo(move || height(index))
+                        })
+                        .collect(),
+                ),
+            }
+        });
+        let rows = memo(move || heights.with(Rows::new));
+        let previous: RefCell<Option<Rows>> = RefCell::new(None);
+        effect(move || {
+            let current = rows.get();
+            if let Some(previous) = previous.replace(Some(current.clone())) {
+                let offset = state.get_untracked().offset;
+                let index = previous
+                    .starting_before(offset.y, true)
+                    .saturating_sub(1)
+                    .min(current.count().saturating_sub(1));
+                let y = current.top(index) + offset.y - previous.top(index);
+                state.update(|state| state.offset.y = y.max(0.0));
+            }
+        });
+        if let Some(handle) = handle {
+            handle.rows.set(Some(rows));
+            if state != handle.state {
+                effect(move || {
+                    handle.state.set_if_changed(state.get());
+                });
+                effect(move || {
+                    let offset = handle.state.get().offset;
+                    state.update(|state| state.offset = offset);
+                });
+            }
+            let viewport = memo(move || state.get().viewport);
+            effect(move || {
+                let request = handle.request.get();
+                let viewport = viewport.get();
+                if let Some((index, align)) = request.filter(|_| viewport.height > 0.0) {
+                    handle.request.set(None);
+                    let current = state.get_untracked();
+                    rows.with(|rows| {
+                        if rows.count() == 0 {
+                            return;
+                        }
+                        let index = index.min(rows.count() - 1);
+                        let (top, bottom) = (rows.top(index), rows.top(index + 1));
+                        let y = match align {
+                            Align::Top => top,
+                            Align::Center => (top + bottom - viewport.height) / 2.0,
+                            Align::Bottom => bottom - viewport.height,
+                            Align::Visible if top < current.offset.y => top,
+                            Align::Visible if bottom > current.offset.y + viewport.height => {
+                                bottom - viewport.height
+                            }
+                            Align::Visible => current.offset.y,
+                        };
+                        let max = (rows.top(rows.count()) - viewport.height).max(0.0);
+                        state.update(|state| state.offset.y = y.clamp(0.0, max));
+                    });
+                }
+            });
+        }
         let visible = memo(move || {
             let state = state.get();
             rows.with(|rows| {
@@ -165,9 +320,25 @@ impl<T: View> View for VirtualList<T> {
                 |index| *index,
                 move |index| {
                     let index = index.get_untracked();
-                    div()
-                        .h(move || top(index + 1) - top(index))
-                        .child(row(index))
+                    let height = memo(move || top(index + 1) - top(index));
+                    let mut container = div().h(height);
+                    if let Some(handle) = handle {
+                        let bounds = signal(Rect::ZERO);
+                        handle.bounds.update(|mounted| {
+                            mounted.insert(index, bounds);
+                        });
+                        on_cleanup(move || {
+                            if handle.bounds.is_alive() {
+                                handle.bounds.update(|mounted| {
+                                    if mounted.get(&index) == Some(&bounds) {
+                                        mounted.remove(&index);
+                                    }
+                                });
+                            }
+                        });
+                        container = container.track_bounds(bounds);
+                    }
+                    container.child(row(index))
                 },
             ));
         let content = div()

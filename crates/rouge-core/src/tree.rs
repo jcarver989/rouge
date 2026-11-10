@@ -1524,10 +1524,6 @@ impl Tree {
     pub(crate) fn pointer_path(&self) -> &[ElementId] {
         self.capture.as_deref().unwrap_or(&self.hover_path)
     }
-
-    pub(crate) fn bounds(&self, id: ElementId) -> Option<Rect> {
-        self.elements.get(id).map(|e| e.bounds)
-    }
 }
 
 #[derive(Clone, Copy)]

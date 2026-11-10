@@ -31,7 +31,10 @@ pub use length::{Length, auto, pct, px};
 pub use motion::{Animation, Motion, MotionProp, motion};
 pub use path::{Path, PathBuilder};
 pub use prop::{IntoEffect, IntoProp, Prop, PropFrom};
-pub use scroll::{RowHeight, Scrollable, VirtualList, scroll, virtual_list};
+pub use scroll::{
+    Align, RowHeight, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
+    virtual_list_handle,
+};
 pub use style::{BoxShadow, Dirty, Style, Styled};
 pub use theme::{Palette, Theme, provide_theme, use_theme};
 pub use tree::{ElementId, FrameStats};

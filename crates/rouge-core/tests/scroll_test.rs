@@ -1,7 +1,9 @@
-use rouge_core::testing::{BLACK, BLUE, GREEN, RED, TestResult, TestUi, WHITE, counter};
+use rouge_core::testing::{
+    BLACK, BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, WHITE, counter,
+};
 use rouge_core::{
-    Color, Point, ScrollEvent, ScrollState, Scrollable, Size, Styled, View, div, scroll,
-    virtual_list,
+    Align, Color, Point, ScrollEvent, ScrollState, Scrollable, Size, Styled, View, div, scroll,
+    virtual_list, virtual_list_handle,
 };
 use rouge_reactive::{Runtime, Signal, effect, on_cleanup, signal};
 use std::cell::RefCell;
@@ -412,6 +414,115 @@ fn releasing_a_scroll_with_velocity_keeps_momentum() {
         200.0,
         "momentum past the end bounces back onto it"
     );
+}
+
+#[test]
+fn list_handle_scrolls_to_each_alignment_and_exposes_mounted_bounds() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, handle) = TestUiBuilder::default().build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(|| 100, 20.0, |_| div().size_full())
+                .handle(handle)
+                .w(100.0)
+                .h(100.0),
+            handle,
+        )
+    });
+    for (align, offset, top) in [
+        (Align::Top, 400.0, 0.0),
+        (Align::Center, 360.0, 40.0),
+        (Align::Bottom, 320.0, 80.0),
+    ] {
+        handle.scroll_to_row(20, align);
+        ui.advance(0.0);
+        assert_eq!(handle.scroll_state().get().offset.y, offset);
+        let bounds = handle.row_bounds(20).ok_or("row is mounted")?;
+        assert_eq!(bounds.origin.y, top);
+        assert_eq!(ui.bounds_at(bounds.center()), Some(bounds));
+    }
+    handle.scroll_to_row(19, Align::Visible);
+    ui.advance(0.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 320.0);
+    handle.scroll_to_row(10, Align::Visible);
+    ui.advance(0.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 200.0);
+    handle.scroll_to_row(20, Align::Visible);
+    ui.advance(0.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 320.0);
+    assert_eq!(handle.row_top(20), 400.0);
+    assert_eq!(handle.row_bounds(99), None);
+    handle.scroll_to_row(1000, Align::Top);
+    ui.advance(0.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 1900.0);
+    Ok(())
+}
+
+#[test]
+fn top_row_reports_the_first_fully_visible_row_once_after_wheel_scrolling() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, handle) = TestUiBuilder::default().build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(|| 100, 20.0, |_| div())
+                .handle(handle)
+                .size_full(),
+            handle,
+        )
+    });
+    let top = handle.top_row();
+    let (runs, bump) = counter();
+    effect(move || {
+        top.get();
+        bump();
+    });
+    ui.pointer_moved(Point::new(10.0, 10.0));
+    ui.scroll(Point::new(0.0, -20.0));
+    ui.scroll(Point::new(0.0, -21.0));
+    assert_eq!(top.get(), 0);
+    ui.advance(0.0);
+    assert_eq!(top.get(), 3);
+    assert_eq!(runs.get(), 2);
+}
+
+#[test]
+fn reactive_row_heights_only_recompute_affected_inputs_and_preserve_the_anchor() {
+    let _rt = Runtime::new().enter();
+    let first_height = signal(20.0);
+    let (runs, bump) = counter();
+    let (mut ui, handle) = TestUiBuilder::default().build_with(|| {
+        let handle = virtual_list_handle();
+        let height = move |index| {
+            bump();
+            if index == 0 { first_height.get() } else { 20.0 }
+        };
+        (
+            virtual_list(|| 100, height, |_| div().size_full())
+                .handle(handle)
+                .size_full(),
+            handle,
+        )
+    });
+    assert_eq!(runs.get(), 100);
+    handle.scroll_to(Point::new(0.0, 405.0));
+    ui.advance(0.0);
+    assert_eq!(handle.top_row().get(), 21);
+    first_height.set(40.0);
+    ui.advance(0.0);
+    assert_eq!(runs.get(), 101);
+    assert_eq!(handle.top_row().get(), 21);
+    assert_eq!(handle.scroll_state().get().offset.y, 425.0);
+    assert_eq!(handle.row_top(20), 420.0);
+}
+
+#[test]
+fn scroll_state_scroll_to_is_the_programmatic_scrolling_api() {
+    let _rt = Runtime::new().enter();
+    let state = signal(ScrollState::default());
+    let mut ui = scroller(state);
+    state.update(|state| state.scroll_to(Point::new(0.0, 120.0)));
+    ui.advance(0.0);
+    assert_eq!(state.get().offset.y, 120.0);
 }
 
 fn scroller(state: Signal<ScrollState>) -> TestUi {

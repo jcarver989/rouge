@@ -231,7 +231,7 @@ impl Ui {
         } = self;
         tree.hit_test(compositor, position)
             .last()
-            .and_then(|id| tree.bounds(*id))
+            .map(|id| tree.window_bounds(compositor, *id))
     }
 
     fn refresh_pointer(&mut self) {

@@ -10,14 +10,15 @@ pub use rouge_widgets as widgets;
 pub mod prelude {
     pub use crate::app::{App, WindowOptions};
     pub use rouge_core::{
-        AnyView, BackdropBlur, BlendMode, Blur, BoxShadow, Chord, Color, ColorMatrix, Corners,
-        Cursor, Decay, Div, DragEvent, DragPhase, Ease, Edges, Fit, FocusEvent, FocusHandle, Glass,
-        ImageData, ImageSource, ImeEvent, Inputs, Key, KeyEvent, Keyframes, LayoutTransition,
-        Length, Mask, Modifiers, Motion, Painter, Palette, Path, Point, PointerButton,
-        PointerEvent, Pose, Rect, ScrollEvent, ScrollState, Scrollable, Size, SpanStyle, Spring,
-        Style, Styled, Text, TextAlign, TextStyle, Theme, Tween, Underline, View, auto, canvas,
-        div, dynamic, each, editable, focus_handle, icon, image, motion, overlay, pct,
-        provide_theme, px, rich_text, scroll, show, text, use_theme, virtual_list, window_size,
+        Align, AnyView, BackdropBlur, BlendMode, Blur, BoxShadow, Chord, Color, ColorMatrix,
+        Corners, Cursor, Decay, Div, DragEvent, DragPhase, Ease, Edges, Fit, FocusEvent,
+        FocusHandle, Glass, ImageData, ImageSource, ImeEvent, Inputs, Key, KeyEvent, Keyframes,
+        LayoutTransition, Length, Mask, Modifiers, Motion, Painter, Palette, Path, Point,
+        PointerButton, PointerEvent, Pose, Rect, ScrollEvent, ScrollState, Scrollable, Size,
+        SpanStyle, Spring, Style, Styled, Text, TextAlign, TextStyle, Theme, Tween, Underline,
+        View, VirtualListHandle, auto, canvas, div, dynamic, each, editable, focus_handle, icon,
+        image, motion, overlay, pct, provide_theme, px, rich_text, scroll, show, text, use_theme,
+        virtual_list, virtual_list_handle, window_size,
     };
     pub use rouge_reactive::{
         Effect, Memo, ReadSignal, Resource, Runtime, Scope, Signal, Task, background, batch,

@@ -27,6 +27,10 @@ pub struct ScrollState {
 }
 
 impl ScrollState {
+    pub fn scroll_to(&mut self, offset: Point) {
+        self.offset = offset;
+    }
+
     pub fn max_offset(&self) -> Point {
         Point::new(
             (self.content.width - self.viewport.width).max(0.0),
