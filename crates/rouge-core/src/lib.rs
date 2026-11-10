@@ -35,7 +35,7 @@ pub use scroll::{
     Align, RowHeight, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
     virtual_list_handle,
 };
-pub use style::{BoxShadow, Dirty, Style, Styled};
+pub use style::{BoxShadow, Dirty, GroupStyles, Style, Styled};
 pub use theme::{Palette, Theme, provide_theme, use_theme};
 pub use tree::{ElementId, FrameStats};
 pub use ui::{Frame, Ui, root_font_size, window_size};

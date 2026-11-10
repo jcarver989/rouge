@@ -105,6 +105,16 @@ macro_rules! layer_props {
 }
 
 impl Div {
+    pub fn group(mut self, name: impl Into<String>) -> Self {
+        self.spec.group = Some(name.into());
+        self
+    }
+
+    pub fn test_id(mut self, name: impl Into<String>) -> Self {
+        self.spec.test_id = Some(name.into());
+        self
+    }
+
     fn bind<T: 'static, U>(
         self,
         value: impl IntoProp<T, U>,

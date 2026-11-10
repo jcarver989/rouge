@@ -229,6 +229,15 @@ impl Ui {
         self.tree().stats()
     }
 
+    pub fn bounds_of(&mut self, name: &str) -> Option<Rect> {
+        self.bounds_of_all(name).into_iter().next()
+    }
+
+    pub fn bounds_of_all(&mut self, name: &str) -> Vec<Rect> {
+        self.tree();
+        self.tree.bounds_of_all(&self.compositor, name)
+    }
+
     pub fn text_index_at(&mut self, position: Point) -> Option<usize> {
         self.tree();
         self.tree

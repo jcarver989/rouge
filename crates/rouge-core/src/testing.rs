@@ -17,6 +17,8 @@ pub const LINEAR: Tween = Tween::new(1.0).ease(Ease::Linear);
 pub enum TestError {
     #[error("no element at ({x}, {y})")]
     NoElement { x: f32, y: f32 },
+    #[error("no element with test id {0:?}")]
+    NoTestId(String),
     #[error(transparent)]
     Gpu(#[from] GpuError),
 }
@@ -176,6 +178,37 @@ impl TestUi {
             sleep(Duration::from_millis(2));
         }
         false
+    }
+
+    pub fn center_of(&mut self, name: &str) -> Result<Point, TestError> {
+        self.advance(0.0);
+        self.ui
+            .bounds_of(name)
+            .map(|bounds| bounds.center())
+            .ok_or_else(|| TestError::NoTestId(name.to_owned()))
+    }
+
+    pub fn click_on(&mut self, name: &str) -> Result<(), TestError> {
+        let point = self.center_of(name)?;
+        self.click_at(point.x, point.y);
+        Ok(())
+    }
+
+    pub fn hover_on(&mut self, name: &str) -> Result<(), TestError> {
+        let point = self.center_of(name)?;
+        self.ui.pointer_moved(point);
+        self.advance(0.0);
+        Ok(())
+    }
+
+    pub fn drag_on(&mut self, name: &str, to: Point) -> Result<(), TestError> {
+        let point = self.center_of(name)?;
+        self.ui.pointer_moved(point);
+        self.ui.pointer_down(PointerButton::Primary);
+        self.ui.pointer_moved(to);
+        self.ui.pointer_up(PointerButton::Primary);
+        self.advance(0.0);
+        Ok(())
     }
 
     pub fn click(&mut self, position: Point) {

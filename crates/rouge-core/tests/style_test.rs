@@ -147,3 +147,38 @@ fn unstyled_leaves_fall_back_to_the_reactive_theme() -> TestResult {
     assert_eq!(ui.bounds(1.0, 1.0)?.size.height, 42.0);
     Ok(())
 }
+
+#[test]
+fn named_hover_groups_restyle_nested_elements_and_revert_on_leave() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::canvas(|| {
+        div()
+            .group("row")
+            .test_id("row")
+            .size(80.0)
+            .child(
+                div().p(10.0).child(
+                    div()
+                        .test_id("child")
+                        .size(20.0)
+                        .bg(Color::RED)
+                        .group_hover("row", |s| s.bg(Color::BLUE)),
+                ),
+            )
+            .child(
+                div()
+                    .test_id("other")
+                    .size(20.0)
+                    .bg(Color::GREEN)
+                    .group_hover("missing", |s| s.bg(Color::BLUE)),
+            )
+    });
+    assert_eq!(ui.pixel(15, 15)?, RED);
+    ui.pointer_moved(rouge_core::Point::new(70.0, 70.0));
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(15, 15)?, BLUE);
+    ui.pointer_left();
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(15, 15)?, RED);
+    Ok(())
+}

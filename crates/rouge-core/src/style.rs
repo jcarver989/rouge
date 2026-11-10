@@ -1,7 +1,10 @@
 use crate::length::Length;
 use crate::prop::{IntoProp, Prop};
+use crate::tree::Variant;
 use rouge_render::{Color, Corners, Point};
 use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::rc::Rc;
 use taffy::{
     AlignItems, AlignSelf, Dimension, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
     Point as Axes, Position, Rect as Sides, Size as Extent, Style as Layout,
@@ -63,9 +66,34 @@ impl BoxShadow {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct GroupStyles(pub(crate) Vec<(String, Variant)>);
+
+impl Debug for GroupStyles {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_list()
+            .entries(self.0.iter().map(|(name, _)| name))
+            .finish()
+    }
+}
+
+impl PartialEq for GroupStyles {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self
+                .0
+                .iter()
+                .zip(&other.0)
+                .all(|((name, style), (other_name, other_style))| {
+                    name == other_name && Rc::ptr_eq(style, other_style)
+                })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     pub layout: Layout,
+    pub group_styles: GroupStyles,
     pub rem_lengths: BTreeMap<&'static str, f32>,
     pub text_color: Option<Color>,
     pub text_size: Option<Length>,
@@ -86,6 +114,7 @@ impl Default for Style {
                 display: Display::Block,
                 ..Default::default()
             },
+            group_styles: GroupStyles::default(),
             rem_lengths: BTreeMap::new(),
             text_color: None,
             text_size: None,
@@ -282,6 +311,18 @@ pub trait Styled: Sized {
             s.rem_lengths.remove("size.height");
             s.layout.size = Extent { width: Dimension::percent(1.0), height: Dimension::percent(1.0) };
         };
+    }
+
+    fn group_hover(
+        mut self,
+        name: impl Into<String>,
+        f: impl Fn(Style) -> Style + 'static,
+    ) -> Self {
+        self.style_mut()
+            .group_styles
+            .0
+            .push((name.into(), Rc::new(f)));
+        self
     }
 
     fn italic(self) -> Self {

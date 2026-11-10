@@ -217,6 +217,8 @@ struct LayerState {
 pub(crate) struct ElementSpec {
     pub layer: Option<LayerSpec>,
     pub scroll: Option<ScrollSpec>,
+    pub group: Option<String>,
+    pub test_id: Option<String>,
     pub text: Option<TextData>,
     pub range_hover: Option<Rc<dyn Fn(Option<usize>)>>,
     pub range_click: Option<Rc<dyn Fn(Option<usize>)>>,
@@ -813,9 +815,9 @@ impl Tree {
         let old = element.effective_style().clone();
         let filled = old.background.is_some();
         f(&mut element.spec.style);
-        if element.resolved.is_some() {
-            element.resolved = element.resolve();
-        }
+        let resolved = self.resolve_style(id);
+        let element = &mut self.elements[id];
+        element.resolved = resolved;
         if old.same_box(element.effective_style()) {
             self.refresh_text_subtree(id);
             return;
@@ -924,6 +926,7 @@ impl Tree {
             .insert_child_at_index(p.taffy, index, child_node)
             .expect("taffy insert");
         self.elements[child].parent = Some(parent);
+        self.refresh_variant_subtree(child);
         self.refresh_text_subtree(child);
         self.mark_layer(parent, true);
         self.mark(Dirty::Layout);
@@ -1267,6 +1270,22 @@ impl Tree {
         steps.flatten().collect()
     }
 
+    pub(crate) fn bounds_of_all(&self, compositor: &Compositor, name: &str) -> Vec<Rect> {
+        let mut pending = vec![self.root];
+        let mut bounds = Vec::new();
+        while let Some(id) = pending.pop() {
+            let element = &self.elements[id];
+            if element.hidden() {
+                continue;
+            }
+            if element.spec.test_id.as_deref() == Some(name) {
+                bounds.push(self.window_bounds(compositor, id));
+            }
+            pending.extend(element.children.iter().rev());
+        }
+        bounds
+    }
+
     pub(crate) fn text_index(
         &self,
         compositor: &Compositor,
@@ -1317,11 +1336,56 @@ impl Tree {
             return;
         };
         let unchanged = replace(&mut element.states[which as usize], on) == on;
-        let styled = element.spec.variants[which as usize].is_some();
-        if unchanged || !(styled || matches!(which, Interaction::Disabled)) {
+        if unchanged {
             return;
         }
-        let resolved = element.resolve();
+        if element.spec.group.is_some() || matches!(which, Interaction::Disabled) {
+            self.refresh_variant_subtree(id);
+        } else {
+            self.refresh_variant(id);
+        }
+    }
+
+    fn resolve_style(&self, id: ElementId) -> Option<Style> {
+        let element = &self.elements[id];
+        let mut resolved = element.resolve();
+        if self.is_disabled(id) {
+            return resolved;
+        }
+        for (name, variant) in &element.spec.style.group_styles.0 {
+            let mut parent = element.parent;
+            let mut active = false;
+            while let Some(id) = parent {
+                let ancestor = &self.elements[id];
+                if ancestor.spec.group.as_ref() == Some(name)
+                    && ancestor.states[Interaction::Hover as usize]
+                    && !ancestor.disabled()
+                {
+                    active = true;
+                    break;
+                }
+                parent = ancestor.parent;
+            }
+            if active {
+                resolved = Some(variant(
+                    resolved.unwrap_or_else(|| element.spec.style.clone()),
+                ));
+            }
+        }
+        resolved
+    }
+
+    fn refresh_variant_subtree(&mut self, id: ElementId) {
+        self.refresh_variant(id);
+        let children = self.elements[id].children.clone();
+        for child in children {
+            self.refresh_variant_subtree(child);
+        }
+    }
+
+    fn refresh_variant(&mut self, id: ElementId) {
+        let resolved = self.resolve_style(id);
+        let element = &mut self.elements[id];
         let new = resolved.as_ref().unwrap_or(&element.spec.style);
         let old = element.effective_style();
         if new.same_box(old) {
@@ -1332,7 +1396,7 @@ impl Tree {
         let repainted = new.border_color != old.border_color
             || new.shadows != old.shadows
             || new.background.is_some() != old.background.is_some();
-        let dirty = if new.layout != old.layout {
+        let dirty = if new.layout != old.layout || new.rem_lengths != old.rem_lengths {
             self.taffy
                 .set_style(element.taffy, new.resolved_layout(self.root_font_size))
                 .expect("taffy set style");

@@ -59,3 +59,56 @@ fn run_and_wait_until_advance_the_clock_in_steps() -> TestResult {
     ui.wait()?;
     Ok(())
 }
+
+#[test]
+fn test_ids_follow_dynamic_replacements_and_keep_paint_order() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let wide = signal(false);
+    let clicks = signal(0);
+    let mut ui = TestUi::new(|| {
+        div()
+            .child(rouge_core::dynamic(move || {
+                let width = if wide.get() { 80.0 } else { 40.0 };
+                div()
+                    .test_id("row")
+                    .w(width)
+                    .h(20.0)
+                    .on_click(move |_| clicks.update(|count| *count += 1))
+            }))
+            .child(div().test_id("row").size(20.0))
+    });
+    assert_eq!(ui.bounds_of("row"), Some(Rect::new(0.0, 0.0, 40.0, 20.0)));
+    assert_eq!(
+        ui.bounds_of_all("row"),
+        vec![
+            Rect::new(0.0, 0.0, 40.0, 20.0),
+            Rect::new(0.0, 20.0, 20.0, 20.0)
+        ]
+    );
+    ui.click_on("row")?;
+    assert_eq!(clicks.get(), 1);
+    wide.set(true);
+    assert_eq!(ui.center_of("row")?, Point::new(40.0, 10.0));
+    assert_eq!(ui.bounds_of_all("row").len(), 2);
+    ui.hover_on("row")?;
+    assert!(matches!(
+        ui.center_of("missing"),
+        Err(TestError::NoTestId(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn drag_on_uses_the_public_drag_gesture() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let moved = signal(Point::ZERO);
+    let mut ui = TestUi::new(|| {
+        div()
+            .test_id("drag")
+            .size(30.0)
+            .on_drag(move |event| moved.set(event.translation))
+    });
+    ui.drag_on("drag", Point::new(100.0, 80.0))?;
+    assert_eq!(moved.get(), Point::new(85.0, 65.0));
+    Ok(())
+}
