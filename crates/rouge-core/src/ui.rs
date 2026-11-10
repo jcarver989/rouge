@@ -9,6 +9,7 @@ use crate::style::Dirty;
 use crate::theme::{Palette, provide_theme};
 use crate::tree::{ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
 use crate::view::{BuildCx, Patch, Patches, View, send};
+use crate::window::{Appearance, WindowCommand, WindowHandle};
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, effect, expect_context, poll_tasks, provide_context, signal,
 };
@@ -63,6 +64,8 @@ impl Drag {
 }
 
 pub struct Ui {
+    window_commands: UnboundedReceiver<WindowCommand>,
+    window_handle: WindowHandle,
     tree: Tree,
     compositor: Compositor,
     size: Signal<Size>,
@@ -94,7 +97,14 @@ impl Ui {
         let mut tree = Tree::new(size);
         let mut text_system = TextSystem::new();
         let scope = Scope::root();
-        let size = scope.run(|| {
+        let (commands, window_commands) = unbounded_channel();
+        let (size, window_handle) = scope.run(|| {
+            let window_handle = WindowHandle {
+                commands: signal(commands),
+                title: signal(String::new()),
+                appearance: signal(Appearance::Light),
+            };
+            provide_context(window_handle);
             let size = signal(size);
             provide_context(WindowSize(size.read_only()));
             let root_size = signal(16.0);
@@ -116,9 +126,11 @@ impl Ui {
             };
             let element = root().build(&mut cx);
             tree.append_child(tree.root(), element);
-            size
+            (size, window_handle)
         });
         Ui {
+            window_commands,
+            window_handle,
             tree,
             compositor: Compositor::new(),
             size,
@@ -155,6 +167,19 @@ impl Ui {
             self.compositor.apply(commit);
         }
         &mut self.tree
+    }
+
+    pub fn set_appearance(&mut self, appearance: Appearance) {
+        self.window_handle.appearance.set_if_changed(appearance);
+    }
+
+    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
+        poll_tasks();
+        let mut commands = Vec::new();
+        while let Ok(command) = self.window_commands.try_recv() {
+            commands.push(command);
+        }
+        commands
     }
 
     pub fn add_font(&mut self, data: Vec<u8>) -> Vec<String> {
@@ -325,9 +350,14 @@ impl Ui {
     }
 
     pub fn dispatch_action<T: Any>(&mut self, action: T) -> bool {
+        self.dispatch_action_ref(&action)
+    }
+
+    pub(crate) fn dispatch_action_ref(&mut self, action: &dyn Any) -> bool {
         let path = self.tree().focus_path();
-        let handlers = self.tree.action_handlers(&path, TypeId::of::<T>());
-        batch(|| handlers.iter().for_each(|handler| handler(&action)));
+        let handlers = self.tree.action_handlers(&path, action.type_id());
+        self.scope
+            .run(|| batch(|| handlers.iter().for_each(|handler| handler(action))));
         self.tree();
         !handlers.is_empty()
     }
@@ -338,7 +368,8 @@ impl Ui {
         }
         let path = self.tree().focus_path();
         if let Some((action, handlers)) = self.tree.binding(&path, &event) {
-            batch(|| handlers.iter().for_each(|handler| handler(&*action)));
+            self.scope
+                .run(|| batch(|| handlers.iter().for_each(|handler| handler(&*action))));
             self.tree();
             return true;
         }
@@ -367,7 +398,8 @@ impl Ui {
 
     fn emit_focused(&mut self, on: On, event: Event<'_>) {
         let path = self.tree().focus_path();
-        emit(&self.tree.listeners(&path, on), event, |_| {});
+        self.scope
+            .run(|| emit(&self.tree.listeners(&path, on), event, |_| {}));
         self.tree();
     }
 
@@ -537,12 +569,14 @@ impl Ui {
         event.click_count = self.clicks.map_or(1, |(_, _, count)| count);
         let (tree, compositor) = (&self.tree, &self.compositor);
         let target = Cell::new(None);
-        emit(&listeners, Event::Pointer(&event), |element| {
-            if !event.captured.get() {
-                target.set(Some(element));
-            }
-            let local = tree.to_local(compositor, element, position);
-            event.local.set(local);
+        self.scope.run(|| {
+            emit(&listeners, Event::Pointer(&event), |element| {
+                if !event.captured.get() {
+                    target.set(Some(element));
+                }
+                let local = tree.to_local(compositor, element, position);
+                event.local.set(local);
+            });
         });
         let captured = target.take().filter(|_| event.captured.get());
         if let Some(element) = captured.filter(|_| on == On::PointerDown) {

@@ -5,6 +5,7 @@ use crate::prop::IntoProp;
 use crate::tree::ElementId;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Text, View, send, text};
+use crate::window::EditAction;
 use crate::{Styled, styled};
 use rouge_reactive::Signal;
 use rouge_render::Color;
@@ -151,11 +152,22 @@ impl View for Editable {
         data.edit = Some(state);
         data.style.wrap = multiline;
 
-        let (keys, ime, down, moved) = (edit.clone(), edit.clone(), edit.clone(), edit);
+        let (keys, ime, down, moved, actions) =
+            (edit.clone(), edit.clone(), edit.clone(), edit.clone(), edit);
         let dragging = Rc::new(Cell::new(false));
         let (pressed, released) = (dragging.clone(), dragging.clone());
         let id = div
             .focusable()
+            .on_action(move |action: &EditAction| {
+                let op = match action {
+                    EditAction::Copy => EditOp::Copy,
+                    EditAction::Cut => EditOp::Cut,
+                    EditAction::Paste => EditOp::Paste,
+                    EditAction::SelectAll => EditOp::SelectAll,
+                    EditAction::Undo | EditAction::Redo => return,
+                };
+                actions(op);
+            })
             .cursor(Cursor::Text)
             .on_key_down(move |event| {
                 if let Some(op) = key_op(event, multiline) {

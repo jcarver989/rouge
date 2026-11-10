@@ -105,6 +105,11 @@ macro_rules! layer_props {
 }
 
 impl Div {
+    pub fn preserve_focus(mut self) -> Self {
+        self.spec.preserve_focus = true;
+        self
+    }
+
     pub fn group(mut self, name: impl Into<String>) -> Self {
         self.spec.group = Some(name.into());
         self

@@ -768,6 +768,14 @@ M7 and M8 ship after v0.1. S0 is deliberately early: it is cheap, it depends onl
 
 Milestones M0 to M5 are implemented, and the S0 spike has been run on macOS. Everything listed as done is covered by tests, including pixel-level tests that render on a real GPU. Development and all windowed runs have been on macOS (Apple silicon); see "Linux" below for what has been run there.
 
+### API gap closure: window shell and menus (item 7)
+
+- `WindowOptions` now has `min_size(width, height)`, `maximized(bool)` and `decorations(Decorations::{Server, Client})`. The platform loop applies these with winit. Client decorations, or a compositor declining server decorations, wrap the content in `window_chrome(title, root)` with drag/double-click zoom, minimize/zoom/close controls and eight resize edges. Resize requests remain subject to the window manager's resizable/maximized policy.
+- Each `Ui` provides a copyable `window_handle()` in context. It supports reactive `title()`, `set_title`, `minimize`, `zoom`, `close`, `start_drag`, `start_resize` and `quit`. Commands are owned and drained by that window; disposed handles ignore commands. `App::quit()` works in pointer/key/action callbacks through the UI's window context; asynchronous code should capture the handle during construction. `App::appearance()` / `appearance()` return the window's reactive `ReadSignal<Appearance>` and follow winit theme events.
+- `App::menus(Vec<Menu>)` uses the shared typed `Menu` / `MenuItem` model (actions, optional shortcuts, separators and nested submenus). `MenuItem::dispatch(&mut Ui)` uses the same focused typed action path as keys. `Menu::edit()` is installed when no Edit menu is supplied and routes cut/copy/paste/select-all to the focused editable; undo/redo handlers are pending item 9. Shortcut annotations are native accelerators on macOS and labels on the rendered bar; Linux applications should also register their normal `.bind_key` declarations.
+- macOS uses muda, with a process-wide native menu, About/Hide/Hide Others/Show All/Quit, and event-loop wakeups for menu selections. **Linux's application menu is Rouge-rendered, not native**: muda's Linux integration requires GTK-owned windows and is incompatible with Rouge's winit ownership. This is the approved platform adjustment, not a GTK migration. The rendered bar preserves editor focus during pointer use; it does not yet provide keyboard menu navigation. `Div::preserve_focus()` also exposes that behavior for other auxiliary controls.
+- `platform::open_url` is available behind `rouge/open-url`. Shell behavior, focused editor menu dispatch, appearance, title commands, chrome geometry and controls are covered by headless public-API tests on x86_64 Linux. No windowed verification was performed here; the macOS-only native adapter is not compiled or executed on this Linux host.
+
 ### Done
 
 | Area | What exists |
@@ -853,7 +861,7 @@ Run on macOS (Apple M4 Pro); the code and the full findings are in `spikes/s0-su
 - The full M5 workspace builds and all its tests pass in an aarch64 Linux container with Mesa llvmpipe (software Vulkan), run in parallel.
 - Before M5, parallel test runs there crashed inside `libvulkan` while naming debug objects on concurrently created devices (`view_test` in 9 of 10 runs). `Headless` now creates its instance without `InstanceFlags::DEBUG`; one full parallel run since then was clean.
 - Building needs `pkg-config` and `libfontconfig1-dev` (fontique); tests need a Vulkan driver. Cross-checking from macOS stops at the fontconfig build script.
-- Not run at all: x86_64, a real GPU, and anything with a window (X11 or Wayland).
+- The API gap closure tests and full workspace suite also pass headlessly on x86_64 Linux. Still not verified here: windowed shell behavior (X11 or Wayland) and the macOS-only menu adapter.
 
 ### Not yet built
 

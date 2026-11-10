@@ -6,7 +6,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+open-url = ["dep:open"]
+
 [dependencies]
+open = { version = "5", optional = true }
 rouge-reactive.workspace = true
 rouge-render.workspace = true
 rouge-core.workspace = true
@@ -14,8 +18,12 @@ winit.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 arboard.workspace = true
 rouge-widgets.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.19.3", default-features = false }

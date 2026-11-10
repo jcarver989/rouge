@@ -1,9 +1,14 @@
-use rouge_core::{Cursor, Key, Modifiers, PointerButton};
+#[cfg(target_os = "macos")]
+pub(crate) mod native_menu;
+
+use rouge_core::{
+    Appearance, Cursor, Key, Modifiers, PointerButton, ResizeEdge, Ui, WindowCommand,
+};
 use rouge_render::{Point, Size};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{MouseButton, MouseScrollDelta};
 use winit::keyboard::{ModifiersState, NamedKey};
-use winit::window::CursorIcon;
+use winit::window::{CursorIcon, ResizeDirection, Theme, Window};
 
 const LINE_SCROLL: f32 = 40.0;
 
@@ -91,5 +96,82 @@ pub fn scroll_delta(delta: MouseScrollDelta, scale: f32) -> Point {
     match delta {
         MouseScrollDelta::LineDelta(x, y) => Point::new(x * LINE_SCROLL, y * LINE_SCROLL),
         MouseScrollDelta::PixelDelta(delta) => logical_point(delta, scale),
+    }
+}
+
+pub fn appearance(theme: Option<Theme>) -> Appearance {
+    if theme == Some(Theme::Dark) {
+        Appearance::Dark
+    } else {
+        Appearance::Light
+    }
+}
+
+pub(crate) fn window_commands(window: &Window, ui: &mut Ui) -> (bool, bool) {
+    let (mut close, mut quit) = (false, false);
+    loop {
+        let commands = ui.take_window_commands();
+        if commands.is_empty() {
+            break;
+        }
+        for command in commands {
+            match command {
+                WindowCommand::SetTitle(title) => window.set_title(&title),
+                WindowCommand::Minimize => window.set_minimized(true),
+                WindowCommand::Zoom => window.set_maximized(!window.is_maximized()),
+                WindowCommand::Close => close = true,
+                WindowCommand::Quit => quit = true,
+                WindowCommand::StartDrag => {
+                    let _ = window.drag_window();
+                }
+                WindowCommand::StartResize(edge) => {
+                    let direction = match edge {
+                        ResizeEdge::North => ResizeDirection::North,
+                        ResizeEdge::South => ResizeDirection::South,
+                        ResizeEdge::East => ResizeDirection::East,
+                        ResizeEdge::West => ResizeDirection::West,
+                        ResizeEdge::NorthEast => ResizeDirection::NorthEast,
+                        ResizeEdge::NorthWest => ResizeDirection::NorthWest,
+                        ResizeEdge::SouthEast => ResizeDirection::SouthEast,
+                        ResizeEdge::SouthWest => ResizeDirection::SouthWest,
+                    };
+                    let _ = window.drag_resize_window(direction);
+                }
+                WindowCommand::Menu(item) => {
+                    item.dispatch(ui);
+                }
+            }
+        }
+    }
+    (close, quit)
+}
+
+#[cfg(feature = "open-url")]
+pub fn open_url(url: &str) -> Result<(), std::io::Error> {
+    open::that(url)
+}
+
+pub(crate) fn menu_root(
+    menus: Vec<rouge_core::Menu>,
+    root: rouge_core::AnyView,
+) -> rouge_core::AnyView {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = menus;
+        root
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        use rouge_core::{Styled, View, div};
+        if menus.is_empty() {
+            return root;
+        }
+        div()
+            .size_full()
+            .flex()
+            .col()
+            .child(rouge_widgets::menu_bar(menus))
+            .child(div().flex_1().min_h(0.0).child(root))
+            .into_any()
     }
 }

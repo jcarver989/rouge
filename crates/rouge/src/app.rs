@@ -1,11 +1,16 @@
 use crate::platform::{
-    cursor_icon, logical_point, logical_size, modifiers, named_key, pointer_button, scroll_delta,
+    appearance as platform_appearance, cursor_icon, logical_point, logical_size, modifiers,
+    named_key, pointer_button, scroll_delta, window_commands,
 };
 use arboard::Clipboard as SystemClipboard;
 use pollster::block_on;
-use rouge_core::{AnyView, Clipboard, Cursor, ImeEvent, Key, KeyEvent, Modifiers, Ui, View};
-use rouge_reactive::Runtime;
+use rouge_core::{
+    AnyView, Appearance, Clipboard, Cursor, Decorations, ImeEvent, Key, KeyEvent, Menu, Modifiers,
+    Ui, View, appearance, window_handle,
+};
+use rouge_reactive::{ReadSignal, Runtime};
 use rouge_render::{Color, Gpu, GpuError, Point, Renderer, Size, Viewport};
+use rouge_widgets::window_chrome;
 use std::collections::HashMap;
 use std::env::var;
 use std::mem::take;
@@ -32,6 +37,9 @@ pub struct WindowOptions {
     size: Size,
     background: Color,
     resizable: bool,
+    min_size: Option<Size>,
+    maximized: bool,
+    decorations: Decorations,
 }
 
 impl Default for WindowOptions {
@@ -41,11 +49,27 @@ impl Default for WindowOptions {
             size: Size::new(800.0, 600.0),
             background: Color::WHITE,
             resizable: true,
+            min_size: None,
+            maximized: false,
+            decorations: Decorations::Server,
         }
     }
 }
 
 impl WindowOptions {
+    pub fn min_size(mut self, width: f32, height: f32) -> Self {
+        self.min_size = Some(Size::new(width, height));
+        self
+    }
+    pub fn maximized(mut self, maximized: bool) -> Self {
+        self.maximized = maximized;
+        self
+    }
+    pub fn decorations(mut self, decorations: Decorations) -> Self {
+        self.decorations = decorations;
+        self
+    }
+
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
@@ -77,6 +101,9 @@ pub enum AppError {
     Surface(#[from] CreateSurfaceError),
     #[error("the GPU adapter cannot present to the window surface")]
     UnsupportedSurface,
+    #[cfg(target_os = "macos")]
+    #[error("failed to create application menu: {0}")]
+    Menu(#[from] muda::Error),
     #[error(transparent)]
     Gpu(#[from] GpuError),
 }
@@ -86,9 +113,21 @@ type RootFn = Box<dyn FnOnce() -> AnyView>;
 #[derive(Default)]
 pub struct App {
     windows: Vec<(WindowOptions, RootFn)>,
+    menus: Vec<Menu>,
 }
 
 impl App {
+    pub fn appearance() -> ReadSignal<Appearance> {
+        appearance()
+    }
+    pub fn quit() {
+        window_handle().quit();
+    }
+    pub fn menus(mut self, menus: Vec<Menu>) -> Self {
+        self.menus = menus;
+        self
+    }
+
     pub fn new() -> App {
         App::default()
     }
@@ -103,16 +142,25 @@ impl App {
         self
     }
 
-    pub fn run(self) -> Result<(), AppError> {
+    pub fn run(mut self) -> Result<(), AppError> {
+        if !self.menus.iter().any(|menu| menu.title == "Edit") {
+            self.menus.push(Menu::edit());
+        }
         let event_loop = EventLoop::new()?;
         let proxy = event_loop.create_proxy();
+        #[cfg(target_os = "macos")]
+        let native_menus =
+            crate::platform::native_menu::NativeMenus::new(self.menus.clone(), proxy.clone())?;
         let runtime = Runtime::with_waker(move || {
             let _ = proxy.send_event(());
         });
         let _entered = runtime.enter();
         event_loop.set_control_flow(ControlFlow::Wait);
         let mut runner = Runner {
+            #[cfg(target_os = "macos")]
+            native_menus,
             pending: self.windows,
+            menus: self.menus,
             windows: HashMap::new(),
             error: None,
             exit_after_frames: var("ROUGE_EXIT_AFTER_FRAMES")
@@ -125,7 +173,10 @@ impl App {
 }
 
 struct Runner {
+    #[cfg(target_os = "macos")]
+    native_menus: crate::platform::native_menu::NativeMenus,
     pending: Vec<(WindowOptions, RootFn)>,
+    menus: Vec<Menu>,
     windows: HashMap<WindowId, WindowState>,
     error: Option<AppError>,
     exit_after_frames: Option<u64>,
@@ -165,11 +216,17 @@ impl WindowState {
         event_loop: &ActiveEventLoop,
         options: WindowOptions,
         root: RootFn,
+        menus: Vec<Menu>,
     ) -> Result<WindowState, AppError> {
-        let attributes = Window::default_attributes()
-            .with_title(options.title)
+        let mut attributes = Window::default_attributes()
+            .with_title(options.title.clone())
+            .with_maximized(options.maximized)
+            .with_decorations(options.decorations == Decorations::Server)
             .with_resizable(options.resizable)
             .with_inner_size(LogicalSize::new(options.size.width, options.size.height));
+        if let Some(size) = options.min_size {
+            attributes = attributes.with_min_inner_size(LogicalSize::new(size.width, size.height));
+        }
         let window = Arc::new(event_loop.create_window(attributes)?);
 
         let display = Box::new(event_loop.owned_display_handle());
@@ -190,7 +247,18 @@ impl WindowState {
         surface.configure(&gpu.device, &config);
 
         let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
-        let mut ui = Ui::new(logical_size(physical, scale), root);
+        let chrome = options.decorations == Decorations::Client || !window.is_decorated();
+        let mut ui = Ui::new(logical_size(physical, scale), move || {
+            let handle = window_handle();
+            handle.set_title(options.title);
+            let root = crate::platform::menu_root(menus, root());
+            if chrome {
+                window_chrome(handle.title(), root).into_any()
+            } else {
+                root
+            }
+        });
+        ui.set_appearance(platform_appearance(window.theme()));
         ui.set_scale(scale);
         ui.set_clipboard(SystemClipboardAdapter(SystemClipboard::new().ok()));
         Ok(WindowState {
@@ -305,7 +373,7 @@ impl WindowState {
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         for (options, root) in take(&mut self.pending) {
-            match WindowState::new(event_loop, options, root) {
+            match WindowState::new(event_loop, options, root, self.menus.clone()) {
                 Ok(state) => {
                     self.windows.insert(state.window.id(), state);
                 }
@@ -318,12 +386,29 @@ impl ApplicationHandler for Runner {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         for state in self.windows.values_mut() {
             if state.ui.needs_frame() {
                 state.window.request_redraw();
             }
         }
+        self.process_window_commands(event_loop);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+        #[cfg(target_os = "macos")]
+        {
+            let ui = self
+                .windows
+                .values_mut()
+                .find(|state| state.window.has_focus())
+                .map(|state| &mut state.ui);
+            if self.native_menus.dispatch(ui) {
+                self.windows.clear();
+                event_loop.exit();
+            }
+        }
+        self.process_window_commands(event_loop);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -336,6 +421,9 @@ impl ApplicationHandler for Runner {
                 if self.windows.is_empty() {
                     event_loop.exit();
                 }
+            }
+            WindowEvent::ThemeChanged(theme) => {
+                state.ui.set_appearance(platform_appearance(Some(theme)));
             }
             WindowEvent::Resized(size) => state.resize(size),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -381,6 +469,28 @@ impl ApplicationHandler for Runner {
         }
         if let Some(state) = self.windows.get_mut(&id) {
             state.sync_platform();
+        }
+        self.process_window_commands(event_loop);
+    }
+}
+
+impl Runner {
+    fn process_window_commands(&mut self, event_loop: &ActiveEventLoop) {
+        let mut closing = Vec::new();
+        let mut quit = false;
+        for (id, state) in &mut self.windows {
+            let (close, exit) = window_commands(&state.window, &mut state.ui);
+            if close {
+                closing.push(*id);
+            }
+            quit |= exit;
+        }
+        for id in closing {
+            self.windows.remove(&id);
+        }
+        if quit || self.windows.is_empty() {
+            self.windows.clear();
+            event_loop.exit();
         }
     }
 }

@@ -17,6 +17,7 @@ mod theme;
 mod tree;
 mod ui;
 mod view;
+mod window;
 
 pub use canvas::{Canvas, Icon, Painter, canvas, icon};
 pub use clipboard::{Clipboard, MemoryClipboard};
@@ -49,3 +50,8 @@ pub use rouge_render::{
     Rect, ScrollState, Size, Spring, Timing, Tween,
 };
 pub use rouge_text::{SpanStyle, TextAlign, TextStyle, Underline};
+
+pub use window::{
+    Appearance, Decorations, EditAction, Menu, MenuItem, ResizeEdge, WindowCommand, WindowHandle,
+    appearance, window_handle,
+};

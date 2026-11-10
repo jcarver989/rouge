@@ -215,6 +215,7 @@ struct LayerState {
 }
 
 #[derive(Default)]
+#[expect(clippy::struct_excessive_bools)]
 pub(crate) struct ElementSpec {
     pub layer: Option<LayerSpec>,
     pub scroll: Option<ScrollSpec>,
@@ -232,6 +233,7 @@ pub(crate) struct ElementSpec {
     pub focus_scope: bool,
     pub disabled: bool,
     pub pass_through: bool,
+    pub preserve_focus: bool,
     pub cursor: Option<Cursor>,
     pub bounds_observer: Option<Signal<Rect>>,
     pub size_observer: Option<Signal<Size>>,
@@ -1104,6 +1106,13 @@ impl Tree {
     }
 
     pub(crate) fn focus_pointer(&mut self) {
+        if self
+            .hover_path
+            .iter()
+            .any(|id| self.elements[*id].spec.preserve_focus)
+        {
+            return;
+        }
         let target = self
             .hover_path
             .iter()
