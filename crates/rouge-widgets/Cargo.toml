@@ -1,0 +1,17 @@
+[package]
+name = "rouge-widgets"
+description = "Core widget set for Rouge, built on its public API."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rouge-core.workspace = true
+rouge-reactive.workspace = true
+
+[dev-dependencies]
+rouge-render.workspace = true
+
+[lints]
+workspace = true
