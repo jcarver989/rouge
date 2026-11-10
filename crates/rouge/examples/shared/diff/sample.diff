@@ -1,0 +1,174 @@
+diff --git a/crates/diff/desktop/src/app.rs b/crates/diff/desktop/src/app.rs
+index f99ad50..e2bce83 100644
+--- a/crates/diff/desktop/src/app.rs
++++ b/crates/diff/desktop/src/app.rs
+@@ -9,15 +9,19 @@ use clankerdiff_gpui::{
+     DiffClientEvent, DiffClientView, DiffViewerOptions, RunCommand, ThemeChanged, ViewModeChanged,
+     ui::{
+         InterfaceSize,
+-        prelude::{EmptyState, NoticeTone, UI_FONT, UiTheme, window_appearance},
++        prelude::{EmptyState, NoticeTone, UI_FONT, UiTheme, binding_label, key_binding, window_appearance},
+         window_chrome,
+     },
+ };
+ use clankerdiff_gpui_shell::{run_loop, runtime};
+ use clankerdiff_server::{DiffServer, ServerOptions};
+-use gpui::{AnyElement, App, AppContext, Context, Entity, KeyBinding, Subscription, Task, Window, div, prelude::*};
++use gpui::{
++    AnyElement, App, AppContext, Context, Entity, FocusHandle, KeyContext, Subscription, Task, Window, div, prelude::*,
++};
+ use std::{path::PathBuf, sync::mpsc::Sender};
+ 
++const KEY_CONTEXT: &str = "DesktopDiff";
++
+ pub(crate) struct DesktopApp {
+     repository_path: PathBuf,
+     scope: DiffScope,
+@@ -26,6 +30,7 @@ pub(crate) struct DesktopApp {
+     server: Option<DiffServer>,
+     error: Option<String>,
+     view: Entity<DiffClientView>,
++    focus_handle: FocusHandle,
+     load_task: Option<Task<()>>,
+     command_task: Option<Task<()>>,
+     watch_task: Task<()>,
+@@ -68,6 +73,7 @@ impl DesktopApp {
+             server: None,
+             error: None,
+             view,
++            focus_handle: cx.focus_handle(),
+             load_task: None,
+             command_task: None,
+             watch_task: Task::ready(()),
+@@ -83,12 +89,12 @@ impl DesktopApp {
+     }
+ 
+     pub(crate) fn bind_keys(cx: &mut App) {
+-        cx.bind_keys([
+-            KeyBinding::new("cmd-shift-s", RunCommand(DiffReviewCommand::StageAll), Some("DesktopDiff")),
+-            KeyBinding::new("ctrl-shift-s", RunCommand(DiffReviewCommand::StageAll), Some("DesktopDiff")),
+-            KeyBinding::new("cmd-shift-u", RunCommand(DiffReviewCommand::UnstageAll), Some("DesktopDiff")),
+-            KeyBinding::new("ctrl-shift-u", RunCommand(DiffReviewCommand::UnstageAll), Some("DesktopDiff")),
+-        ]);
++        let bindings = [
++            key_binding("secondary-shift-s", RunCommand(DiffReviewCommand::StageAll), Some(KEY_CONTEXT), cx),
++            key_binding("secondary-shift-u", RunCommand(DiffReviewCommand::UnstageAll), Some(KEY_CONTEXT), cx),
++            key_binding("secondary-r", RunCommand(DiffReviewCommand::Refresh), Some(KEY_CONTEXT), cx),
++        ];
++        cx.bind_keys(bindings);
+     }
+ 
+     fn discover(&mut self, cx: &mut Context<Self>) {
+diff --git a/crates/ui/gpui-shell/src/menus.rs b/crates/ui/gpui-shell/src/menus.rs
+index 3cbf693..8e53596 100644
+--- a/crates/ui/gpui-shell/src/menus.rs
++++ b/crates/ui/gpui-shell/src/menus.rs
+@@ -1,16 +1,10 @@
+ use crate::run_loop;
+-use gpui::{
+-    Action, App, KeyBinding, Menu, MenuItem, OsAction, PromptLevel, SharedString, SystemMenuType, Window, actions,
+-};
++use clankerdiff_gpui_ui::keymap::key_binding;
++use gpui::{Action, App, Menu, MenuItem, OsAction, PromptLevel, SharedString, SystemMenuType, Window, actions};
+ use gpui_base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+ 
+ actions!(app_menu, [About, Hide, HideOthers, Minimize, Quit, ShowAll, Zoom]);
+ 
+-#[cfg(target_os = "macos")]
+-const QUIT_KEYSTROKE: &str = "cmd-q";
+-#[cfg(not(target_os = "macos"))]
+-const QUIT_KEYSTROKE: &str = "ctrl-q";
+-
+ pub fn install(cx: &mut App, name: &'static str, version: &'static str, app_items: Vec<MenuItem>, menus: Vec<Menu>) {
+     cx.on_action(move |_: &About, cx| {
+         with_active_window(cx, |window, cx| {
+@@ -24,7 +18,8 @@ pub fn install(cx: &mut App, name: &'static str, version: &'static str, app_item
+     cx.on_action(|_: &Quit, cx| run_loop::stop(cx));
+     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+     cx.on_action(|_: &Zoom, cx| with_active_window(cx, |window, _| window.zoom_window()));
+-    cx.bind_keys([KeyBinding::new(QUIT_KEYSTROKE, Quit, None)]);
++    let quit = key_binding("secondary-q", Quit, None, cx);
++    cx.bind_keys([quit]);
+     cx.set_menus(build(name, app_items, menus));
+ }
+ 
+diff --git a/crates/ui/gpui/src/keymap.rs b/crates/ui/gpui/src/keymap.rs
+new file mode 100644
+index 0000000..5a26a68
+--- /dev/null
++++ b/crates/ui/gpui/src/keymap.rs
+@@ -0,0 +1,19 @@
++use gpui::{Action, App, KeyBinding, KeyBindingContextPredicate};
++use std::rc::Rc;
++
++#[must_use]
++pub fn key_binding<T: Action>(keystrokes: &str, action: T, context: Option<&str>, cx: &App) -> KeyBinding {
++    let predicate = context.map(|context| {
++        let predicate = KeyBindingContextPredicate::parse(context)
++            .unwrap_or_else(|error| panic!("invalid key context `{context}`: {error}"));
++        Rc::new(predicate)
++    });
++    KeyBinding::load(keystrokes, Box::new(action), predicate, false, None, cx)
++        .unwrap_or_else(|error| panic!("invalid keystrokes `{keystrokes}`: {error}"))
++}
++
++#[must_use]
++pub fn binding_label(binding: &KeyBinding, cx: &App) -> String {
++    let os = cx.platform_info().os;
++    binding.keystrokes().iter().map(|keystroke| keystroke.display(os).to_string()).collect::<Vec<_>>().join(" ")
++}
+diff --git a/crates/ui/gpui-shell/src/legacy_keys.rs b/crates/ui/gpui-shell/src/legacy_keys.rs
+deleted file mode 100644
+index 7c1d2aa..0000000
+--- a/crates/ui/gpui-shell/src/legacy_keys.rs
++++ /dev/null
+@@ -1,14 +0,0 @@
+-use gpui::{Action, App, KeyBinding};
+-
+-pub fn bind_platform_keys<A: Action + Clone>(cx: &mut App, key: &str, action: A, context: &str) {
+-    let bindings = ["cmd", "ctrl"].map(|modifier| {
+-        let keystroke = format!("{modifier}-{key}");
+-        KeyBinding::new(&keystroke, action.clone(), Some(context))
+-    });
+-    cx.bind_keys(bindings);
+-}
+-
+-pub fn label(key: &str) -> String {
+-    // Both spellings are shown until the keymap module lands.
+-    format!("cmd-{key} / ctrl-{key}")
+-}
+diff --git a/crates/diff/protocol/src/client/document_cache.rs b/crates/diff/protocol/src/client/document_replica.rs
+similarity index 97%
+rename from crates/diff/protocol/src/client/document_cache.rs
+rename to crates/diff/protocol/src/client/document_replica.rs
+index 12a8bab..65abfe9 100644
+--- a/crates/diff/protocol/src/client/document_cache.rs
++++ b/crates/diff/protocol/src/client/document_replica.rs
+@@ -6,12 +6,12 @@ use clankerdiff_core::{DiffDocument, RepoPath};
+ use std::{collections::BTreeMap, sync::Arc};
+ 
+ #[derive(Debug, Default)]
+-pub struct DocumentCache {
++pub struct DocumentReplica {
+     document: Arc<DiffDocument>,
+     index: BTreeMap<RepoPath, usize>,
+ }
+ 
+-impl DocumentCache {
++impl DocumentReplica {
+     pub fn decode_event(&mut self, text: &str) -> Result<ServerEvent, ProtocolError> {
+         self.apply_event(ServerMessage::decode(text)?)
+     }
+diff --git a/crates/ui/syntax/Cargo.toml b/crates/ui/syntax/Cargo.toml
+index 50dc7e7..60c74c6 100644
+--- a/crates/ui/syntax/Cargo.toml
++++ b/crates/ui/syntax/Cargo.toml
+@@ -73,8 +73,6 @@ arborium-yaml = "=2.18.2"
+ arborium-zig = "=2.18.2"
+ arborium-zsh = "=2.18.2"
+ arborium-theme.workspace = true
+-imbl.workspace = true
+-lru.workspace = true
+ thiserror.workspace = true
+ tree-sitter.workspace = true
+ clankerdiff-fingerprint.workspace = true
