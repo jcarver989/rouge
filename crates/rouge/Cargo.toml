@@ -1,0 +1,21 @@
+[package]
+name = "rouge"
+description = "A signal-driven, GPU-composited UI framework."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rouge-reactive.workspace = true
+rouge-render.workspace = true
+rouge-core.workspace = true
+winit.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+thiserror.workspace = true
+arboard.workspace = true
+rouge-widgets.workspace = true
+
+[lints]
+workspace = true
