@@ -25,14 +25,14 @@ fn spawned_task_runs_on_poll_and_reruns_effects() {
 
 #[test]
 fn task_resumes_across_awaits() -> TestResult {
-    let _driver = Driver::new();
+    let driver = Driver::new();
     let s = signal(0);
     let (tx, rx) = channel();
     let task = spawn(async move {
         s.set(1);
-        if let Ok(v) = rx.await {
-            s.set(v);
-        }
+        let value = rx.await?;
+        s.set(value);
+        Ok::<_, tokio::sync::oneshot::error::RecvError>(value + 1)
     });
     assert!(poll_tasks());
     assert_eq!(s.get(), 1);
@@ -45,6 +45,18 @@ fn task_resumes_across_awaits() -> TestResult {
     assert!(poll_tasks());
     assert_eq!(s.get(), 5);
     assert!(task.is_finished());
+    let result = signal(None);
+    spawn(async move {
+        result.set(Some(task.await));
+    });
+    driver.run_until(|| result.with(Option::is_some))?;
+    assert_eq!(
+        result
+            .try_update(Option::take)
+            .flatten()
+            .ok_or("missing task result")???,
+        6
+    );
     Ok(())
 }
 

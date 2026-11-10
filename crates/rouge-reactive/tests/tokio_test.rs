@@ -3,7 +3,7 @@
 use rouge_reactive::testing::{Driver, TestResult};
 use rouge_reactive::{Scope, TaskError, signal, spawn, spawn_on};
 use std::future::pending;
-use std::thread::{self, ThreadId};
+use std::thread;
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot::{Sender, channel};
@@ -13,7 +13,7 @@ fn tokio_io_and_completion_cross_back_to_the_ui_executor() -> TestResult {
     let driver = Driver::new();
     let runtime = tokio_runtime()?;
     let owner = thread::current().id();
-    let completed = signal(None::<(ThreadId, usize)>);
+    let completed = signal(None);
     let updates = signal(0);
     let sender = updates.sender();
     let task = spawn_on(runtime.handle().clone(), async move {
@@ -22,11 +22,18 @@ fn tokio_io_and_completion_cross_back_to_the_ui_executor() -> TestResult {
         7usize
     });
     spawn(async move {
-        let value = task.await.expect("Tokio task completed");
-        completed.set(Some((thread::current().id(), value)));
+        completed.set(Some(
+            task.await.map(|value| (thread::current().id(), value)),
+        ));
     });
-    driver.run_until(|| completed.get().is_some())?;
-    assert_eq!(completed.get(), Some((owner, 7)));
+    driver.run_until(|| completed.with(Option::is_some))?;
+    assert_eq!(
+        completed
+            .try_update(Option::take)
+            .flatten()
+            .ok_or("missing task result")??,
+        (owner, 7)
+    );
     assert_eq!(updates.get(), 4);
     Ok(())
 }
@@ -86,18 +93,6 @@ fn completion_is_published_only_on_ui_poll_and_tokio_panics_are_reported() -> Te
         failed.set(matches!(task.await, Err(TaskError::Tokio(_))));
     });
     driver.run_until(|| failed.get())?;
-    Ok(())
-}
-
-#[test]
-fn local_tasks_share_the_typed_join_api_without_changing_scope_owned_lifetimes() -> TestResult {
-    let driver = Driver::new();
-    let value = signal(0);
-    let task = spawn(async { 9 });
-    spawn(async move {
-        value.set(task.await.expect("local task result"));
-    });
-    driver.run_until(|| value.get() == 9)?;
     Ok(())
 }
 

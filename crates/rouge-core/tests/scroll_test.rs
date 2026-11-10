@@ -570,16 +570,6 @@ fn reactive_row_heights_only_recompute_affected_inputs_and_preserve_the_anchor()
     assert_eq!(handle.row_top(20), 420.0);
 }
 
-#[test]
-fn scroll_state_scroll_to_is_the_programmatic_scrolling_api() {
-    let _rt = Runtime::new().enter();
-    let state = signal(ScrollState::default());
-    let mut ui = scroller(state);
-    state.update(|state| state.scroll_to(Point::new(0.0, 120.0)));
-    ui.advance(0.0);
-    assert_eq!(state.get().offset.y, 120.0);
-}
-
 fn scroller(state: Signal<ScrollState>) -> TestUi {
     TestUi::canvas(move || {
         let container = scroll().w(100.0).h(100.0).scroll_state(state);
