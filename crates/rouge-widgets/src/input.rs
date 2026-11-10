@@ -4,6 +4,7 @@ use rouge_core::{
     show, styled, text, use_theme,
 };
 use rouge_reactive::Signal;
+use std::ops::Range;
 
 pub struct TextInput {
     root: Div,
@@ -50,6 +51,25 @@ pub fn text_area(value: Signal<String>) -> TextInput {
 }
 
 impl TextInput {
+    pub fn selection(mut self, selection: Signal<Range<usize>>) -> Self {
+        self.field = self.field.selection(selection);
+        self
+    }
+    pub fn min_rows(mut self, rows: usize) -> Self {
+        self.root = self.root.min_h(0.0);
+        self.field = self.field.min_rows(rows);
+        self
+    }
+    pub fn max_rows(mut self, rows: usize) -> Self {
+        self.root = self.root.min_h(0.0);
+        self.field = self.field.max_rows(rows);
+        self
+    }
+    pub fn submit_on_enter(mut self, submit: bool) -> Self {
+        self.field = self.field.submit_on_enter(submit);
+        self
+    }
+
     pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = Some(placeholder.into());
         self

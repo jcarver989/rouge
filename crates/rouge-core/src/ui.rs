@@ -187,7 +187,9 @@ impl Ui {
     }
 
     pub fn needs_frame(&mut self) -> bool {
-        self.tree().dirty() != Dirty::None || self.compositor.is_animating()
+        self.tree().dirty() != Dirty::None
+            || self.compositor.is_animating()
+            || self.tree.caret_animating(self.now())
     }
 
     pub fn is_animating(&mut self) -> bool {
@@ -227,6 +229,7 @@ impl Ui {
     }
 
     fn step(&mut self, now: f64) -> bool {
+        self.tree.tick_caret(now);
         self.tree();
         let mut changed = self.compositor.is_animating();
         if changed {

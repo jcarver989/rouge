@@ -9,6 +9,33 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[test]
+fn text_area_forwards_selection_row_limits_and_shift_enter_submission() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let value = signal("first".to_owned());
+    let selected = signal(0..0);
+    let submitted = signal(String::new());
+    let mut ui = builder().build(|| {
+        text_area(value)
+            .w(200.0)
+            .min_rows(1)
+            .max_rows(2)
+            .selection(selected)
+            .submit_on_enter(true)
+            .on_submit(move |text| submitted.set(text.to_owned()))
+    });
+    ui.click_at(20.0, 20.0);
+    selected.set(0..5);
+    ui.advance(0.0);
+    ui.type_text("two");
+    ui.press_with(Key::Enter, rouge_core::Modifiers::SHIFT);
+    ui.type_text("lines");
+    ui.press(Key::Enter);
+    assert_eq!(submitted.get(), "two\nlines");
+    assert_eq!(selected.get(), 9..9);
+    Ok(())
+}
+
+#[test]
 fn text_input_edits_its_signal_shows_focus_and_submits() -> TestResult {
     let _entered = Runtime::new().enter();
     let value = signal(String::new());

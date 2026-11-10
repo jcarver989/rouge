@@ -307,6 +307,7 @@ pub(crate) struct Tree {
     root: ElementId,
     size: Size,
     root_font_size: f32,
+    time: f64,
     dirty: Dirty,
     hover_path: Vec<ElementId>,
     press_path: Vec<ElementId>,
@@ -336,6 +337,7 @@ impl Tree {
             root: ElementId::default(),
             size,
             root_font_size: 16.0,
+            time: 0.0,
             dirty: Dirty::Layout,
             hover_path: Vec::new(),
             press_path: Vec::new(),
@@ -686,7 +688,13 @@ impl Tree {
         let Some(text) = element.spec.text.as_mut() else {
             return;
         };
+        let previous = text.content.clone();
         f(text);
+        if previous != text.content
+            && let Some(edit) = &mut text.edit
+        {
+            edit.clear_history();
+        }
         if dirty.needs_layout() {
             text.layout = None;
             if let Some(edit) = &mut text.edit {
@@ -1088,6 +1096,15 @@ impl Tree {
             self.set_interaction(id, Interaction::FocusVisible, false);
         }
         if let Some(id) = target {
+            if let Some(edit) = self.elements[id]
+                .spec
+                .text
+                .as_mut()
+                .and_then(|text| text.edit.as_mut())
+            {
+                edit.activity = self.time;
+                edit.caret_visible = true;
+            }
             self.set_interaction(id, Interaction::Focus, true);
             self.set_interaction(id, Interaction::FocusVisible, visible);
         }
@@ -1566,6 +1583,14 @@ impl Tree {
             text.content_size = Size::new(content_width.max(0.0), content_height.max(0.0));
             let wrap_width = text.wrap_width;
             text.shaped(cx.text_system).break_lines(wrap_width);
+            if let (Some(edit), Some(layout)) = (&mut text.edit, &text.layout) {
+                edit.selection = edit.current(layout, &text.content);
+                edit.stale = false;
+                if let Some(signal) = edit.selection_signal.filter(|signal| signal.is_alive()) {
+                    signal.set_if_changed(edit.selection.range());
+                }
+                edit.scroll_to_caret(layout, &text.content, text.content_size);
+            }
         }
         let origin = parent_origin + Point::new(layout.location.x, layout.location.y);
         let size = Size::new(layout.size.width, layout.size.height);
@@ -2133,7 +2158,7 @@ fn paint_text(
         }
         .inflate(CARET_WIDTH),
     );
-    origin.x -= edit.scroll;
+    origin = origin - edit.scroll;
     let rect = |rect: &TextRect| {
         Rect::new(
             origin.x + rect.x,
@@ -2167,7 +2192,7 @@ fn paint_text(
             ..Quad::new(underline, text.color)
         });
     }
-    if selection.is_collapsed() {
+    if selection.is_collapsed() && edit.caret_visible {
         let caret = rect(&layout.caret(selection, CARET_WIDTH));
         out.push_quad(Quad {
             clip,
@@ -2249,7 +2274,14 @@ fn measure_text(
         AvailableSpace::MaxContent => None,
     });
     layout.break_lines(constraint);
-    let (width, height) = layout.size();
+    let (width, mut height) = layout.size();
+    if let Some(edit) = &text.edit {
+        let row = text.style.size * text.style.line_height;
+        height = height.clamp(
+            row * edit.min_rows as f32,
+            row * edit.max_rows.max(edit.min_rows) as f32,
+        );
+    }
     Extent {
         width: known.width.unwrap_or(width.ceil()),
         height: known.height.unwrap_or(height.ceil()),

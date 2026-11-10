@@ -46,7 +46,10 @@ impl Menu {
             "Edit",
             vec![
                 action("Undo", EditAction::Undo, Key::character("z")),
-                MenuItem::action("Redo", EditAction::Redo),
+                MenuItem::action("Redo", EditAction::Redo).shortcut(Chord::new(
+                    Key::character("z"),
+                    Modifiers::COMMAND.with(Modifiers::SHIFT),
+                )),
                 MenuItem::Separator,
                 action("Cut", EditAction::Cut, Key::character("x")),
                 action("Copy", EditAction::Copy, Key::character("c")),

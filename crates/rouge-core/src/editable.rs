@@ -7,11 +7,12 @@ use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Text, View, send, text};
 use crate::window::EditAction;
 use crate::{Styled, styled};
-use rouge_reactive::Signal;
+use rouge_reactive::{Signal, effect};
 use rouge_render::Color;
 use rouge_text::Movement;
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
 
 pub struct Editable {
@@ -19,6 +20,7 @@ pub struct Editable {
     value: Signal<String>,
     state: EditState,
     on_submit: Option<TextHandler>,
+    submit_on_enter: bool,
 }
 
 pub fn editable(value: Signal<String>) -> Editable {
@@ -27,10 +29,36 @@ pub fn editable(value: Signal<String>) -> Editable {
         value,
         state: EditState::default(),
         on_submit: None,
+        submit_on_enter: false,
     }
 }
 
 impl Editable {
+    pub fn test_id(mut self, name: impl Into<String>) -> Self {
+        self.text.0 = self.text.0.test_id(name);
+        self
+    }
+    pub fn autofocus(mut self) -> Self {
+        self.text.0 = self.text.0.autofocus();
+        self
+    }
+    pub fn selection(mut self, selection: Signal<Range<usize>>) -> Self {
+        self.state.selection_signal = Some(selection);
+        self
+    }
+    pub fn min_rows(mut self, rows: usize) -> Self {
+        self.state.min_rows = rows.max(1);
+        self
+    }
+    pub fn max_rows(mut self, rows: usize) -> Self {
+        self.state.max_rows = rows.max(1);
+        self
+    }
+    pub fn submit_on_enter(mut self, submit: bool) -> Self {
+        self.submit_on_enter = submit;
+        self
+    }
+
     pub fn multiline(mut self) -> Self {
         self.state.multiline = true;
         self
@@ -99,6 +127,9 @@ fn key_op(event: &KeyEvent, multiline: bool) -> Option<EditOp> {
             "c" => EditOp::Copy,
             "x" => EditOp::Cut,
             "v" => EditOp::Paste,
+            "z" if modifiers.shift => EditOp::Redo,
+            "z" => EditOp::Undo,
+            "y" => EditOp::Redo,
             _ => return None,
         },
         Key::ArrowLeft => horizontal(Movement::WordLeft, Movement::LineStart, Movement::Left),
@@ -134,8 +165,10 @@ impl View for Editable {
             value,
             mut state,
             on_submit,
+            submit_on_enter,
         } = self;
         let multiline = state.multiline;
+        let selection = state.selection_signal;
         let target = Rc::new(Cell::new(None));
         let (element, patches) = (target.clone(), cx.patches.clone());
         let edit: Rc<dyn Fn(EditOp)> = Rc::new(move |op| {
@@ -164,13 +197,22 @@ impl View for Editable {
                     EditAction::Cut => EditOp::Cut,
                     EditAction::Paste => EditOp::Paste,
                     EditAction::SelectAll => EditOp::SelectAll,
-                    EditAction::Undo | EditAction::Redo => return,
+                    EditAction::Undo => EditOp::Undo,
+                    EditAction::Redo => EditOp::Redo,
                 };
                 actions(op);
             })
             .cursor(Cursor::Text)
             .on_key_down(move |event| {
-                if let Some(op) = key_op(event, multiline) {
+                if event.key == Key::Enter
+                    && !event.modifiers.shift
+                    && (submit_on_enter || !multiline)
+                {
+                    if let Some(on_submit) = &on_submit {
+                        on_submit(&value.get_untracked());
+                        event.stop_propagation();
+                    }
+                } else if let Some(op) = key_op(event, multiline) {
                     keys(op);
                     event.stop_propagation();
                 } else if let (Key::Enter, Some(on_submit)) = (&event.key, &on_submit) {
@@ -205,6 +247,15 @@ impl View for Editable {
             .on_pointer_up(move |_| released.set(false))
             .build(cx);
         target.set(Some(id));
+        if let Some(selection) = selection {
+            let patches = cx.patches.clone();
+            effect(move || {
+                let range = selection.get();
+                send(&patches, move |cx| {
+                    cx.tree.edit(id, EditOp::Select(range), cx.text);
+                });
+            });
+        }
         id
     }
 }
