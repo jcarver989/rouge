@@ -1,9 +1,10 @@
 use parley::fontique::Blob;
 use parley::{
-    Affinity, Alignment, AlignmentOptions, BoundingBox, Cursor, FontContext, FontData, FontFamily,
-    FontStyle, FontWeight, Layout, LayoutContext, LineHeight, PositionedLayoutItem, Selection,
-    StyleProperty,
+    Affinity, Alignment, AlignmentOptions, BoundingBox, Cluster, Cursor, FontContext, FontData,
+    FontFamily, FontStyle, FontWeight, Layout, LayoutContext, LineHeight, PositionedLayoutItem,
+    Selection, StyleProperty,
 };
+use rouge_render::Color;
 use std::borrow::Cow;
 use std::ops::Range;
 use swash::FontRef;
@@ -12,6 +13,44 @@ use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::{Angle, Format, Transform, Vector};
 
 pub const SUBPIXEL_BUCKETS: u8 = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Underline {
+    pub thickness: f32,
+    pub color: Color,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpanStyle {
+    pub color: Option<Color>,
+    pub background: Option<Color>,
+    pub weight: Option<f32>,
+    pub italic: Option<bool>,
+    pub underline: Option<Underline>,
+    pub strikethrough: Option<bool>,
+    pub family: Option<Cow<'static, str>>,
+}
+
+impl SpanStyle {
+    fn overlay(&mut self, other: &Self) {
+        macro_rules! fields {
+            ($($field:ident),*) => {$(
+                if other.$field.is_some() {
+                    self.$field.clone_from(&other.$field);
+                }
+            )*};
+        }
+        fields!(
+            color,
+            background,
+            weight,
+            italic,
+            underline,
+            strikethrough,
+            family
+        );
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
@@ -22,6 +61,7 @@ pub struct TextStyle {
     pub line_height: f32,
     pub align: TextAlign,
     pub wrap: bool,
+    pub spans: Vec<(Range<usize>, SpanStyle)>,
 }
 
 impl Default for TextStyle {
@@ -34,6 +74,7 @@ impl Default for TextStyle {
             line_height: 1.4,
             align: TextAlign::Start,
             wrap: true,
+            spans: Vec::new(),
         }
     }
 }
@@ -63,6 +104,7 @@ pub struct PositionedGlyph<'a> {
     pub y: f32,
     pub font: &'a FontData,
     pub font_size: f32,
+    pub style: &'a SpanStyle,
     coords: &'a [i16],
     embolden: bool,
     skew: Option<f32>,
@@ -165,7 +207,7 @@ impl From<BoundingBox> for TextRect {
 }
 
 pub struct TextLayout {
-    layout: Layout<()>,
+    layout: Layout<SpanStyle>,
     align: TextAlign,
     wrap: bool,
     len: usize,
@@ -174,6 +216,50 @@ pub struct TextLayout {
 }
 
 impl TextLayout {
+    pub fn index_at(&self, x: f32, y: f32) -> Option<usize> {
+        Cluster::from_point_exact(&self.layout, x, y).map(|(cluster, _)| cluster.text_range().start)
+    }
+
+    pub fn for_each_rect(&self, foreground: bool, mut f: impl FnMut(TextRect, Option<Color>)) {
+        for line in self.layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(run) = item else {
+                    continue;
+                };
+                let style = &run.style().brush;
+                let metrics = line.metrics();
+                let rect = |y, height| TextRect {
+                    x: run.offset(),
+                    y,
+                    width: run.advance(),
+                    height,
+                };
+                if foreground {
+                    if let Some(underline) = style.underline {
+                        f(
+                            rect(run.baseline() + 1.0, underline.thickness),
+                            Some(underline.color),
+                        );
+                    }
+                    if style.strikethrough == Some(true) {
+                        f(
+                            rect(run.baseline() - run.run().font_size() * 0.3, 1.0),
+                            style.color,
+                        );
+                    }
+                } else if let Some(color) = style.background {
+                    f(
+                        rect(
+                            metrics.block_min_coord,
+                            metrics.block_max_coord - metrics.block_min_coord,
+                        ),
+                        Some(color),
+                    );
+                }
+            }
+        }
+    }
+
     fn cursor(&self, index: usize) -> Cursor {
         Cursor::from_byte_index(&self.layout, index.min(self.len), Affinity::Downstream)
     }
@@ -298,6 +384,7 @@ impl TextLayout {
                         y: glyph.y,
                         font: run.font(),
                         font_size: run.font_size(),
+                        style: &glyph_run.style().brush,
                         coords: &coords,
                         embolden: synthesis.embolden(),
                         skew: synthesis.skew(),
@@ -311,7 +398,7 @@ impl TextLayout {
 #[derive(Default)]
 pub struct TextSystem {
     fonts: FontContext,
-    layouts: LayoutContext<()>,
+    layouts: LayoutContext<SpanStyle>,
     scaler: ScaleContext,
 }
 
@@ -341,6 +428,47 @@ impl TextSystem {
         builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
             style.line_height,
         )));
+        let mut boundaries = vec![0, text.len()];
+        for (range, _) in &style.spans {
+            if range.start < range.end && range.start < text.len() {
+                boundaries.extend([range.start, range.end.min(text.len())]);
+            }
+        }
+        boundaries.retain(|index| text.is_char_boundary(*index));
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        for pair in boundaries.windows(2) {
+            let range = pair[0]..pair[1];
+            let mut span = SpanStyle::default();
+            for (source, style) in &style.spans {
+                if source.start <= range.start && source.end >= range.end {
+                    span.overlay(style);
+                }
+            }
+            if let Some(weight) = span.weight {
+                builder.push(
+                    StyleProperty::FontWeight(FontWeight::new(weight)),
+                    range.clone(),
+                );
+            }
+            if let Some(italic) = span.italic {
+                builder.push(
+                    StyleProperty::FontStyle(if italic {
+                        FontStyle::Italic
+                    } else {
+                        FontStyle::Normal
+                    }),
+                    range.clone(),
+                );
+            }
+            if let Some(family) = &span.family {
+                builder.push(
+                    StyleProperty::FontFamily(FontFamily::from(&**family)),
+                    range.clone(),
+                );
+            }
+            builder.push(StyleProperty::Brush(span), range);
+        }
         TextLayout {
             layout: builder.build(text),
             align: style.align,

@@ -13,10 +13,11 @@ use rouge_render::{
     BlendMode, Color, Effect, EffectInstance, EffectSlot, Keyframes, LayerCommand, LayerProp,
     LayoutTransition, Mask, Rect, ScrollState, Timing,
 };
-use rouge_text::{TextAlign, TextStyle, TextSystem};
+use rouge_text::{SpanStyle, TextAlign, TextStyle, TextSystem};
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
 use taffy::{Overflow, Point as Axes};
 use tokio::sync::mpsc::UnboundedSender;
@@ -407,7 +408,28 @@ pub fn text<U>(content: impl IntoProp<String, U>) -> Text {
     ))
 }
 
+pub fn rich_text<T, U>(
+    content: impl IntoProp<String, T>,
+    spans: impl IntoProp<Vec<(Range<usize>, SpanStyle)>, U>,
+) -> Text {
+    text(content).spans(spans)
+}
+
 impl Text {
+    pub fn spans<U>(self, spans: impl IntoProp<Vec<(Range<usize>, SpanStyle)>, U>) -> Self {
+        self.text_prop(spans, Dirty::Layout, |text, spans| text.style.spans = spans)
+    }
+
+    pub fn on_range_hover(mut self, f: impl Fn(Option<usize>) + 'static) -> Self {
+        self.0.spec.range_hover = Some(Rc::new(f));
+        self
+    }
+
+    pub fn on_range_click(mut self, f: impl Fn(Option<usize>) + 'static) -> Self {
+        self.0.spec.range_click = Some(Rc::new(f));
+        self
+    }
+
     fn text_prop<T: 'static, U>(
         self,
         value: impl IntoProp<T, U>,

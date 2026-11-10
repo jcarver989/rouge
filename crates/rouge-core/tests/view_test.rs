@@ -1,9 +1,11 @@
 use rouge_core::testing::{
-    BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near, counter,
+    BLACK, BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
+    counter, recorder,
 };
 use rouge_core::{
     BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Div, Keyframes, LayoutTransition, Mask,
-    Point, Pose, Rect, Spring, Styled, Timing, View, div, show, text,
+    Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View, div, rich_text, show,
+    text,
 };
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_render::headless::Image;
@@ -634,6 +636,130 @@ fn effect_parameters_follow_the_element_transition() -> TestResult {
         "red spreads further as the radius grows: {partly} then {fully}"
     );
     assert!(!ui.needs_frame());
+    Ok(())
+}
+
+#[test]
+fn a_range_colors_only_its_glyphs_and_background_is_behind_them() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::canvas(|| {
+        rich_text(
+            "MMMM",
+            vec![(
+                0..2,
+                SpanStyle {
+                    color: Some(Color::RED),
+                    background: Some(Color::BLUE),
+                    ..Default::default()
+                },
+            )],
+        )
+        .text_size(32.0)
+        .font("monospace")
+    });
+    let image = ui.render()?;
+    let mut colored = 0;
+    let mut plain = 0;
+    for y in 0..44 {
+        for x in 0..80 {
+            match image.pixel(x, y) {
+                RED => {
+                    colored += 1;
+                    assert!(x < 39);
+                }
+                BLACK => {
+                    plain += 1;
+                    assert!(x >= 38);
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(colored > 100 && plain > 100);
+    assert_eq!(image.pixel(1, 1), BLUE);
+    assert_eq!(image.pixel(60, 1), WHITE);
+    Ok(())
+}
+
+#[test]
+fn rich_text_is_one_measured_leaf_and_wraps_like_text() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::canvas(|| {
+        div().w(100.0).child(rich_text(
+            "one two three four five six seven eight nine ten",
+            vec![(
+                4..20,
+                SpanStyle {
+                    weight: Some(700.0),
+                    ..Default::default()
+                },
+            )],
+        ))
+    });
+    let bounds = ui.bounds(5.0, 5.0)?;
+    assert_eq!(bounds.size.width, 100.0);
+    assert!(bounds.size.height >= 60.0);
+    assert_eq!(ui.stats().elements, 3);
+    assert!(
+        ui.text_index_at(Point::new(5.0, 30.0))
+            .is_some_and(|i| i > 0)
+    );
+    Ok(())
+}
+
+#[test]
+fn range_click_and_hover_report_cluster_start_bytes_and_leave() {
+    let _rt = Runtime::new().enter();
+    let (clicks, click) = recorder();
+    let (hovers, hover) = recorder();
+    let mut ui = TestUi::canvas(|| {
+        rich_text("éx", Vec::new())
+            .text_size(32.0)
+            .font("monospace")
+            .p(10.0)
+            .on_range_click(click)
+            .on_range_hover(hover)
+    });
+    for (point, index) in [(Point::new(12.0, 25.0), 0), (Point::new(35.0, 25.0), 2)] {
+        assert_eq!(ui.text_index_at(point), Some(index));
+        ui.click(point);
+    }
+    ui.pointer_left();
+    assert_eq!(&*clicks.borrow(), &[Some(0), Some(2)]);
+    assert!(hovers.borrow().contains(&Some(2)));
+    assert_eq!(hovers.borrow().last(), Some(&None));
+    assert_eq!(ui.text_index_at(Point::new(150.0, 80.0)), None);
+}
+
+#[test]
+fn reactive_spans_update_and_decorations_paint_over_glyphs() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let spans = signal(vec![(
+        0..2,
+        SpanStyle {
+            underline: Some(Underline {
+                thickness: 3.0,
+                color: Color::BLUE,
+            }),
+            strikethrough: Some(true),
+            color: Some(Color::RED),
+            ..Default::default()
+        },
+    )]);
+    let mut ui = TestUi::canvas(|| rich_text("MM", spans).text_size(32.0));
+    let before = ui.render()?;
+    assert!((0..45).any(|y| (0..40).filter(|x| before.pixel(*x, y) == BLUE).count() > 30));
+    spans.set(vec![(
+        0..2,
+        SpanStyle {
+            color: Some(Color::BLUE),
+            ..Default::default()
+        },
+    )]);
+    ui.advance(0.0);
+    let after = ui.render()?;
+    assert!((0..45).any(|y| (0..50).any(|x| after.pixel(x, y) == BLUE)));
+    assert!(!(0..45).any(|y| (0..50).any(|x| after.pixel(x, y) == RED)));
     Ok(())
 }
 

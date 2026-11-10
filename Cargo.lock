@@ -1931,6 +1931,7 @@ name = "rouge-text"
 version = "0.1.0"
 dependencies = [
  "parley",
+ "rouge-render",
  "swash",
 ]
 

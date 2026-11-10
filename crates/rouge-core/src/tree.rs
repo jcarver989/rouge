@@ -215,6 +215,8 @@ pub(crate) struct ElementSpec {
     pub layer: Option<LayerSpec>,
     pub scroll: Option<ScrollSpec>,
     pub text: Option<TextData>,
+    pub range_hover: Option<Rc<dyn Fn(Option<usize>)>>,
+    pub range_click: Option<Rc<dyn Fn(Option<usize>)>>,
     pub style: Style,
     pub variants: [Option<Variant>; STATES],
     pub listeners: [Vec<Listener>; EVENTS],
@@ -1166,6 +1168,27 @@ impl Tree {
         steps.flatten().collect()
     }
 
+    pub(crate) fn text_index(
+        &self,
+        compositor: &Compositor,
+        id: ElementId,
+        point: Point,
+    ) -> Option<usize> {
+        let text = self.elements.get(id)?.spec.text.as_ref()?;
+        let point = self.to_local(compositor, id, point) - text.inset;
+        text.layout.as_ref()?.index_at(point.x, point.y)
+    }
+
+    pub(crate) fn range_click(&self, compositor: &Compositor, path: &[ElementId], point: Point) {
+        batch(|| {
+            for id in path.iter().rev() {
+                if let Some(callback) = &self.elements[*id].spec.range_click {
+                    callback(self.text_index(compositor, *id, point));
+                }
+            }
+        });
+    }
+
     pub(crate) fn to_local(&self, compositor: &Compositor, id: ElementId, point: Point) -> Point {
         let Some(element) = self.elements.get(id) else {
             return point;
@@ -1437,6 +1460,20 @@ impl Tree {
         let path = point
             .map(|p| self.hit_test(compositor, p))
             .unwrap_or_default();
+        batch(|| {
+            for id in self.hover_path.iter().filter(|id| !path.contains(id)) {
+                if let Some(callback) = &self.elements[*id].spec.range_hover {
+                    callback(None);
+                }
+            }
+            if let Some(point) = point {
+                for id in &path {
+                    if let Some(callback) = &self.elements[*id].spec.range_hover {
+                        callback(self.text_index(compositor, *id, point));
+                    }
+                }
+            }
+        });
         if path == self.hover_path {
             return;
         }
@@ -1924,9 +1961,21 @@ fn paint_glyphs(
     out: &mut DrawList,
     cx: &mut PaintCx<'_>,
 ) {
-    if color.a <= 0.0 {
-        return;
-    }
+    let paint_rect = |out: &mut DrawList, rect: TextRect, override_color: Option<Color>| {
+        out.push_quad(Quad {
+            clip,
+            ..Quad::new(
+                Rect::new(
+                    origin.x + rect.x,
+                    origin.y + rect.y,
+                    rect.width,
+                    rect.height,
+                ),
+                override_color.unwrap_or(color),
+            )
+        });
+    };
+    layout.for_each_rect(false, |rect, color| paint_rect(out, rect, color));
     let PaintCache {
         atlas,
         glyphs,
@@ -1935,6 +1984,10 @@ fn paint_glyphs(
     } = &mut *cx.cache;
     let scale = *scale;
     layout.for_each_glyph(|glyph| {
+        let color = glyph.style.color.unwrap_or(color);
+        if color.a <= 0.0 {
+            return;
+        }
         let (key, pen_x, pen_y) = glyph.snap((origin.x, origin.y), scale);
         let cached = *glyphs.entry(key).or_insert_with(|| {
             let image = cx.text_system.rasterize(&glyph, &key)?;
@@ -1957,6 +2010,7 @@ fn paint_glyphs(
             mask: cached.mask,
         });
     });
+    layout.for_each_rect(true, |rect, color| paint_rect(out, rect, color));
 }
 
 fn measure_text(

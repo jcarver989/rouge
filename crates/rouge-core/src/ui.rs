@@ -215,6 +215,15 @@ impl Ui {
         self.tree().stats()
     }
 
+    pub fn text_index_at(&mut self, position: Point) -> Option<usize> {
+        self.tree();
+        self.tree
+            .hit_test(&self.compositor, position)
+            .iter()
+            .rev()
+            .find_map(|id| self.tree.text_index(&self.compositor, *id, position))
+    }
+
     pub fn bounds_at(&mut self, position: Point) -> Option<Rect> {
         self.tree();
         let Ui {
@@ -473,6 +482,10 @@ impl Ui {
     }
 
     fn dispatch(&mut self, path: &[ElementId], on: On, position: Point, button: PointerButton) {
+        self.tree();
+        if on == On::Click {
+            self.tree.range_click(&self.compositor, path, position);
+        }
         let listeners = self.tree().listeners(path, on);
         let mut event = PointerEvent::new(position, button);
         event.modifiers = self.modifiers;

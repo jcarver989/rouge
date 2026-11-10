@@ -14,10 +14,10 @@ pub mod prelude {
         Cursor, Decay, Div, DragEvent, DragPhase, Ease, Edges, Fit, FocusEvent, FocusHandle, Glass,
         ImageData, ImageSource, ImeEvent, Inputs, Key, KeyEvent, Keyframes, LayoutTransition,
         Length, Mask, Modifiers, Motion, Painter, Palette, Path, Point, PointerButton,
-        PointerEvent, Pose, Rect, ScrollEvent, ScrollState, Scrollable, Size, Spring, Style,
-        Styled, Text, TextAlign, TextStyle, Theme, Tween, View, auto, canvas, div, dynamic, each,
-        editable, focus_handle, icon, image, motion, overlay, pct, provide_theme, px, scroll, show,
-        text, use_theme, virtual_list, window_size,
+        PointerEvent, Pose, Rect, ScrollEvent, ScrollState, Scrollable, Size, SpanStyle, Spring,
+        Style, Styled, Text, TextAlign, TextStyle, Theme, Tween, Underline, View, auto, canvas,
+        div, dynamic, each, editable, focus_handle, icon, image, motion, overlay, pct,
+        provide_theme, px, rich_text, scroll, show, text, use_theme, virtual_list, window_size,
     };
     pub use rouge_reactive::{
         Effect, Memo, ReadSignal, Resource, Runtime, Scope, Signal, Task, background, batch,

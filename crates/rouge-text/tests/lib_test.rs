@@ -169,6 +169,54 @@ fn points_map_to_carets_words_and_geometry() {
     );
 }
 
+#[test]
+fn overlapping_spans_compose_per_field_and_later_values_win() {
+    use rouge_render::Color;
+    use rouge_text::SpanStyle;
+
+    let style = TextStyle {
+        spans: vec![
+            (
+                0..6,
+                SpanStyle {
+                    color: Some(Color::RED),
+                    weight: Some(700.0),
+                    italic: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                2..4,
+                SpanStyle {
+                    background: Some(Color::BLUE),
+                    italic: Some(false),
+                    ..Default::default()
+                },
+            ),
+            (
+                3..5,
+                SpanStyle {
+                    color: Some(Color::GREEN),
+                    ..Default::default()
+                },
+            ),
+        ],
+        ..Default::default()
+    };
+    let mut layout = TextSystem::new().layout("abcdef", &style);
+    layout.break_lines(None);
+    let mut seen = Vec::new();
+    layout.for_each_glyph(|glyph| seen.push(glyph.style.clone()));
+    assert_eq!(seen.len(), 6);
+    assert_eq!(seen[0].color, Some(Color::RED));
+    assert_eq!(seen[2].background, Some(Color::BLUE));
+    assert_eq!(seen[2].italic, Some(false));
+    assert_eq!(seen[3].weight, Some(700.0));
+    assert_eq!(seen[3].color, Some(Color::GREEN));
+    assert_eq!(seen[3].background, Some(Color::BLUE));
+    assert_eq!(seen[4].background, None);
+}
+
 fn style(size: f32) -> TextStyle {
     TextStyle {
         size,
