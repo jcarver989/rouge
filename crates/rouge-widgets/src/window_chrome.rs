@@ -49,105 +49,33 @@ where
             .min_h(0.0)
             .child(root),
     );
-    for (edge, top, right, bottom, left, width, height) in [
-        (
-            ResizeEdge::North,
-            Some(0.0),
-            Some(4.0),
-            None,
-            Some(4.0),
-            None,
-            Some(4.0),
-        ),
-        (
-            ResizeEdge::South,
-            None,
-            Some(4.0),
-            Some(0.0),
-            Some(4.0),
-            None,
-            Some(4.0),
-        ),
-        (
-            ResizeEdge::West,
-            Some(4.0),
-            None,
-            Some(4.0),
-            Some(0.0),
-            Some(4.0),
-            None,
-        ),
-        (
-            ResizeEdge::East,
-            Some(4.0),
-            Some(0.0),
-            Some(4.0),
-            None,
-            Some(4.0),
-            None,
-        ),
-        (
-            ResizeEdge::NorthWest,
-            Some(0.0),
-            None,
-            None,
-            Some(0.0),
-            Some(4.0),
-            Some(4.0),
-        ),
-        (
-            ResizeEdge::NorthEast,
-            Some(0.0),
-            Some(0.0),
-            None,
-            None,
-            Some(4.0),
-            Some(4.0),
-        ),
-        (
-            ResizeEdge::SouthWest,
-            None,
-            None,
-            Some(0.0),
-            Some(0.0),
-            Some(4.0),
-            Some(4.0),
-        ),
-        (
-            ResizeEdge::SouthEast,
-            None,
-            Some(0.0),
-            Some(0.0),
-            None,
-            Some(4.0),
-            Some(4.0),
-        ),
+    for (edge, x, y) in [
+        (ResizeEdge::North, 0, -1),
+        (ResizeEdge::South, 0, 1),
+        (ResizeEdge::West, -1, 0),
+        (ResizeEdge::East, 1, 0),
+        (ResizeEdge::NorthWest, -1, -1),
+        (ResizeEdge::NorthEast, 1, -1),
+        (ResizeEdge::SouthWest, -1, 1),
+        (ResizeEdge::SouthEast, 1, 1),
     ] {
-        let mut zone = div()
+        let zone = div()
             .test_id(format!("window-resize-{edge:?}"))
             .absolute()
             .on_pointer_down(move |event| {
                 event.stop_propagation();
                 window.start_resize(edge);
             });
-        if let Some(value) = top {
-            zone = zone.top(value);
-        }
-        if let Some(value) = right {
-            zone = zone.right(value);
-        }
-        if let Some(value) = bottom {
-            zone = zone.bottom(value);
-        }
-        if let Some(value) = left {
-            zone = zone.left(value);
-        }
-        if let Some(value) = width {
-            zone = zone.w(value);
-        }
-        if let Some(value) = height {
-            zone = zone.h(value);
-        }
+        let zone = match x {
+            -1 => zone.left(0.0).w(4.0),
+            1 => zone.right(0.0).w(4.0),
+            _ => zone.left(4.0).right(4.0),
+        };
+        let zone = match y {
+            -1 => zone.top(0.0).h(4.0),
+            1 => zone.bottom(0.0).h(4.0),
+            _ => zone.top(4.0).bottom(4.0),
+        };
         chrome = chrome.child(zone);
     }
     chrome
