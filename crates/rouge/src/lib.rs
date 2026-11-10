@@ -31,8 +31,8 @@ pub mod prelude {
         untrack, use_context,
     };
     pub use rouge_widgets::{
-        Placement, button, checkbox, context_menu, menu_bar, menu_item, modal, popover, progress,
-        radio, scroll_view, select, separator, slider, spinner, tabs, text_area, text_input,
-        toggle, tooltip, window_chrome,
+        Placement, Side, button, checkbox, context_menu, menu_bar, menu_item, modal, popover,
+        progress, radio, resizable_panel, scroll_view, select, separator, slider, spinner, tabs,
+        text_area, text_input, toggle, tooltip, window_chrome,
     };
 }

@@ -776,6 +776,11 @@ Milestones M0 to M5 are implemented, and the S0 spike has been run on macOS. Eve
 - macOS uses muda, with a process-wide native menu, About/Hide/Hide Others/Show All/Quit, and event-loop wakeups for menu selections. **Linux's application menu is Rouge-rendered, not native**: muda's Linux integration requires GTK-owned windows and is incompatible with Rouge's winit ownership. This is the approved platform adjustment, not a GTK migration. The rendered bar preserves editor focus during pointer use; it does not yet provide keyboard menu navigation. `Div::preserve_focus()` also exposes that behavior for other auxiliary controls.
 - `platform::open_url` is available behind `rouge/open-url`. Shell behavior, focused editor menu dispatch, appearance, title commands, chrome geometry and controls are covered by headless public-API tests on x86_64 Linux. No windowed verification was performed here; the macOS-only native adapter is not compiled or executed on this Linux host.
 
+### API gap closure: interactive scrolling and panels (item 8)
+
+- `scroll_view` uses the existing shared `Signal<ScrollState>` for both axes. Vertical and horizontal thumbs appear only when their axis overflows, retain compositor-only offset tracking, and support captured drags outside the viewport. Clicking a track jumps the thumb's center to that point; offsets clamp through `ScrollState::scroll_to`. The minimum thumb shrinks to fit viewports smaller than 24px. Scrollbars preserve content focus.
+- `resizable_panel(Side::{Left, Right, Top, Bottom}, size_signal)` sizes the panel's width or height and places a 6px resize handle on its inner edge. It supports `.min_size`, `.max_size`, `.reset_size`, `.on_resize` and `.child`; double-click resets to the configured size (initial signal value by default). Bounds also clamp external signal writes. Resize notifications report user drag/reset changes, not external writes. It uses only public `Div::on_drag`, with no private widget gesture plumbing. Tests cover all four directions, bounds/reset/notifications, both scrollbar axes, track jumps and pointer capture.
+
 ### Done
 
 | Area | What exists |
@@ -843,7 +848,7 @@ Release mode, 800x600 at 2x scale on an Apple silicon laptop. CPU time unless st
 - **Text editing** is an `editable(signal)` element in the core, wrapped by the widgets, not Parley's `PlainEditor`. Not built: undo/redo, caret blink, password masking, scrolling a multi-line field to keep the caret visible (a text area grows with its content).
 - **Async**: `spawn_blocking` and `background` start one OS thread per call; there is no pool. `resource` re-fetches whenever its source closure re-runs, so wrap the source in a `memo` to dedupe. `Runtime::set_waker` may be called once. `Runtime::poll` runs until no task is ready, so a task that always wakes itself would spin it.
 - **Popovers and menus** render in the overlay root and take a full-window catcher while open, so an outside click dismisses and is swallowed. Placement is fixed (below, above, left, right); there is no flipping or collision handling. Tooltips are plain text.
-- **Scroll view** shows a vertical thumb that tracks the offset in the compositor; it cannot be dragged, and there is no horizontal thumb.
+- **Scroll view** has draggable vertical/horizontal thumbs, compositor offset tracking and track jumps; see item 8 above.
 - **Slider and tabs** are laid out by signals, so dragging a slider relayouts its own subtree each frame.
 - **taffy keeps a stale list of out-of-flow children** on a node that loses its last child while holding an absolutely positioned one. The overlay root keeps a hidden placeholder child for that reason.
 
@@ -866,7 +871,7 @@ Run on macOS (Apple M4 Pro); the code and the full findings are in `spikes/s0-su
 ### Not yet built
 
 - Compositor leftovers: clip animation, non-uniform scale, `Motion<T>` beyond `f32`, effect parameters in keyframes and bound to motions, backdrop effects inside rasterized layers, hit-test pass-through for overlays.
-- M5 leftovers: SVG documents, undo/redo and caret blink in text editing, draggable scrollbars, popover collision handling, image mips, a thread pool behind `spawn_blocking`. Typing, IME and clipboard have been exercised through `Ui` in tests but not by hand in a window.
+- M5 leftovers: SVG documents, undo/redo and caret blink in text editing, popover collision handling, image mips, a thread pool behind `spawn_blocking`. Typing, IME and clipboard have been exercised through `Ui` in tests but not by hand in a window.
 - M6: devtools, hot reload, benchmark suite in CI.
 - S0 on Linux, M7, M8: surfaces and the web view. The sampled-quad pipeline M7 needs now exists (images), but there is no `surface` element and no `rouge-webview` crate.
 - Text gaps: color glyphs (emoji), atlas eviction.

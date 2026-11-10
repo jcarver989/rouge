@@ -2,9 +2,44 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestError, TestResult, TestUi, WHITE};
-use rouge_core::{Point, ScrollState, Scrollable, Styled, div, scroll, virtual_list};
+use rouge_core::{
+    Point, PointerButton, ScrollState, Scrollable, Styled, div, scroll, virtual_list,
+};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::scroll_view;
+
+#[test]
+fn two_axis_thumbs_capture_drags_and_tracks_jump_without_cross_axis_changes() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let state = signal(ScrollState::default());
+    let mut ui = builder().build(|| {
+        scroll_view(scroll().child(div().w(400.0).h(400.0)))
+            .scroll_state(state)
+            .w(100.0)
+            .h(100.0)
+    });
+    ui.advance(0.0);
+    ui.drag_on("scroll-thumb-vertical", Point::new(95.0, 50.0))?;
+    ui.advance(0.0);
+    assert!((state.get().offset.y - 150.0).abs() < 1.0);
+    assert_eq!(state.get().offset.x, 0.0);
+    ui.drag_on("scroll-thumb-horizontal", Point::new(900.0, 180.0))?;
+    ui.advance(0.0);
+    assert_eq!(state.get().offset.x, 300.0);
+    assert!((state.get().offset.y - 150.0).abs() < 1.0);
+    ui.click(Point::new(95.0, 80.0));
+    ui.advance(0.0);
+    assert_eq!(state.get().offset.y, 270.0);
+    ui.pointer_moved(Point::new(95.0, 80.0));
+    ui.pointer_down(PointerButton::Primary);
+    ui.pointer_moved(Point::new(200.0, -300.0));
+    ui.pointer_up(PointerButton::Primary);
+    ui.advance(0.0);
+    assert_eq!(state.get().offset.y, 0.0);
+    ui.pointer_moved(Point::new(20.0, 80.0));
+    assert_eq!(state.get().offset.y, 0.0);
+    Ok(())
+}
 
 #[test]
 fn scroll_view_shows_a_thumb_that_tracks_the_offset_only_when_content_overflows() -> TestResult {
