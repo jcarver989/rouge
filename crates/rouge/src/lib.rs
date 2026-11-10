@@ -17,8 +17,8 @@ pub mod prelude {
         PointerButton, PointerEvent, Pose, Rect, ScrollEvent, ScrollState, Scrollable, Size,
         SpanStyle, Spring, Style, Styled, Text, TextAlign, TextStyle, Theme, Tween, Underline,
         View, VirtualListHandle, auto, canvas, div, dynamic, each, editable, focus_handle, icon,
-        image, motion, overlay, pct, provide_theme, px, rich_text, scroll, show, text, use_theme,
-        virtual_list, virtual_list_handle, window_size,
+        image, motion, overlay, pct, provide_theme, px, rem, rich_text, root_font_size, scroll,
+        show, text, use_theme, virtual_list, virtual_list_handle, window_size,
     };
     pub use rouge_reactive::{
         Effect, Memo, ReadSignal, Resource, Runtime, Scope, Signal, Task, background, batch,

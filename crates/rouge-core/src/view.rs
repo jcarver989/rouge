@@ -2,6 +2,7 @@ use crate::event::{
     Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, PointerEvent, ScrollEvent,
 };
 use crate::focus::FocusHandle;
+use crate::length::Length;
 use crate::motion::MotionProp;
 use crate::prop::{IntoEffect, IntoProp, Prop};
 use crate::scroll::Scrollable;
@@ -448,8 +449,11 @@ impl Text {
         self
     }
 
-    pub fn text_size<U>(self, size: impl IntoProp<f32, U>) -> Self {
-        self.text_prop(size, Dirty::Layout, |text, size| text.style.size = size)
+    pub fn text_size<U>(self, size: impl IntoProp<Length, U>) -> Self {
+        self.text_prop(size, Dirty::Layout, |text, size| {
+            text.size_length = Some(size);
+            text.style.size = size.resolve(16.0);
+        })
     }
 
     pub fn color<U>(self, color: impl IntoProp<Color, U>) -> Self {

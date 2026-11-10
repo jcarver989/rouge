@@ -27,7 +27,7 @@ pub use event::{
 };
 pub use focus::{FocusHandle, focus_handle};
 pub use image::{Fit, Image, ImageLoadError, ImageSource, decode_image, image};
-pub use length::{Length, auto, pct, px};
+pub use length::{Length, auto, pct, px, rem};
 pub use motion::{Animation, Motion, MotionProp, motion};
 pub use path::{Path, PathBuilder};
 pub use prop::{IntoEffect, IntoProp, Prop, PropFrom};
@@ -38,7 +38,7 @@ pub use scroll::{
 pub use style::{BoxShadow, Dirty, Style, Styled};
 pub use theme::{Palette, Theme, provide_theme, use_theme};
 pub use tree::{ElementId, FrameStats};
-pub use ui::{Frame, Ui, window_size};
+pub use ui::{Frame, Ui, root_font_size, window_size};
 pub use view::{AnyView, BuildCx, Div, Text, View, div, rich_text, text};
 
 pub use rouge_render::{

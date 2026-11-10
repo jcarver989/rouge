@@ -1,5 +1,6 @@
 use crate::event::{Cursor, ImeEvent, Key, KeyEvent, PointerButton};
 use crate::focus::FocusHandle;
+use crate::length::Length;
 use crate::prop::IntoProp;
 use crate::styled;
 use crate::tree::ElementId;
@@ -54,7 +55,7 @@ impl Editable {
         self
     }
 
-    pub fn text_size<U>(mut self, size: impl IntoProp<f32, U>) -> Self {
+    pub fn text_size<U>(mut self, size: impl IntoProp<Length, U>) -> Self {
         self.text = self.text.text_size(size);
         self
     }

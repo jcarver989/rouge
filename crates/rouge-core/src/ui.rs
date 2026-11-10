@@ -7,9 +7,9 @@ use crate::motion::UiContext;
 use crate::style::Dirty;
 use crate::theme::{Palette, provide_theme};
 use crate::tree::{ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
-use crate::view::{BuildCx, Patch, Patches, View};
+use crate::view::{BuildCx, Patch, Patches, View, send};
 use rouge_reactive::{
-    ReadSignal, Scope, Signal, batch, expect_context, poll_tasks, provide_context, signal,
+    ReadSignal, Scope, Signal, batch, effect, expect_context, poll_tasks, provide_context, signal,
 };
 use rouge_render::{Atlas, Compositor, Item, LayerCommand, LayerId, Point, Rect, Size};
 use rouge_text::TextSystem;
@@ -23,6 +23,13 @@ struct WindowSize(ReadSignal<Size>);
 
 pub fn window_size() -> ReadSignal<Size> {
     expect_context::<WindowSize>().0
+}
+
+#[derive(Clone, Copy)]
+struct RootFontSize(Signal<f32>);
+
+pub fn root_font_size() -> Signal<f32> {
+    expect_context::<RootFontSize>().0
 }
 
 const MAX_PASSES: usize = 8;
@@ -88,6 +95,13 @@ impl Ui {
         let size = scope.run(|| {
             let size = signal(size);
             provide_context(WindowSize(size.read_only()));
+            let root_size = signal(16.0);
+            provide_context(RootFontSize(root_size));
+            let root_patches = patches.clone();
+            effect(move || {
+                let size = root_size.get();
+                send(&root_patches, move |cx| cx.tree.set_root_font_size(size));
+            });
             provide_context(UiContext::new(patches.clone()));
             provide_theme(Palette::default());
             let mut cx = BuildCx {

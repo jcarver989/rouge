@@ -1,6 +1,7 @@
 use crate::length::Length;
 use crate::prop::{IntoProp, Prop};
 use rouge_render::{Color, Corners, Point};
+use std::collections::BTreeMap;
 use taffy::{
     AlignItems, AlignSelf, Dimension, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
     Point as Axes, Position, Rect as Sides, Size as Extent, Style as Layout,
@@ -65,6 +66,7 @@ impl BoxShadow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     pub layout: Layout,
+    pub rem_lengths: BTreeMap<&'static str, f32>,
     pub background: Option<Color>,
     pub border_color: Color,
     pub corner_radii: Corners,
@@ -78,11 +80,64 @@ impl Default for Style {
                 display: Display::Block,
                 ..Default::default()
             },
+            rem_lengths: BTreeMap::new(),
             background: None,
             border_color: Color::BLACK,
             corner_radii: Corners::ZERO,
             shadows: Vec::new(),
         }
+    }
+}
+
+impl Style {
+    fn length(&mut self, value: Length, key: &'static str) -> Length {
+        if let Length::Rem(value) = value {
+            self.rem_lengths.insert(key, value);
+        } else {
+            self.rem_lengths.remove(key);
+        }
+        value
+    }
+
+    pub(crate) fn resolved_layout(&self, root: f32) -> Layout {
+        let mut layout = self.layout.clone();
+        macro_rules! resolve {
+            ($($field:ident.$side:ident),*) => {$(
+                if let Some(value) = self.rem_lengths.get(stringify!($field.$side)) {
+                    layout.$field.$side = Length::Px(value * root).into();
+                }
+            )*};
+        }
+        resolve!(
+            size.width,
+            size.height,
+            min_size.width,
+            min_size.height,
+            max_size.width,
+            max_size.height,
+            gap.width,
+            gap.height,
+            padding.top,
+            padding.right,
+            padding.bottom,
+            padding.left,
+            margin.top,
+            margin.right,
+            margin.bottom,
+            margin.left,
+            inset.top,
+            inset.right,
+            inset.bottom,
+            inset.left,
+            border.top,
+            border.right,
+            border.bottom,
+            border.left
+        );
+        if let Some(value) = self.rem_lengths.get("flex_basis") {
+            layout.flex_basis = Length::Px(value * root).into();
+        }
+        layout
     }
 }
 
@@ -98,12 +153,17 @@ macro_rules! sides {
     ($($field:ident: $all:ident $top:ident $right:ident $bottom:ident $left:ident;)*) => {$(
         props! {
             $all(Length) [Layout] |s, v| {
-                s.layout.$field = Sides { left: v.into(), right: v.into(), top: v.into(), bottom: v.into() };
+                s.layout.$field = Sides {
+                    left: s.length(v, concat!(stringify!($field), ".left")).into(),
+                    right: s.length(v, concat!(stringify!($field), ".right")).into(),
+                    top: s.length(v, concat!(stringify!($field), ".top")).into(),
+                    bottom: s.length(v, concat!(stringify!($field), ".bottom")).into(),
+                };
             };
-            $top(Length) [Layout] |s, v| s.layout.$field.top = v.into();
-            $right(Length) [Layout] |s, v| s.layout.$field.right = v.into();
-            $bottom(Length) [Layout] |s, v| s.layout.$field.bottom = v.into();
-            $left(Length) [Layout] |s, v| s.layout.$field.left = v.into();
+            $top(Length) [Layout] |s, v| s.layout.$field.top = s.length(v, concat!(stringify!($field), ".top")).into();
+            $right(Length) [Layout] |s, v| s.layout.$field.right = s.length(v, concat!(stringify!($field), ".right")).into();
+            $bottom(Length) [Layout] |s, v| s.layout.$field.bottom = s.length(v, concat!(stringify!($field), ".bottom")).into();
+            $left(Length) [Layout] |s, v| s.layout.$field.left = s.length(v, concat!(stringify!($field), ".left")).into();
         }
     )*};
 }
@@ -162,6 +222,7 @@ pub trait Styled: Sized {
         col |s| s.layout.flex_direction = FlexDirection::Column;
         flex_wrap |s| s.layout.flex_wrap = FlexWrap::Wrap;
         flex_1 |s| {
+            s.rem_lengths.remove("flex_basis");
             s.layout.flex_grow = 1.0;
             s.layout.flex_shrink = 1.0;
             s.layout.flex_basis = Dimension::percent(0.0);
@@ -187,45 +248,53 @@ pub trait Styled: Sized {
         absolute |s| s.layout.position = Position::Absolute;
         relative |s| s.layout.position = Position::Relative;
         overflow_hidden |s| s.layout.overflow = Axes { x: Overflow::Hidden, y: Overflow::Hidden };
-        w_full |s| s.layout.size.width = Dimension::percent(1.0);
-        h_full |s| s.layout.size.height = Dimension::percent(1.0);
+        w_full |s| {
+            s.rem_lengths.remove("size.width");
+            s.layout.size.width = Dimension::percent(1.0);
+        };
+        h_full |s| {
+            s.rem_lengths.remove("size.height");
+            s.layout.size.height = Dimension::percent(1.0);
+        };
         size_full |s| {
+            s.rem_lengths.remove("size.width");
+            s.rem_lengths.remove("size.height");
             s.layout.size = Extent { width: Dimension::percent(1.0), height: Dimension::percent(1.0) };
         };
     }
 
     props! {
-        w(Length) [Layout] |s, v| s.layout.size.width = v.into();
-        h(Length) [Layout] |s, v| s.layout.size.height = v.into();
-        size(Length) [Layout] |s, v| s.layout.size = Extent { width: v.into(), height: v.into() };
-        min_w(Length) [Layout] |s, v| s.layout.min_size.width = v.into();
-        min_h(Length) [Layout] |s, v| s.layout.min_size.height = v.into();
-        max_w(Length) [Layout] |s, v| s.layout.max_size.width = v.into();
-        max_h(Length) [Layout] |s, v| s.layout.max_size.height = v.into();
+        w(Length) [Layout] |s, v| s.layout.size.width = s.length(v, "size.width").into();
+        h(Length) [Layout] |s, v| s.layout.size.height = s.length(v, "size.height").into();
+        size(Length) [Layout] |s, v| s.layout.size = Extent { width: s.length(v, "size.width").into(), height: s.length(v, "size.height").into() };
+        min_w(Length) [Layout] |s, v| s.layout.min_size.width = s.length(v, "min_size.width").into();
+        min_h(Length) [Layout] |s, v| s.layout.min_size.height = s.length(v, "min_size.height").into();
+        max_w(Length) [Layout] |s, v| s.layout.max_size.width = s.length(v, "max_size.width").into();
+        max_h(Length) [Layout] |s, v| s.layout.max_size.height = s.length(v, "max_size.height").into();
         aspect_ratio(f32) [Layout] |s, v| s.layout.aspect_ratio = Some(v);
 
         flex_grow(f32) [Layout] |s, v| s.layout.flex_grow = v;
         flex_shrink(f32) [Layout] |s, v| s.layout.flex_shrink = v;
-        flex_basis(Length) [Layout] |s, v| s.layout.flex_basis = v.into();
-        gap(Length) [Layout] |s, v| s.layout.gap = Extent { width: v.into(), height: v.into() };
-        gap_x(Length) [Layout] |s, v| s.layout.gap.width = v.into();
-        gap_y(Length) [Layout] |s, v| s.layout.gap.height = v.into();
+        flex_basis(Length) [Layout] |s, v| s.layout.flex_basis = s.length(v, "flex_basis").into();
+        gap(Length) [Layout] |s, v| s.layout.gap = Extent { width: s.length(v, "gap.width").into(), height: s.length(v, "gap.height").into() };
+        gap_x(Length) [Layout] |s, v| s.layout.gap.width = s.length(v, "gap.width").into();
+        gap_y(Length) [Layout] |s, v| s.layout.gap.height = s.length(v, "gap.height").into();
 
         px(Length) [Layout] |s, v| {
-            s.layout.padding.left = v.into();
-            s.layout.padding.right = v.into();
+            s.layout.padding.left = s.length(v, "padding.left").into();
+            s.layout.padding.right = s.length(v, "padding.right").into();
         };
         py(Length) [Layout] |s, v| {
-            s.layout.padding.top = v.into();
-            s.layout.padding.bottom = v.into();
+            s.layout.padding.top = s.length(v, "padding.top").into();
+            s.layout.padding.bottom = s.length(v, "padding.bottom").into();
         };
         mx(Length) [Layout] |s, v| {
-            s.layout.margin.left = v.into();
-            s.layout.margin.right = v.into();
+            s.layout.margin.left = s.length(v, "margin.left").into();
+            s.layout.margin.right = s.length(v, "margin.right").into();
         };
         my(Length) [Layout] |s, v| {
-            s.layout.margin.top = v.into();
-            s.layout.margin.bottom = v.into();
+            s.layout.margin.top = s.length(v, "margin.top").into();
+            s.layout.margin.bottom = s.length(v, "margin.bottom").into();
         };
 
         border_color(Color) [Paint] |s, v| s.border_color = v;

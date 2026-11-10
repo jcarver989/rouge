@@ -793,6 +793,7 @@ Release mode, 800x600 at 2x scale on an Apple silicon laptop. CPU time unless st
 
 ### Differences from this document
 
+- **Rem lengths**: `Length::Rem` and `rem` work for every Length-taking layout property and text size. A per-window `root_font_size() -> Signal<f32>` defaults to 16; root-size changes re-resolve retained rem declarations and invalidate their layout. Plain numeric text sizes remain pixels. Text-size fractions resolve against the root size; `auto()` uses the 14px text default.
 - **Rich text**: `rich_text(content, spans)` returns the existing `Text` leaf, also exposing `.spans(prop)`. `TextStyle::spans` is shaped through the same Parley layout as plain text. Overlapping spans compose per field, with later values winning; backgrounds paint before glyphs and underline/strike rectangles after them. `SpanStyle` uses optional color, background, weight, italic, underline (`Underline { thickness, color }`), strikethrough and family. Range hover/click callbacks and `Ui::text_index_at` report the UTF-8 byte at the start of the grapheme under the pointer, not a nearest insertion caret; outside text returns `None`. Ancestor text inheritance is pending the inherited-style item below.
 
 - **Flush timing**: see section 5.3, which was updated to match.

@@ -4,6 +4,7 @@ use crate::event::{
     Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, PointerEvent, ScrollEvent,
 };
 use crate::image::{Fit, ImageSpec};
+use crate::length::Length;
 use crate::path::Path;
 use crate::style::{Dirty, Style};
 use edit::{CARET_WIDTH, EditState};
@@ -112,6 +113,7 @@ pub(crate) struct TextData {
     pub content: String,
     pub style: TextStyle,
     pub color: Color,
+    pub size_length: Option<Length>,
     pub edit: Option<EditState>,
     layout: Option<TextLayout>,
     inset: Point,
@@ -125,6 +127,7 @@ impl Default for TextData {
             content: String::new(),
             style: TextStyle::default(),
             color: Color::BLACK,
+            size_length: None,
             edit: None,
             layout: None,
             inset: Point::ZERO,
@@ -298,6 +301,7 @@ pub(crate) struct Tree {
     taffy: TaffyTree<ElementId>,
     root: ElementId,
     size: Size,
+    root_font_size: f32,
     dirty: Dirty,
     hover_path: Vec<ElementId>,
     press_path: Vec<ElementId>,
@@ -325,6 +329,7 @@ impl Tree {
             taffy: TaffyTree::new(),
             root: ElementId::default(),
             size,
+            root_font_size: 16.0,
             dirty: Dirty::Layout,
             hover_path: Vec::new(),
             press_path: Vec::new(),
@@ -489,6 +494,34 @@ impl Tree {
         }
     }
 
+    pub(crate) fn set_root_font_size(&mut self, size: f32) {
+        if self.root_font_size == size {
+            return;
+        }
+        self.root_font_size = size;
+        let ids: Vec<_> = self.elements.keys().collect();
+        for id in ids {
+            let element = &self.elements[id];
+            if !element.effective_style().rem_lengths.is_empty() {
+                self.taffy
+                    .set_style(
+                        element.taffy,
+                        element.effective_style().resolved_layout(size),
+                    )
+                    .expect("taffy set style");
+                self.mark_element(id, Dirty::Layout);
+            }
+            if self.elements[id]
+                .spec
+                .text
+                .as_ref()
+                .is_some_and(|text| matches!(text.size_length, Some(Length::Rem(_))))
+            {
+                self.update_text(id, Dirty::Layout, |_| {});
+            }
+        }
+    }
+
     pub(crate) fn create_motion(&mut self, id: MotionId, value: Signal<f32>) {
         if !value.is_alive() {
             return;
@@ -560,9 +593,14 @@ impl Tree {
     }
 
     pub(crate) fn create_element(&mut self, mut spec: ElementSpec) -> ElementId {
+        if let Some(text) = &mut spec.text
+            && let Some(size) = text.size_length
+        {
+            text.style.size = size.resolve(self.root_font_size);
+        }
         let taffy = self
             .taffy
-            .new_leaf(spec.style.layout.clone())
+            .new_leaf(spec.style.resolved_layout(self.root_font_size))
             .expect("taffy node");
         let is_text = spec.text.is_some() || spec.image.is_some();
         let own = spec
@@ -654,6 +692,9 @@ impl Tree {
             return;
         };
         f(text);
+        if let Some(size) = text.size_length {
+            text.style.size = size.resolve(self.root_font_size);
+        }
         if dirty.needs_layout() {
             text.layout = None;
             if let Some(edit) = &mut text.edit {
@@ -726,7 +767,9 @@ impl Tree {
             element.resolved = element.resolve();
         }
         if dirty.needs_layout() {
-            let layout = element.effective_style().layout.clone();
+            let layout = element
+                .effective_style()
+                .resolved_layout(self.root_font_size);
             self.taffy
                 .set_style(element.taffy, layout)
                 .expect("taffy set style");
@@ -1230,7 +1273,7 @@ impl Tree {
             || new.background.is_some() != old.background.is_some();
         let dirty = if new.layout != old.layout {
             self.taffy
-                .set_style(element.taffy, new.layout.clone())
+                .set_style(element.taffy, new.resolved_layout(self.root_font_size))
                 .expect("taffy set style");
             Dirty::Layout
         } else if repainted || element.layer(Slot::Own).is_none() {
