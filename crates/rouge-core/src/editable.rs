@@ -121,17 +121,10 @@ fn key_op(event: &KeyEvent, multiline: bool) -> Option<EditOp> {
         };
         EditOp::Move(movement, extend)
     };
+    if let Some(action) = EditAction::from_key(event) {
+        return Some(action.operation());
+    }
     Some(match &event.key {
-        Key::Character(key) if modifiers.command() => match key.as_str() {
-            "a" => EditOp::SelectAll,
-            "c" => EditOp::Copy,
-            "x" => EditOp::Cut,
-            "v" => EditOp::Paste,
-            "z" if modifiers.shift => EditOp::Redo,
-            "z" => EditOp::Undo,
-            "y" => EditOp::Redo,
-            _ => return None,
-        },
         Key::ArrowLeft => horizontal(Movement::WordLeft, Movement::LineStart, Movement::Left),
         Key::ArrowRight => horizontal(Movement::WordRight, Movement::LineEnd, Movement::Right),
         Key::ArrowUp if line => EditOp::Move(Movement::Start, extend),
@@ -193,15 +186,7 @@ impl View for Editable {
         let id = div
             .focusable()
             .on_action(move |action: &EditAction| {
-                let op = match action {
-                    EditAction::Copy => EditOp::Copy,
-                    EditAction::Cut => EditOp::Cut,
-                    EditAction::Paste => EditOp::Paste,
-                    EditAction::SelectAll => EditOp::SelectAll,
-                    EditAction::Undo => EditOp::Undo,
-                    EditAction::Redo => EditOp::Redo,
-                };
-                actions(op);
+                actions(action.operation());
             })
             .cursor(Cursor::Text)
             .on_key_down(move |event| {

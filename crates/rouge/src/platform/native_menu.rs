@@ -71,6 +71,9 @@ fn build_menu(menu: Menu, actions: &mut HashMap<MenuId, MenuItem>) -> Result<Sub
             MenuItem::Submenu(menu) => native.append(&build_menu(menu.clone(), actions)?)?,
             MenuItem::Action {
                 title, shortcut, ..
+            }
+            | MenuItem::Callback {
+                title, shortcut, ..
             } => {
                 let action = NativeItem::new(title, true, None);
                 action.set_key_accelerator(shortcut.as_ref().and_then(accelerator))?;

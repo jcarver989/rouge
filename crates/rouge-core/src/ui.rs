@@ -7,7 +7,7 @@ use crate::keymap::Keymap;
 use crate::motion::UiContext;
 use crate::style::Dirty;
 use crate::theme::{Palette, provide_theme};
-use crate::tree::{ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
+use crate::tree::{ActionHandler, ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
 use crate::view::{BuildCx, Patch, Patches, View, send};
 use crate::window::{Appearance, WindowCommand, WindowHandle};
 use rouge_reactive::{
@@ -364,10 +364,17 @@ impl Ui {
     pub(crate) fn dispatch_action_ref(&mut self, action: &dyn Any) -> bool {
         let path = self.tree().focus_path();
         let handlers = self.tree.action_handlers(&path, action.type_id());
-        self.scope
-            .run(|| batch(|| handlers.iter().for_each(|handler| handler(action))));
-        self.tree();
+        self.invoke_action(action, &handlers)
+    }
+
+    fn invoke_action(&mut self, action: &dyn Any, handlers: &[ActionHandler]) -> bool {
+        self.invoke(|| handlers.iter().for_each(|handler| handler(action)));
         !handlers.is_empty()
+    }
+
+    pub(crate) fn invoke(&mut self, f: impl FnOnce()) {
+        self.scope.run(|| batch(f));
+        self.tree();
     }
 
     pub fn key_down(&mut self, event: KeyEvent) -> bool {
@@ -376,10 +383,7 @@ impl Ui {
         }
         let path = self.tree().focus_path();
         if let Some((action, handlers)) = self.tree.binding(&path, &event) {
-            self.scope
-                .run(|| batch(|| handlers.iter().for_each(|handler| handler(&*action))));
-            self.tree();
-            return true;
+            return self.invoke_action(&*action, &handlers);
         }
         let Modifiers {
             shift,

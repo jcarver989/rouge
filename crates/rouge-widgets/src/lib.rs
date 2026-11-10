@@ -16,7 +16,7 @@ mod window_chrome;
 pub use button::{Button, button};
 pub use choice::{Choice, checkbox, radio, toggle};
 pub use input::{TextInput, text_area, text_input};
-pub use menu::{ContextMenu, MenuItem, Select, context_menu, menu_item, select};
+pub use menu::{ContextMenu, MenuFocus, MenuItem, Select, context_menu, menu_item, select};
 pub use menu_bar::menu_bar;
 pub use modal::{Modal, modal};
 pub use popover::{Placement, Popover, Tooltip, popover, tooltip};

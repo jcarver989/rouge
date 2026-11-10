@@ -2,9 +2,12 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::TestResult;
-use rouge_core::{Key, Point, PointerButton, Styled, div};
+use rouge_core::{
+    Chord, EditAction, Key, Menu, MenuItem, Modifiers, Point, PointerButton, Styled, WindowCommand,
+    div, editable, focus_handle,
+};
 use rouge_reactive::{Runtime, signal};
-use rouge_widgets::{context_menu, menu_item, select};
+use rouge_widgets::{MenuFocus, context_menu, menu_item, select};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -87,5 +90,107 @@ fn context_menu_opens_at_the_pointer_on_secondary_click() -> TestResult {
     ui.run(0.6);
     assert_eq!(*chosen.borrow(), ["paste"]);
     assert_eq!(ui.stats().elements, closed);
+    Ok(())
+}
+
+#[test]
+fn nested_context_menus_are_keyboard_reachable_and_close_the_entire_chain() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let chosen = signal(0);
+    let mut ui = builder().size(600.0, 400.0).build(move || {
+        context_menu(
+            div().size_full(),
+            [
+                MenuItem::Separator,
+                MenuItem::Submenu(Menu::new(
+                    "More",
+                    vec![menu_item("Nested", move || chosen.set(2))],
+                )),
+                menu_item("Last", move || chosen.set(3)),
+            ],
+        )
+        .size_full()
+    });
+    let closed = ui.stats().elements;
+    ui.pointer_moved(Point::new(20.0, 20.0));
+    ui.pointer_down(PointerButton::Secondary);
+    ui.pointer_up(PointerButton::Secondary);
+    ui.run(0.2);
+    ui.press(Key::ArrowUp);
+    ui.press(Key::Enter);
+    ui.run(0.2);
+    assert_eq!(chosen.get(), 3, "up wraps past the submenu to the last row");
+    assert_eq!(ui.stats().elements, closed);
+
+    ui.pointer_down(PointerButton::Secondary);
+    ui.pointer_up(PointerButton::Secondary);
+    ui.run(0.2);
+    ui.press(Key::ArrowRight);
+    ui.run(0.2);
+    assert!(ui.bounds_of("menu-item-Nested").is_some());
+    ui.press(Key::ArrowLeft);
+    ui.run(0.2);
+    assert!(ui.bounds_of("menu-item-Nested").is_none());
+    ui.press(Key::Enter);
+    ui.run(0.2);
+    assert!(
+        ui.bounds_of("menu-item-Nested").is_some(),
+        "focus returns to the submenu trigger"
+    );
+    ui.press(Key::Escape);
+    ui.run(0.2);
+    assert!(ui.bounds_of("menu-item-Nested").is_none());
+    assert!(ui.bounds_of("menu-More").is_some());
+    ui.press(Key::ArrowRight);
+    ui.run(0.2);
+    ui.press(Key::Enter);
+    ui.run(0.2);
+    assert_eq!(chosen.get(), 2);
+    assert_eq!(ui.stats().elements, closed, "a leaf closes every ancestor");
+    Ok(())
+}
+
+#[test]
+fn context_menu_focus_policy_preserves_editor_for_nested_actions_and_callbacks() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let value = signal("original".to_owned());
+    let called = signal(false);
+    let (mut ui, focus) = builder().size(600.0, 400.0).build_with(|| {
+        let focus = focus_handle();
+        let items = [MenuItem::Submenu(Menu::new(
+            "Commands",
+            vec![
+                MenuItem::action("Select All", EditAction::SelectAll)
+                    .shortcut(Chord::new(Key::character("a"), Modifiers::COMMAND)),
+                menu_item("Callback", move || called.set(true)),
+            ],
+        ))];
+        (
+            context_menu(editable(value).track_focus(focus).w_full(), items)
+                .focus_policy(MenuFocus::Preserve)
+                .size_full(),
+            focus,
+        )
+    });
+    ui.click_at(20.0, 10.0);
+    assert!(focus.is_focused());
+    for title in ["Callback", "Select All"] {
+        ui.pointer_down(PointerButton::Secondary);
+        ui.pointer_up(PointerButton::Secondary);
+        ui.run(0.2);
+        ui.click_on("menu-Commands")?;
+        ui.run(0.2);
+        ui.click_on(&format!("menu-item-{title}"))?;
+        assert!(focus.is_focused());
+        for command in ui.take_window_commands() {
+            if let WindowCommand::Menu(item) = command {
+                assert!(item.dispatch(&mut ui));
+            }
+        }
+        ui.run(0.2);
+    }
+    assert!(called.get());
+    ui.type_text("changed");
+    assert_eq!(value.get(), "changed");
     Ok(())
 }

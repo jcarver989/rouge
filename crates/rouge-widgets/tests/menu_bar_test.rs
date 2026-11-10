@@ -2,9 +2,9 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::TestResult;
-use rouge_core::{Menu, Styled, WindowCommand, div, editable, focus_handle};
+use rouge_core::{Menu, MenuItem, Styled, WindowCommand, div, editable, focus_handle};
 use rouge_reactive::{Runtime, signal};
-use rouge_widgets::menu_bar;
+use rouge_widgets::{menu_bar, menu_item};
 
 #[test]
 fn application_menu_preserves_editor_focus_and_dispatches_the_shared_action() -> TestResult {
@@ -35,5 +35,30 @@ fn application_menu_preserves_editor_focus_and_dispatches_the_shared_action() ->
     }
     ui.type_text("changed");
     assert_eq!(value.get(), "changed");
+    Ok(())
+}
+
+#[test]
+fn application_submenus_share_callbacks_and_close_the_parent() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let called = signal(false);
+    let mut ui = builder().size(600.0, 400.0).build(|| {
+        menu_bar(vec![Menu::new(
+            "File",
+            vec![MenuItem::Submenu(Menu::new(
+                "More",
+                vec![menu_item("Run", move || called.set(true))],
+            ))],
+        )])
+    });
+    let closed = ui.stats().elements;
+    ui.click_on("menu-File")?;
+    ui.run(0.2);
+    ui.click_on("menu-More")?;
+    ui.run(0.2);
+    ui.click_on("menu-item-Run")?;
+    ui.run(0.2);
+    assert!(called.get());
+    assert_eq!(ui.stats().elements, closed);
     Ok(())
 }

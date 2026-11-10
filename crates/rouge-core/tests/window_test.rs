@@ -38,3 +38,22 @@ fn shared_menu_actions_reach_the_focused_editor() -> TestResult {
     assert!(!MenuItem::Separator.dispatch(&mut ui));
     Ok(())
 }
+
+#[test]
+fn menu_callbacks_run_in_the_dispatching_windows_scope() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().build(div);
+    let mut other = TestUiBuilder::default().build(div);
+    let callback = MenuItem::callback("Rename", || window_handle().set_title("callback"));
+    assert!(callback.dispatch(&mut ui));
+    assert!(
+        matches!(&ui.take_window_commands()[..], [WindowCommand::SetTitle(title)] if title == "callback")
+    );
+    assert!(other.take_window_commands().is_empty());
+    assert!(callback.dispatch(&mut other));
+    assert!(
+        matches!(&other.take_window_commands()[..], [WindowCommand::SetTitle(title)] if title == "callback")
+    );
+    assert!(ui.take_window_commands().is_empty());
+    Ok(())
+}
