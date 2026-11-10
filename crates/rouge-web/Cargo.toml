@@ -1,0 +1,16 @@
+[package]
+name = "rouge-web"
+description = "Browser host for the Rouge UI framework."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+rouge-core.workspace = true
+rouge-reactive.workspace = true
+rouge-render.workspace = true
+
+[lints]
+workspace = true
