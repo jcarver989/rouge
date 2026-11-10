@@ -1,6 +1,8 @@
 use rouge_core::testing::{BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder};
-use rouge_core::{Color, Rect, Styled, div, editable, rich_text, text, use_theme};
-use rouge_reactive::{Runtime, signal};
+use rouge_core::{
+    Color, Palette, Rect, Styled, Theme, div, dynamic, editable, rich_text, text, use_theme,
+};
+use rouge_reactive::{Runtime, provide_context, signal};
 
 #[test]
 fn borders_take_layout_space_and_paint() -> TestResult {
@@ -180,5 +182,64 @@ fn named_hover_groups_restyle_nested_elements_and_revert_on_leave() -> TestResul
     ui.pointer_left();
     ui.advance(0.0);
     assert_eq!(ui.pixel(15, 15)?, RED);
+    Ok(())
+}
+
+#[test]
+fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_overrides() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, (outer, inner)) = TestUiBuilder::default().size(300.0, 200.0).build_with(|| {
+        let outer = use_theme();
+        outer.text_size.set(10.0);
+        outer.text.set(Color::RED);
+        let inner = Theme::new(Palette {
+            text_size: 30.0,
+            text: Color::GREEN,
+            ..Palette::light()
+        });
+        let view = div()
+            .test_id("parent")
+            .size_full()
+            .line_height(1.0)
+            .hover(|style| style.text_size(20.0).text_color(Color::BLUE))
+            .child(div().test_id("outer").child(text("MMMM")))
+            .child(dynamic(move || {
+                provide_context(inner);
+                div()
+                    .child(div().test_id("inner").child(text("MMMM")))
+                    .child(
+                        div()
+                            .test_id("override")
+                            .child(text("MMMM").text_size(14.0).color(Color::RED)),
+                    )
+            }));
+        (view, (outer, inner))
+    });
+    for (id, height) in [("outer", 10.0), ("inner", 30.0), ("override", 14.0)] {
+        assert_eq!(ui.bounds_of(id).ok_or("missing text")?.size.height, height);
+    }
+    outer.text_size.set(12.0);
+    inner.text_size.set(32.0);
+    ui.advance(0.0);
+    assert_eq!(ui.bounds_of("outer").ok_or("outer")?.size.height, 12.0);
+    assert_eq!(ui.bounds_of("inner").ok_or("inner")?.size.height, 32.0);
+    ui.hover_on("parent")?;
+    for id in ["outer", "inner"] {
+        let bounds = ui.bounds_of(id).ok_or("text")?;
+        assert_eq!(bounds.size.height, 20.0);
+        let image = ui.render()?;
+        assert!(
+            (bounds.origin.y as u32..bounds.max().y as u32)
+                .any(|y| (0..100).any(|x| image.pixel(x, y) == BLUE))
+        );
+    }
+    assert_eq!(
+        ui.bounds_of("override").ok_or("override")?.size.height,
+        14.0
+    );
+    ui.pointer_left();
+    ui.advance(0.0);
+    assert_eq!(ui.bounds_of("outer").ok_or("outer")?.size.height, 12.0);
+    assert_eq!(ui.bounds_of("inner").ok_or("inner")?.size.height, 32.0);
     Ok(())
 }

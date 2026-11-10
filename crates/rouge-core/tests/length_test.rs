@@ -70,3 +70,45 @@ fn later_style_setters_override_rem_declarations() -> TestResult {
     assert_eq!(ui.bounds(1.0, 1.0)?.size.width, 200.0);
     Ok(())
 }
+
+#[test]
+fn every_length_setter_tracks_rem_and_clears_it_for_absolute_overrides() {
+    macro_rules! check {
+        ($($setter:ident => $field:ident $(.$side:ident)?),* $(,)?) => {$({
+            let mut view = div().$setter(rem(2.0));
+            assert_eq!(view.style_mut().rem_lengths.get(stringify!($field $(.$side)?)), Some(&2.0));
+            let mut view = view.$setter(7.0);
+            let style = view.style_mut();
+            assert!(style.rem_lengths.is_empty(), stringify!($setter));
+            assert_eq!(style.layout.$field $(.$side)?, Length::Px(7.0).into());
+        })*};
+    }
+    check! {
+        w => size.width, h => size.height,
+        min_w => min_size.width, min_h => min_size.height,
+        max_w => max_size.width, max_h => max_size.height,
+        flex_basis => flex_basis, gap_x => gap.width, gap_y => gap.height,
+        pt => padding.top, pr => padding.right, pb => padding.bottom, pl => padding.left,
+        mt => margin.top, mr => margin.right, mb => margin.bottom, ml => margin.left,
+        top => inset.top, right => inset.right, bottom => inset.bottom, left => inset.left,
+        border_t => border.top, border_r => border.right, border_b => border.bottom, border_l => border.left,
+    }
+    let mut view = div()
+        .size(rem(2.0))
+        .size_full()
+        .p(rem(2.0))
+        .px(3.0)
+        .py(4.0)
+        .m(rem(2.0))
+        .mx(3.0)
+        .my(4.0)
+        .inset(rem(2.0))
+        .inset(5.0)
+        .border(rem(2.0))
+        .border(1.0)
+        .gap(rem(2.0))
+        .gap(6.0)
+        .flex_basis(rem(2.0))
+        .flex_1();
+    assert!(view.style_mut().rem_lengths.is_empty());
+}

@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::rc::Rc;
 use taffy::{
-    AlignItems, AlignSelf, Dimension, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
-    Point as Axes, Position, Rect as Sides, Size as Extent, Style as Layout,
+    AlignItems, AlignSelf, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
+    Point as Axes, Position, Style as Layout,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -140,55 +140,103 @@ impl Style {
             && self.shadows == other.shadows
     }
 
-    fn length(&mut self, value: Length, key: &'static str) -> Length {
-        if let Length::Rem(value) = value {
-            self.rem_lengths.insert(key, value);
-        } else {
-            self.rem_lengths.remove(key);
-        }
-        value
-    }
-
     pub(crate) fn resolved_layout(&self, root: f32) -> Layout {
         let mut layout = self.layout.clone();
-        macro_rules! resolve {
-            ($($field:ident.$side:ident),*) => {$(
-                if let Some(value) = self.rem_lengths.get(stringify!($field.$side)) {
-                    layout.$field.$side = Length::Px(value * root).into();
-                }
-            )*};
-        }
-        resolve!(
-            size.width,
-            size.height,
-            min_size.width,
-            min_size.height,
-            max_size.width,
-            max_size.height,
-            gap.width,
-            gap.height,
-            padding.top,
-            padding.right,
-            padding.bottom,
-            padding.left,
-            margin.top,
-            margin.right,
-            margin.bottom,
-            margin.left,
-            inset.top,
-            inset.right,
-            inset.bottom,
-            inset.left,
-            border.top,
-            border.right,
-            border.bottom,
-            border.left
-        );
-        if let Some(value) = self.rem_lengths.get("flex_basis") {
-            layout.flex_basis = Length::Px(value * root).into();
+        for field in LayoutLength::ALL {
+            if let Some(value) = self.rem_lengths.get(field.key()) {
+                field.assign(&mut layout, Length::Px(value * root));
+            }
         }
         layout
     }
+}
+
+macro_rules! layout_lengths {
+    ($apply:ident) => {
+        $apply! {
+            Width: w => size.width;
+            Height: h => size.height;
+            MinWidth: min_w => min_size.width;
+            MinHeight: min_h => min_size.height;
+            MaxWidth: max_w => max_size.width;
+            MaxHeight: max_h => max_size.height;
+            Basis: flex_basis => flex_basis;
+            GapX: gap_x => gap.width;
+            GapY: gap_y => gap.height;
+            PaddingTop: pt => padding.top;
+            PaddingRight: pr => padding.right;
+            PaddingBottom: pb => padding.bottom;
+            PaddingLeft: pl => padding.left;
+            MarginTop: mt => margin.top;
+            MarginRight: mr => margin.right;
+            MarginBottom: mb => margin.bottom;
+            MarginLeft: ml => margin.left;
+            InsetTop: top => inset.top;
+            InsetRight: right => inset.right;
+            InsetBottom: bottom => inset.bottom;
+            InsetLeft: left => inset.left;
+            BorderTop: border_t => border.top;
+            BorderRight: border_r => border.right;
+            BorderBottom: border_b => border.bottom;
+            BorderLeft: border_l => border.left;
+        }
+    };
+}
+
+macro_rules! length_fields {
+    ($($variant:ident: $setter:ident => $field:ident $(.$side:ident)?;)*) => {
+        #[derive(Clone, Copy)]
+        enum LayoutLength { $($variant,)* }
+
+        impl LayoutLength {
+            const ALL: &[Self] = &[$(Self::$variant,)*];
+
+            fn key(self) -> &'static str {
+                match self { $(Self::$variant => stringify!($field $(.$side)?),)* }
+            }
+
+            fn assign(self, layout: &mut Layout, value: Length) {
+                match self { $(Self::$variant => layout.$field $(.$side)? = value.into(),)* }
+            }
+
+            fn set(self, style: &mut Style, value: Length) {
+                if let Length::Rem(value) = value {
+                    style.rem_lengths.insert(self.key(), value);
+                } else {
+                    style.rem_lengths.remove(self.key());
+                }
+                self.assign(&mut style.layout, value);
+            }
+        }
+    };
+}
+
+layout_lengths!(length_fields);
+
+macro_rules! text_properties {
+    ($($field:ident: $ty:ty),* $(,)?) => {
+        #[derive(Clone, Default)]
+        pub(crate) struct TextProperties { $(pub $field: Option<$ty>,)* }
+
+        impl TextProperties {
+            pub(crate) fn inherit(&mut self, style: &Style) {
+                $(if self.$field.is_none() { self.$field.clone_from(&style.$field); })*
+            }
+
+            pub(crate) fn cascade(&self, style: &Style) -> Self {
+                Self { $($field: style.$field.as_ref().or(self.$field.as_ref()).cloned(),)* }
+            }
+        }
+    };
+}
+
+text_properties! {
+    text_color: Color,
+    text_size: Length,
+    text_font: String,
+    text_weight: f32,
+    text_italic: bool,
+    text_line_height: f32,
 }
 
 macro_rules! props {
@@ -199,23 +247,16 @@ macro_rules! props {
     )*};
 }
 
-macro_rules! sides {
-    ($($field:ident: $all:ident $top:ident $right:ident $bottom:ident $left:ident;)*) => {$(
-        props! {
-            $all(Length) [Layout] |s, v| {
-                s.layout.$field = Sides {
-                    left: s.length(v, concat!(stringify!($field), ".left")).into(),
-                    right: s.length(v, concat!(stringify!($field), ".right")).into(),
-                    top: s.length(v, concat!(stringify!($field), ".top")).into(),
-                    bottom: s.length(v, concat!(stringify!($field), ".bottom")).into(),
-                };
-            };
-            $top(Length) [Layout] |s, v| s.layout.$field.top = s.length(v, concat!(stringify!($field), ".top")).into();
-            $right(Length) [Layout] |s, v| s.layout.$field.right = s.length(v, concat!(stringify!($field), ".right")).into();
-            $bottom(Length) [Layout] |s, v| s.layout.$field.bottom = s.length(v, concat!(stringify!($field), ".bottom")).into();
-            $left(Length) [Layout] |s, v| s.layout.$field.left = s.length(v, concat!(stringify!($field), ".left")).into();
-        }
-    )*};
+macro_rules! length_setters {
+    ($($variant:ident: $setter:ident => $field:ident $(.$side:ident)?;)*) => {
+        props! { $($setter(Length) [Layout] |s, v| LayoutLength::$variant.set(s, v);)* }
+    };
+}
+
+macro_rules! lengths {
+    ($($setter:ident: $($field:ident),+;)*) => {
+        props! { $($setter(Length) [Layout] |s, v| { $(LayoutLength::$field.set(s, v);)+ };)* }
+    };
 }
 
 macro_rules! flags {
@@ -272,10 +313,9 @@ pub trait Styled: Sized {
         col |s| s.layout.flex_direction = FlexDirection::Column;
         flex_wrap |s| s.layout.flex_wrap = FlexWrap::Wrap;
         flex_1 |s| {
-            s.rem_lengths.remove("flex_basis");
+            LayoutLength::Basis.set(s, Length::Fraction(0.0));
             s.layout.flex_grow = 1.0;
             s.layout.flex_shrink = 1.0;
-            s.layout.flex_basis = Dimension::percent(0.0);
         };
         flex_none |s| {
             s.layout.flex_grow = 0.0;
@@ -298,18 +338,11 @@ pub trait Styled: Sized {
         absolute |s| s.layout.position = Position::Absolute;
         relative |s| s.layout.position = Position::Relative;
         overflow_hidden |s| s.layout.overflow = Axes { x: Overflow::Hidden, y: Overflow::Hidden };
-        w_full |s| {
-            s.rem_lengths.remove("size.width");
-            s.layout.size.width = Dimension::percent(1.0);
-        };
-        h_full |s| {
-            s.rem_lengths.remove("size.height");
-            s.layout.size.height = Dimension::percent(1.0);
-        };
+        w_full |s| LayoutLength::Width.set(s, Length::Fraction(1.0));
+        h_full |s| LayoutLength::Height.set(s, Length::Fraction(1.0));
         size_full |s| {
-            s.rem_lengths.remove("size.width");
-            s.rem_lengths.remove("size.height");
-            s.layout.size = Extent { width: Dimension::percent(1.0), height: Dimension::percent(1.0) };
+            LayoutLength::Width.set(s, Length::Fraction(1.0));
+            LayoutLength::Height.set(s, Length::Fraction(1.0));
         };
     }
 
@@ -337,38 +370,9 @@ pub trait Styled: Sized {
         font(String) [Layout] |s, v| s.text_font = Some(v);
         font_weight(f32) [Layout] |s, v| s.text_weight = Some(v);
         line_height(f32) [Layout] |s, v| s.text_line_height = Some(v);
-        w(Length) [Layout] |s, v| s.layout.size.width = s.length(v, "size.width").into();
-        h(Length) [Layout] |s, v| s.layout.size.height = s.length(v, "size.height").into();
-        size(Length) [Layout] |s, v| s.layout.size = Extent { width: s.length(v, "size.width").into(), height: s.length(v, "size.height").into() };
-        min_w(Length) [Layout] |s, v| s.layout.min_size.width = s.length(v, "min_size.width").into();
-        min_h(Length) [Layout] |s, v| s.layout.min_size.height = s.length(v, "min_size.height").into();
-        max_w(Length) [Layout] |s, v| s.layout.max_size.width = s.length(v, "max_size.width").into();
-        max_h(Length) [Layout] |s, v| s.layout.max_size.height = s.length(v, "max_size.height").into();
         aspect_ratio(f32) [Layout] |s, v| s.layout.aspect_ratio = Some(v);
-
         flex_grow(f32) [Layout] |s, v| s.layout.flex_grow = v;
         flex_shrink(f32) [Layout] |s, v| s.layout.flex_shrink = v;
-        flex_basis(Length) [Layout] |s, v| s.layout.flex_basis = s.length(v, "flex_basis").into();
-        gap(Length) [Layout] |s, v| s.layout.gap = Extent { width: s.length(v, "gap.width").into(), height: s.length(v, "gap.height").into() };
-        gap_x(Length) [Layout] |s, v| s.layout.gap.width = s.length(v, "gap.width").into();
-        gap_y(Length) [Layout] |s, v| s.layout.gap.height = s.length(v, "gap.height").into();
-
-        px(Length) [Layout] |s, v| {
-            s.layout.padding.left = s.length(v, "padding.left").into();
-            s.layout.padding.right = s.length(v, "padding.right").into();
-        };
-        py(Length) [Layout] |s, v| {
-            s.layout.padding.top = s.length(v, "padding.top").into();
-            s.layout.padding.bottom = s.length(v, "padding.bottom").into();
-        };
-        mx(Length) [Layout] |s, v| {
-            s.layout.margin.left = s.length(v, "margin.left").into();
-            s.layout.margin.right = s.length(v, "margin.right").into();
-        };
-        my(Length) [Layout] |s, v| {
-            s.layout.margin.top = s.length(v, "margin.top").into();
-            s.layout.margin.bottom = s.length(v, "margin.bottom").into();
-        };
 
         border_color(Color) [Paint] |s, v| s.border_color = v;
         bg(Color) [Backing] |s, v| s.background = Some(v);
@@ -377,11 +381,19 @@ pub trait Styled: Sized {
         shadows(Vec<BoxShadow>) [Paint] |s, v| s.shadows = v;
     }
 
-    sides! {
-        padding: p pt pr pb pl;
-        margin: m mt mr mb ml;
-        inset: inset top right bottom left;
-        border: border border_t border_r border_b border_l;
+    layout_lengths!(length_setters);
+
+    lengths! {
+        size: Width, Height;
+        gap: GapX, GapY;
+        px: PaddingLeft, PaddingRight;
+        py: PaddingTop, PaddingBottom;
+        mx: MarginLeft, MarginRight;
+        my: MarginTop, MarginBottom;
+        p: PaddingTop, PaddingRight, PaddingBottom, PaddingLeft;
+        m: MarginTop, MarginRight, MarginBottom, MarginLeft;
+        inset: InsetTop, InsetRight, InsetBottom, InsetLeft;
+        border: BorderTop, BorderRight, BorderBottom, BorderLeft;
     }
 }
 

@@ -6,7 +6,7 @@ use crate::event::{
 use crate::image::{Fit, ImageSpec};
 use crate::keymap::Keymap;
 use crate::path::Path;
-use crate::style::{Dirty, Style};
+use crate::style::{Dirty, Style, TextProperties};
 use crate::theme::Theme;
 use edit::{CARET_WIDTH, EditState};
 use rouge_reactive::{Signal, batch};
@@ -763,50 +763,43 @@ impl Tree {
     }
 
     pub(crate) fn refresh_text_subtree(&mut self, id: ElementId) {
+        let mut inherited = TextProperties::default();
+        let mut parent = self.elements.get(id).and_then(|element| element.parent);
+        while let Some(id) = parent {
+            let element = &self.elements[id];
+            inherited.inherit(element.effective_style());
+            parent = element.parent;
+        }
+        self.refresh_text(id, &inherited);
+    }
+
+    fn refresh_text(&mut self, id: ElementId, inherited: &TextProperties) {
         let Some(element) = self.elements.get(id) else {
             return;
         };
+        let properties = inherited.cascade(element.effective_style());
         let children = element.children.clone();
         if let Some(text) = &element.spec.text {
-            let mut ancestors = Vec::new();
-            let mut current = Some(id);
-            while let Some(id) = current {
-                let element = &self.elements[id];
-                ancestors.push(element.effective_style());
-                current = element.parent;
-            }
-            let mut style = text.style.clone();
             let default = TextStyle::default();
-            style.size = ancestors.iter().find_map(|s| s.text_size).map_or_else(
+            let mut style = text.style.clone();
+            style.size = properties.text_size.map_or_else(
                 || {
                     text.theme
                         .map_or(default.size, |theme| theme.text_size.get_untracked())
                 },
                 |size| size.resolve(self.root_font_size),
             );
-            style.family = ancestors
-                .iter()
-                .find_map(|s| s.text_font.clone())
+            style.family = properties
+                .text_font
+                .clone()
                 .map_or(default.family, Into::into);
-            style.weight = ancestors
-                .iter()
-                .find_map(|s| s.text_weight)
-                .unwrap_or(default.weight);
-            style.italic = ancestors
-                .iter()
-                .find_map(|s| s.text_italic)
-                .unwrap_or(default.italic);
-            style.line_height = ancestors
-                .iter()
-                .find_map(|s| s.text_line_height)
-                .unwrap_or(default.line_height);
-            let color = ancestors
-                .iter()
-                .find_map(|s| s.text_color)
-                .unwrap_or_else(|| {
-                    text.theme
-                        .map_or(Color::BLACK, |theme| theme.text.get_untracked())
-                });
+            style.weight = properties.text_weight.unwrap_or(default.weight);
+            style.italic = properties.text_italic.unwrap_or(default.italic);
+            style.line_height = properties.text_line_height.unwrap_or(default.line_height);
+            let color = properties.text_color.unwrap_or_else(|| {
+                text.theme
+                    .map_or(Color::BLACK, |theme| theme.text.get_untracked())
+            });
             let dirty = if style != text.style {
                 Dirty::Layout
             } else if color != text.color {
@@ -822,41 +815,49 @@ impl Tree {
             }
         }
         for child in children {
-            self.refresh_text_subtree(child);
+            self.refresh_text(child, &properties);
         }
     }
 
-    pub(crate) fn update_style(&mut self, id: ElementId, dirty: Dirty, f: impl FnOnce(&mut Style)) {
+    pub(crate) fn update_style(
+        &mut self,
+        id: ElementId,
+        _dirty: Dirty,
+        f: impl FnOnce(&mut Style),
+    ) {
         let Some(element) = self.elements.get_mut(id) else {
             return;
         };
         let old = element.effective_style().clone();
-        let filled = old.background.is_some();
         f(&mut element.spec.style);
+        self.apply_style(id, &old);
+    }
+
+    fn apply_style(&mut self, id: ElementId, old: &Style) {
         let resolved = self.resolve_style(id);
         let element = &mut self.elements[id];
-        element.resolved = resolved;
-        if old.same_box(element.effective_style()) {
-            self.refresh_text_subtree(id);
-            return;
-        }
-        if dirty.needs_layout() {
-            let layout = element
-                .effective_style()
-                .resolved_layout(self.root_font_size);
+        let new = resolved.as_ref().unwrap_or(&element.spec.style);
+        let dirty = if new.same_box(old) {
+            Dirty::None
+        } else if new.layout != old.layout || new.rem_lengths != old.rem_lengths {
             self.taffy
-                .set_style(element.taffy, layout)
+                .set_style(element.taffy, new.resolved_layout(self.root_font_size))
                 .expect("taffy set style");
-        }
-        let composited = element.layer(Slot::Own).is_some()
-            && filled == element.effective_style().background.is_some();
-        let dirty = match dirty {
-            Dirty::Backing if composited => Dirty::Composite,
-            Dirty::Backing => Dirty::Paint,
-            dirty => dirty,
+            Dirty::Layout
+        } else if new.border_color != old.border_color
+            || new.shadows != old.shadows
+            || new.background.is_some() != old.background.is_some()
+            || element.layer(Slot::Own).is_none()
+        {
+            Dirty::Paint
+        } else {
+            Dirty::Composite
         };
-        self.mark_element(id, dirty);
-        self.sync_backing(id);
+        element.resolved = resolved;
+        if dirty != Dirty::None {
+            self.mark_element(id, dirty);
+            self.sync_backing(id);
+        }
         self.refresh_text_subtree(id);
     }
 
@@ -1502,32 +1503,8 @@ impl Tree {
     }
 
     fn refresh_variant(&mut self, id: ElementId) {
-        let resolved = self.resolve_style(id);
-        let element = &mut self.elements[id];
-        let new = resolved.as_ref().unwrap_or(&element.spec.style);
-        let old = element.effective_style();
-        if new.same_box(old) {
-            element.resolved = resolved;
-            self.refresh_text_subtree(id);
-            return;
-        }
-        let repainted = new.border_color != old.border_color
-            || new.shadows != old.shadows
-            || new.background.is_some() != old.background.is_some();
-        let dirty = if new.layout != old.layout || new.rem_lengths != old.rem_lengths {
-            self.taffy
-                .set_style(element.taffy, new.resolved_layout(self.root_font_size))
-                .expect("taffy set style");
-            Dirty::Layout
-        } else if repainted || element.layer(Slot::Own).is_none() {
-            Dirty::Paint
-        } else {
-            Dirty::Composite
-        };
-        element.resolved = resolved;
-        self.mark_element(id, dirty);
-        self.sync_backing(id);
-        self.refresh_text_subtree(id);
+        let old = self.elements[id].effective_style().clone();
+        self.apply_style(id, &old);
     }
 
     pub(crate) fn update(&mut self, cache: &mut PaintCache, text_system: &mut TextSystem) -> bool {
