@@ -8,6 +8,7 @@ mod runtime;
 mod scope;
 mod sender;
 mod signal;
+mod stats;
 mod task;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
@@ -23,6 +24,7 @@ pub use runtime::{Entered, Runtime};
 pub use scope::{Scope, batch, expect_context, on_cleanup, provide_context, untrack, use_context};
 pub use sender::SignalSender;
 pub use signal::{ReadSignal, Signal, signal};
+pub use stats::{ReactiveStats, stats};
 #[cfg(feature = "tokio-rt")]
 pub use task::spawn_on;
 pub use task::{Task, TaskError, poll_tasks, spawn};

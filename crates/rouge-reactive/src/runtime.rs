@@ -1,3 +1,4 @@
+use crate::stats::ReactiveStats;
 use crate::task::Executor;
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
@@ -48,6 +49,7 @@ pub(crate) struct Graph {
     batch_depth: Cell<u32>,
     flushing: Cell<bool>,
     pub(crate) executor: Executor,
+    stats: Cell<ReactiveStats>,
 }
 
 thread_local! {
@@ -170,7 +172,18 @@ impl Graph {
         if let Some(owner) = owner {
             nodes[owner].children.insert(id);
         }
+        self.count(|stats| stats.nodes_created += 1);
         id
+    }
+
+    fn count(&self, f: impl FnOnce(&mut ReactiveStats)) {
+        let mut stats = self.stats.get();
+        f(&mut stats);
+        self.stats.set(stats);
+    }
+
+    pub(crate) fn stats(&self) -> ReactiveStats {
+        self.stats.get()
     }
 
     pub(crate) fn is_alive(&self, id: NodeId) -> bool {
@@ -227,6 +240,7 @@ impl Graph {
             if detach_from_owner && let Some(owner) = node.owner.and_then(|o| nodes.get_mut(o)) {
                 owner.children.swap_remove(&id);
             }
+            self.count(|stats| stats.nodes_disposed += 1);
             node
         };
         drop(node);
@@ -350,9 +364,11 @@ impl Graph {
             previous.append(&mut node.previous);
             node.previous = previous;
             node.computing = true;
-            node.compute.clone()
+            node.compute
+                .clone()
+                .map(|compute| (compute, node.value.is_some()))
         };
-        let Some(compute) = compute else {
+        let Some((compute, memo)) = compute else {
             return;
         };
         let changed = {
@@ -378,6 +394,13 @@ impl Graph {
                 }
             }
         }
+        self.count(|stats| {
+            if memo {
+                stats.memos_run += 1;
+            } else {
+                stats.effects_run += 1;
+            }
+        });
         if changed {
             self.mark_subscribers(id);
         }
