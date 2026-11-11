@@ -6,13 +6,16 @@ use parley::{
 };
 use rouge_render::Color;
 use std::borrow::Cow;
-use std::ops::Range;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::ops::{Range, Sub};
 use swash::FontRef;
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::{Angle, Format, Transform, Vector};
 
 pub const SUBPIXEL_BUCKETS: u8 = 4;
+const SHAPE_CACHE_LIMIT: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Underline {
@@ -79,7 +82,7 @@ impl Default for TextStyle {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum TextAlign {
     #[default]
     Start,
@@ -206,6 +209,7 @@ impl From<BoundingBox> for TextRect {
     }
 }
 
+#[derive(Clone)]
 pub struct TextLayout {
     layout: Layout<SpanStyle>,
     align: TextAlign,
@@ -400,6 +404,28 @@ pub struct TextSystem {
     fonts: FontContext,
     layouts: LayoutContext<SpanStyle>,
     scaler: ScaleContext,
+    shaped: HashMap<TextStyle, HashMap<String, TextLayout>>,
+    shaped_len: usize,
+    stats: TextStats,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextStats {
+    pub shapes: u64,
+    pub cache_hits: u64,
+    pub glyphs_rasterized: u64,
+}
+
+impl Sub for TextStats {
+    type Output = TextStats;
+
+    fn sub(self, earlier: TextStats) -> TextStats {
+        TextStats {
+            shapes: self.shapes - earlier.shapes,
+            cache_hits: self.cache_hits - earlier.cache_hits,
+            glyphs_rasterized: self.glyphs_rasterized - earlier.glyphs_rasterized,
+        }
+    }
 }
 
 impl TextSystem {
@@ -407,7 +433,13 @@ impl TextSystem {
         TextSystem::default()
     }
 
+    pub fn stats(&self) -> TextStats {
+        self.stats
+    }
+
     pub fn add_font(&mut self, data: Vec<u8>) -> Vec<String> {
+        self.shaped.clear();
+        self.shaped_len = 0;
         let families = self.fonts.collection.register_fonts(Blob::from(data), None);
         families
             .into_iter()
@@ -416,6 +448,25 @@ impl TextSystem {
     }
 
     pub fn layout(&mut self, text: &str, style: &TextStyle) -> TextLayout {
+        if let Some(layout) = self.shaped.get(style).and_then(|texts| texts.get(text)) {
+            self.stats.cache_hits += 1;
+            return layout.clone();
+        }
+        self.stats.shapes += 1;
+        let layout = self.shape(text, style);
+        if self.shaped_len >= SHAPE_CACHE_LIMIT {
+            self.shaped.clear();
+            self.shaped_len = 0;
+        }
+        self.shaped_len += 1;
+        self.shaped
+            .entry(style.clone())
+            .or_default()
+            .insert(text.to_owned(), layout.clone());
+        layout
+    }
+
+    fn shape(&mut self, text: &str, style: &TextStyle) -> TextLayout {
         let mut builder = self
             .layouts
             .ranged_builder(&mut self.fonts, text, 1.0, false);
@@ -479,6 +530,7 @@ impl TextSystem {
     }
 
     pub fn rasterize(&mut self, glyph: &PositionedGlyph<'_>, key: &GlyphKey) -> Option<GlyphImage> {
+        self.stats.glyphs_rasterized += 1;
         let font = FontRef::from_index(glyph.font.data.as_ref(), glyph.font.index as usize)?;
         let mut scaler = self
             .scaler
@@ -513,5 +565,28 @@ impl TextSystem {
             height: image.placement.height,
             data: image.data,
         })
+    }
+}
+
+impl Eq for TextStyle {}
+
+impl Hash for TextStyle {
+    fn hash<T: Hasher>(&self, state: &mut T) {
+        self.family.hash(state);
+        [self.size, self.weight, self.line_height]
+            .map(f32::to_bits)
+            .hash(state);
+        (self.italic, self.align, self.wrap).hash(state);
+        for (range, span) in &self.spans {
+            range.hash(state);
+            [span.color, span.background]
+                .map(|c| c.map(|c| c.to_array().map(f32::to_bits)))
+                .hash(state);
+            span.weight.map(f32::to_bits).hash(state);
+            (span.italic, span.strikethrough, &span.family).hash(state);
+            span.underline
+                .map(|u| (u.thickness.to_bits(), u.color.to_array().map(f32::to_bits)))
+                .hash(state);
+        }
     }
 }
