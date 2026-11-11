@@ -902,6 +902,21 @@ Run on macOS (Apple M4 Pro); the code and the full findings are in `spikes/s0-su
 - Building needs `pkg-config` and `libfontconfig1-dev` (fontique); tests need a Vulkan driver. Cross-checking from macOS stops at the fontconfig build script.
 - The API gap closure tests and full workspace suite also pass headlessly on x86_64 Linux. Still not verified here: windowed shell behavior (X11 or Wayland) and the macOS-only menu adapter.
 
+### Browser host portability
+
+`rouge-web` currently provides `BrowserRuntime`, which coalesces executor wakeups into a microtask. The embedding host enters the runtime when mounting, handling input or polling a frame; the wake callback can schedule that frame without polling while idle. `rouge_reactive::sleep` uses browser timers on `wasm32`, and dropping the sleep cancels its outstanding timeout. This is a browser host for Rouge, not the proposed Servo `rouge-webview` widget.
+
+`Ui::with_fonts` registers application-provided faces before mounting; native apps configure them with `App::fonts`. WASM uses Parley without system font discovery. Byte-backed images decode on the browser thread; local filesystem image sources, native background work, and synchronous GPU readback are native-only. `Gpu::new` remains async.
+
+A host can apply paste data or confirm a cut using a `ClipboardTarget` captured from the focused editor. Edits, focus changes, and remounts invalidate that target. The embedding host owns permission errors and should only confirm a cut after the clipboard write succeeds. DOM input, actual clipboard access, canvas/surface setup, and animation-frame ownership are not implemented yet.
+
+```sh
+cargo check --locked --target wasm32-unknown-unknown -p rouge-web -p rouge-widgets
+# Requires the matching wasm-bindgen-test-runner and ChromeDriver on PATH.
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+  cargo test --locked --target wasm32-unknown-unknown -p rouge-web --test runtime_test
+```
+
 ### Not yet built
 
 - Compositor leftovers: clip animation, non-uniform scale, `Motion<T>` beyond `f32`, effect parameters in keyframes and bound to motions, backdrop effects inside rasterized layers, hit-test pass-through for overlays.
