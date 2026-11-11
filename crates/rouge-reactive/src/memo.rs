@@ -24,3 +24,11 @@ pub fn memo<T: PartialEq + 'static>(f: impl Fn() -> T + 'static) -> Memo<T> {
         rt.create_node(rt.current_owner(), Some(value), Some(compute))
     }))
 }
+
+impl<T: 'static> ReadSignal<T> {
+    #[track_caller]
+    pub fn select<U: PartialEq + 'static>(&self, f: impl Fn(&T) -> U + 'static) -> Memo<U> {
+        let source = *self;
+        memo(move || source.with(&f))
+    }
+}

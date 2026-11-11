@@ -1,5 +1,17 @@
 use rouge_reactive::testing::{counter, in_root};
-use rouge_reactive::{effect, signal};
+use rouge_reactive::{effect, memo, signal};
+
+#[test]
+fn display_formats_the_value_and_tracks_the_read() {
+    in_root(|| {
+        let n = signal(1);
+        let label = memo(move || format!("n = {n}"));
+        assert_eq!(label.get(), "n = 1");
+        n.set(2);
+        assert_eq!(label.get(), "n = 2", "formatting subscribed to the signal");
+        assert_eq!(format!("{} / {label}", n.read_only()), "2 / n = 2");
+    });
+}
 
 #[test]
 fn signal_get_set_update() {

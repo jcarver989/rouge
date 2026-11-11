@@ -2,7 +2,7 @@ use crate::handle::Handle;
 use crate::runtime::{Graph, NodeId, Value, with_rt};
 use crate::sender::SignalSender;
 use std::cell::RefCell;
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem::replace;
@@ -108,6 +108,18 @@ impl<T: 'static> ReadSignal<T> {
 
     pub fn is_alive(&self) -> bool {
         self.handle.is_alive()
+    }
+}
+
+impl<T: Display + 'static> Display for ReadSignal<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        self.with(|value| value.fmt(f))
+    }
+}
+
+impl<T: Display + 'static> Display for Signal<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        Display::fmt(&self.0, f)
     }
 }
 
