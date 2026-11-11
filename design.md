@@ -902,6 +902,23 @@ Run on macOS (Apple M4 Pro); the code and the full findings are in `spikes/s0-su
 - Building needs `pkg-config` and `libfontconfig1-dev` (fontique); tests need a Vulkan driver. Cross-checking from macOS stops at the fontconfig build script.
 - The API gap closure tests and full workspace suite also pass headlessly on x86_64 Linux. Still not verified here: windowed shell behavior (X11 or Wayland) and the macOS-only menu adapter.
 
+### M6: frame profiling (in progress)
+
+- **Counters.** `Ui::stats()` returns cumulative `FrameStats`: layouts, paints, layers painted, update passes, patches, elements created and removed, element and layer counts, `TextStats` (shapes, shape-cache hits, glyphs rasterized) and `ReactiveStats` (nodes created and disposed, effect and memo runs). Subtracting two snapshots gives the work in between, which is how tests assert that scrolling does no layout, paint or building. They are always on; there is no feature flag.
+- **Spans.** Rouge emits `tracing` spans (`update`, `layout`, `paint`, `hover`, `scene`, and on native hosts `event`, `acquire`, `encode`, `present`). Without a subscriber they cost almost nothing.
+- **Native host.** `ROUGE_PROFILE=<file>` installs a `tracing-chrome` layer (winit's own spans filtered out) that writes a Chrome trace for `ui.perfetto.dev`, with one `rouge::frame` event per frame carrying that frame's `FrameStats` delta. `ROUGE_BENCH=scroll:<px per frame>:<frames>` scrolls the window center once per presented frame, reversing at either end, and closes the window when done. Either variable prints a summary to stderr when the window closes: frame-interval percentiles, frames over 16.7 ms, the adapter and surface, and the total `FrameStats`. `ROUGE_PRESENT_MODE`, `WGPU_BACKEND` and `WGPU_POWER_PREF` pick the present mode, backend and adapter.
+
+### Scroll and build performance
+
+Driven by profiling a large diff in the native host, these hold for every Rouge app:
+
+- **Scrolling moves layers, not signals.** `VirtualListHandle::row_bounds` is computed on demand from row heights, the list frame and the scroll offset. `Div::track_size` observes layout-space size only when layout changes. `Div::scroll_linked(state, ScrollLinked::Sticky { lo, hi } | ScrollLinked::Linear { .. })` moves a layer in the compositor relative to the scroll container whose `scroll_state` is `state`, so sticky headers and scrollbar thumbs cost no reactive work per frame and may be built before their container.
+- **One invalidation per build.** Dynamic props compute their first value during build instead of sending a follow-up patch. Attaching a subtree refreshes variants and inherited text once, and only when it joins the connected tree; `apply_style` refreshes text only when an inherited text property changed.
+- **Reactive bookkeeping is proportional to change.** Subscribers and children are insertion-ordered sets, so unlinking is constant time. A rerun keeps the dependencies it reads again and unlinks only the ones it dropped; while a node computes, links it has not re-read are treated as stale so diamonds stay glitch-free.
+- **Text is shaped once.** `TextSystem` caches unbroken layouts by style and content.
+- **Canvas for dense content.** `TextRun` adds clipping, right alignment, a hit tag and a name; `Painter::region` names a rectangle. `bounds_of` finds regions and named runs. `Canvas::on_text_hover` and `on_text_click` report the tagged run and byte under the pointer (text elements report tag 0 through the same path), `track_overflow` reports how far clipped text overflows, and a canvas does not paint until it has a size.
+- **Copying.** `WindowHandle::copy_text` writes to the window's clipboard without involving the host.
+
 ### Browser host portability
 
 `rouge-web` currently provides `BrowserRuntime`, which coalesces executor wakeups into a microtask. The embedding host enters the runtime when mounting, handling input or polling a frame; the wake callback can schedule that frame without polling while idle. `rouge_reactive::sleep` uses browser timers on `wasm32`, and dropping the sleep cancels its outstanding timeout. This is a browser host for Rouge, not the proposed Servo `rouge-webview` widget.
@@ -921,7 +938,7 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 
 - Compositor leftovers: clip animation, non-uniform scale, `Motion<T>` beyond `f32`, effect parameters in keyframes and bound to motions, backdrop effects inside rasterized layers, hit-test pass-through for overlays.
 - M5 leftovers: SVG documents, password masking in text editing, popover collision handling, image mips, a thread pool behind `spawn_blocking`. Typing, IME and clipboard have been exercised through `Ui` in tests but not by hand in a window.
-- M6: devtools, hot reload, benchmark suite in CI.
+- M6: HUD, inspector, invalidation flashing, layer view, signal graph, warnings, GPU timing, hot reload, benchmark suite in CI. Frame counters and tracing are done (see above).
 - S0 on Linux, M7, M8: surfaces and the web view. The sampled-quad pipeline M7 needs now exists (images), but there is no `surface` element and no `rouge-webview` crate.
 - Text gaps: color glyphs (emoji), atlas eviction.
 - Linux beyond what is listed above.
