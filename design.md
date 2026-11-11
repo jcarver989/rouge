@@ -132,6 +132,9 @@ batch(|| { a.set(1); b.set(2); });  // one flush
 - `Signal<T>`, `Memo<T>`, `ReadSignal<T>`, and `WriteSignal<T>` are `Copy` generational ids into an arena. No `clone()` when moving into closures.
 - Dependency tracking is automatic and dynamic: dependencies are re-collected on each run of a memo or effect.
 - `T: 'static`. `get()` requires `T: Clone`; `with()` does not.
+- `signal.select(|state| part)` is a memo over one part of a larger value: dependents re-run only when that part changes.
+- `stored(value)` returns `Stored<T>`, a `Copy` scope-owned handle like a signal that never subscribes its readers. It lets application handles that bundle state stay `Copy`.
+- `Callback<Args = ()>` is a `Copy`, scope-owned event handler. It converts from `Fn()` (`Callback`) or `Fn(T)` (`Callback<(T,)>`) closures, defaults to a no-op, and does nothing once its scope is disposed. A closure converted into a one-argument callback needs its parameter type written out.
 
 ### 5.2 Propagation algorithm
 
@@ -212,7 +215,11 @@ fn main() {
 ### 6.2 Components
 
 - A component is a function that returns `impl View`. It runs exactly once, inside its own scope.
-- Props are plain function arguments. Components with many optional props use a builder struct that implements `View`.
+- Props are plain function arguments. `#[component]` makes the function usable as a tag in `view!`, where each attribute naming a parameter becomes that argument and every other attribute is a method call on the returned view.
+- Parameters may be left out of a tag when they have a fallback: an `Option<T>` parameter becomes `None` (and a given value is wrapped in `Some`), and `#[prop(default)]` uses `Default::default()`. A bare attribute naming a defaulted `bool` parameter sets it to `true`; for any other parameter a bare attribute is shorthand for a same-named variable.
+- `#[prop(into)]` converts the given value with `Into`, and `#[prop(reactive)]` accepts a value, signal or closure for a `Prop<T>` parameter.
+- `name?=option` passes an `Option` straight to an optional parameter, or calls a method only when the option is `Some`. `when:method=condition` and `when:method=(condition, argument)` call a method only when the condition holds.
+- Builder structs that implement `View` remain the right shape for views that hand out a handle before they are built.
 - Reactive props are passed as signals or closures: `fn avatar(user: Signal<User>, size: impl IntoProp<f32>)`.
 - `AnyView` provides type erasure for heterogeneous children and recursive components.
 
@@ -234,6 +241,10 @@ Coherence for the closure blanket impl alongside value impls is a known Rust fri
 - State variants take a closure over a style refinement: `.hover(|s| s.bg(theme.hover))`, `.active(...)`, `.focus(...)`, `.focus_visible(...)`, `.disabled(...)`.
 - `Style` is a first-class value: build it, store it, merge it with `.style(my_style)`. Widgets expose named style slots this way.
 - Theme is a struct of signals provided through context, so a theme switch updates only the bound properties.
+- `theme! { pub struct Brand from BrandPalette { ink: Color, ... } }` declares an application's own tokens: a palette of plain values and a `Copy` struct of signals with `provide`, `current`, `set`, `get` and `palette`. The built-in `Theme` is declared the same way.
+- `set_design_unit(Some(16.0))` makes every bare number passed to a length, radius or row-height prop a design unit that scales with the root font size (`8.0` becomes `0.5rem`). Values that are already pixels, such as measured bounds, must then be passed as `px(value)`.
+- `Typography` is a preset of font, size, line height and weight applied with `.typography(preset)`. `styles! { pub trait Shorthands { caption(target) => target.typography(CAPTION); } }` declares an application's own zero-argument style methods, usable as bare attributes in `view!`.
+- `.on_press(f)` makes an element a button: focusable, pointer cursor, and activated by click, Enter or Space, consuming the event. `.track_interaction(signal)` reports hover, press and focus as one `Interactions` value for styling that state variants cannot express, such as recolouring a child.
 - There is no cascade and no selector engine.
 
 ### 6.5 Control flow
@@ -246,6 +257,8 @@ Because components run once, structure changes go through reactive helpers, each
 - `dynamic(move || -> AnyView)`: escape hatch that re-runs a closure and replaces its subtree.
 
 Plain Rust `if` and `for` work for structure that is static after construction.
+
+`()` and `Option<impl View>` are views, so an absent child needs no placeholder element. Inside `view!`, an `if` or `match` written as a child erases its arms to `AnyView`, and an `if` without `else` yields an optional child. `Apply::when` and `Apply::when_some` do the same job for builder chains.
 
 ### 6.6 Element set
 
@@ -562,6 +575,8 @@ Built strictly on the public API, which keeps that API honest.
 - Tabs, separator, progress, spinner
 
 Widgets are minimally styled, read colors and metrics from the theme, and expose named `Style` slots for overriding. In v1, popovers and menus render in the window's overlay root rather than in separate OS windows.
+
+Three behaviours are exposed for design systems that draw their own controls: `Hint` adds `.tooltip(label)` and `.hint(Option<label>)` to any view, `RovingFocus` moves focus between a list's items with the arrow, Home and End keys, and `ScrollbarStyle` takes its metrics as lengths so a scrollbar scales with the root font size.
 
 ## 15. Web view (`rouge-webview`)
 
