@@ -38,9 +38,10 @@ fn compositor_properties_move_content_and_hit_testing_without_layout_or_paint() 
     x.set(100.0);
     assert!(ui.needs_frame());
     assert!(ui.update_at(0.1));
+    let work = ui.stats() - stats;
     assert_eq!(
-        ui.stats(),
-        stats,
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
         "no layout pass, no paint pass and no layer repainted"
     );
     let img = ui.render()?;
@@ -288,7 +289,12 @@ fn glass_on_an_element_that_paints_nothing_moves_with_its_layer_transform() -> T
         edge > 60 && edge < 200,
         "glass moved over the edge and blurs it: {edge}"
     );
-    assert_eq!(ui.stats(), stats, "moving glass is compositor-only");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "moving glass is compositor-only"
+    );
     Ok(())
 }
 

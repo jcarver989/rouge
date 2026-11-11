@@ -4,8 +4,8 @@ use rouge_core::testing::{
 };
 use rouge_core::{
     BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Div, Keyframes, LayoutTransition, Mask,
-    Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View, div, rich_text, show,
-    text,
+    Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View, div, dynamic, rich_text,
+    show, text,
 };
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_render::headless::Image;
@@ -239,7 +239,12 @@ fn transition_runs_in_the_compositor_and_lands_on_target() -> TestResult {
     assert!(!ui.needs_frame(), "idle again once settled");
 
     assert_eq!(binding_runs.get(), 2, "no reactive work per frame");
-    assert_eq!(ui.stats(), stats, "no layout or paint during the animation");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "no layout or paint during the animation"
+    );
     Ok(())
 }
 
@@ -386,7 +391,12 @@ fn animation_frames_upload_no_instance_data() -> TestResult {
         assert!(frames < 2000, "animation must settle");
     }
     assert!(frames > 30, "the animation spanned many frames ({frames})");
-    assert_eq!(ui.stats(), stats, "and none of them ran layout or paint");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "and none of them ran layout or paint"
+    );
     Ok(())
 }
 
@@ -402,7 +412,12 @@ fn keyframes_play_in_the_compositor_then_hold_their_last_pose_or_repeat() -> Tes
         let stats = ui.stats();
         assert!(ui.is_animating(), "declared keyframes start on their own");
         let positions = run(&mut ui, frames, 20.0)?;
-        assert_eq!(ui.stats(), stats, "no layout or paint");
+        let work = ui.stats() - stats;
+        assert_eq!(
+            (work.layouts, work.paints, work.layer_paints),
+            (0, 0, 0),
+            "no layout or paint"
+        );
         Ok::<_, TestError>((positions, ui.needs_frame()))
     };
     let slide = Keyframes::new()
@@ -597,9 +612,10 @@ fn effects_masks_and_blend_modes_apply_to_their_element() -> TestResult {
         [54, 54, 54, 255],
         "the bound effect followed its signal",
     );
+    let work = ui.stats() - stats;
     assert_eq!(
-        ui.stats(),
-        stats,
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
         "changing an effect neither lays out nor paints"
     );
     Ok(())
@@ -764,6 +780,41 @@ fn reactive_spans_update_and_decorations_paint_over_glyphs() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn a_mounted_subtree_applies_its_reactive_props_at_build_and_shapes_each_text_once() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let shown = signal(false);
+    let width = signal(40.0_f32);
+    let mut ui = TestUi::new(move || {
+        dynamic(move || {
+            if !shown.get() {
+                return div().into_any();
+            }
+            (0..20)
+                .fold(div(), |parent, depth| {
+                    div()
+                        .w(move || width.get() + depth as f32)
+                        .bg(move || Color::rgb(0x112233))
+                        .child(parent)
+                        .child(text(format!("label {depth}")))
+                })
+                .into_any()
+        })
+    });
+    let before = ui.stats();
+    shown.set(true);
+    ui.advance(0.0);
+    let built = ui.stats() - before;
+    assert_eq!(built.text.shapes + built.text.cache_hits, 20);
+    assert!(
+        built.patches <= 2,
+        "the 40 reactive props apply at build, not as {} patches",
+        built.patches
+    );
+    assert_eq!(built.passes, 1);
+    Ok(())
+}
+
 fn build<T: View>(scale: f32, root: impl FnOnce() -> T) -> TestUi {
     TestUiBuilder::default()
         .size(300.0, 200.0)
@@ -819,7 +870,12 @@ fn fade_to_blue(
     ui.run(0.6);
     let done = ui.render()?;
     assert_eq!(done.pixel(20, 20), BLUE);
-    assert_eq!(ui.stats(), stats, "no layout and no paint at any point");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "no layout and no paint at any point"
+    );
     assert!(!ui.needs_frame());
     Ok((half, done))
 }

@@ -130,7 +130,8 @@ fn inherited_size_changes_relayout_but_an_override_shields_the_leaf() -> TestRes
     let before = shielded.stats();
     size.set(40.0);
     shielded.advance(0.0);
-    assert_eq!(shielded.stats(), before);
+    let work = shielded.stats() - before;
+    assert_eq!((work.layouts, work.paints, work.layer_paints), (0, 0, 0));
     Ok(())
 }
 

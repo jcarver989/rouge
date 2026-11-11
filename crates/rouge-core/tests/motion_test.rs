@@ -22,7 +22,12 @@ fn motion_positions_a_layer_and_set_moves_it_without_layout_or_paint() -> TestRe
     ui.advance(0.1);
     assert_eq!(ui.first_x(RED, 10)?, 50);
     assert!(!ui.needs_frame(), "a set is not an animation");
-    assert_eq!(ui.stats(), stats, "no layout, no paint");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "no layout, no paint"
+    );
     Ok(())
 }
 
@@ -47,7 +52,12 @@ fn animate_to_runs_in_the_compositor_and_can_be_sampled_and_awaited() -> TestRes
     assert_eq!(ui.first_x(RED, 10)?, 100);
     assert_eq!(poll(settled.as_mut()), Poll::Ready(true));
     assert!(!ui.needs_frame(), "idle once settled");
-    assert_eq!(ui.stats(), stats, "nothing but compositing happened");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "nothing but compositing happened"
+    );
     Ok(())
 }
 
@@ -162,7 +172,12 @@ fn a_drag_moves_a_motion_and_flings_it_with_decay() -> TestResult {
         x.get()
     );
     assert!(!ui.needs_frame());
-    assert_eq!(ui.stats(), stats, "all of it in the compositor");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "all of it in the compositor"
+    );
     Ok(())
 }
 

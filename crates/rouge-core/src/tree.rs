@@ -10,22 +10,24 @@ use crate::scroll::scroll_key;
 use crate::style::{Dirty, Style, TextProperties};
 use crate::theme::Theme;
 use edit::{CARET_WIDTH, EditState};
-use rouge_reactive::{Signal, batch};
+use rouge_reactive::{ReactiveStats, Signal, batch};
 use rouge_render::{
     Affine, Atlas, AtlasRect, Color, Command, Commit, Compositor, Content, Corners, DrawList,
     Edges, Glyph, ImageData, ImageQuad, LayerCommand, LayerId, MotionCommand, MotionId, Nested,
     Point, Pose, Quad, Rect, ScrollState, Shadow, Size, Timing,
 };
-use rouge_text::{GlyphKey, TextLayout, TextRect, TextStyle, TextSystem};
+use rouge_text::{GlyphKey, TextLayout, TextRect, TextStats, TextStyle, TextSystem};
 use slotmap::{SlotMap, new_key_type};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::mem::{replace, take};
+use std::ops::Sub;
 use std::rc::Rc;
 use taffy::{
     AvailableSpace, Dimension, Display, NodeId, Overflow, Position, Rect as Sides, Size as Extent,
     TaffyTree, compute_leaf_layout,
 };
+use tracing::trace_span;
 use zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
 
 pub(crate) mod edit;
@@ -306,8 +308,33 @@ pub struct FrameStats {
     pub layouts: u64,
     pub paints: u64,
     pub layer_paints: u64,
+    pub passes: u64,
+    pub patches: u64,
+    pub elements_created: u64,
+    pub elements_removed: u64,
     pub layers: usize,
     pub elements: usize,
+    pub text: TextStats,
+    pub reactive: ReactiveStats,
+}
+
+impl Sub for FrameStats {
+    type Output = FrameStats;
+
+    fn sub(self, earlier: FrameStats) -> FrameStats {
+        FrameStats {
+            layouts: self.layouts - earlier.layouts,
+            paints: self.paints - earlier.paints,
+            layer_paints: self.layer_paints - earlier.layer_paints,
+            passes: self.passes - earlier.passes,
+            patches: self.patches - earlier.patches,
+            elements_created: self.elements_created - earlier.elements_created,
+            elements_removed: self.elements_removed - earlier.elements_removed,
+            text: self.text - earlier.text,
+            reactive: self.reactive - earlier.reactive,
+            ..self
+        }
+    }
 }
 
 pub(crate) struct Tree {
@@ -321,7 +348,7 @@ pub(crate) struct Tree {
     hover_path: Vec<ElementId>,
     press_path: Vec<ElementId>,
     capture: Option<Vec<ElementId>>,
-    stats: FrameStats,
+    pub(crate) stats: FrameStats,
     repaint_all: bool,
     commit: Commit,
     next_layer: u64,
@@ -619,6 +646,7 @@ impl Tree {
     }
 
     pub(crate) fn create_element(&mut self, mut spec: ElementSpec) -> ElementId {
+        self.stats.elements_created += 1;
         let taffy = self
             .taffy
             .new_leaf(spec.style.resolved_layout(self.root_font_size))
@@ -1073,6 +1101,7 @@ impl Tree {
             };
             let mut stack = vec![top];
             while let Some(element) = stack.pop().and_then(|id| self.elements.remove(id)) {
+                self.stats.elements_removed += 1;
                 self.taffy.remove(element.taffy).expect("taffy remove");
                 for layer in element.layers.into_iter().flatten().filter(|_| !exits) {
                     self.commit.push(Command::Remove(layer.id));
@@ -1622,6 +1651,7 @@ impl Tree {
             return false;
         }
         if self.dirty.needs_layout() {
+            let _layout = trace_span!("layout").entered();
             let root = self.elements[self.root].taffy;
             let elements = &mut self.elements;
             let available = Extent {
@@ -1671,6 +1701,7 @@ impl Tree {
             }
         }
         if self.dirty.needs_paint() {
+            let _paint = trace_span!("paint").entered();
             let repaint_all = take(&mut self.repaint_all);
             let focused = self.focused;
             let mut cx = PaintCx {

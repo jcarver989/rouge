@@ -12,6 +12,7 @@ rust-version = "1.99"
 rouge-reactive = { path = "crates/rouge-reactive" }
 slotmap = "1"
 indexmap = "2"
+tracing = "0.1"
 rouge-render = { path = "crates/rouge-render" }
 rouge-text = { path = "crates/rouge-text" }
 rouge-core = { path = "crates/rouge-core" }

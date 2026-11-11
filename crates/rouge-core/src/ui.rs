@@ -13,6 +13,7 @@ use crate::view::{BuildCx, Patch, Patches, View, send};
 use crate::window::{Appearance, Sent, WindowCommand, WindowHandle};
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, effect, expect_context, poll_tasks, provide_context, signal,
+    stats,
 };
 use rouge_render::{Atlas, Compositor, Item, LayerCommand, LayerId, Point, Rect, Size};
 use rouge_text::TextSystem;
@@ -22,6 +23,7 @@ use std::collections::VecDeque;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tracing::trace_span;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
@@ -178,6 +180,7 @@ impl Ui {
                         patches: &self.patches,
                         text,
                     });
+                    self.tree.stats.patches += 1;
                 }
                 self.tree.restore_replaced_focus();
             });
@@ -252,6 +255,7 @@ impl Ui {
     }
 
     fn step(&mut self, now: f64) -> bool {
+        let _update = trace_span!("update").entered();
         self.tree.tick_caret(now);
         self.tree();
         let mut changed = self.compositor.is_animating();
@@ -265,9 +269,11 @@ impl Ui {
             if !self.tree.update(&mut self.cache, &mut self.text_system) {
                 break;
             }
+            self.tree.stats.passes += 1;
             changed = true;
             self.tree();
             if relayout && self.pointer.is_some() {
+                let _hover = trace_span!("hover").entered();
                 self.tree
                     .set_pointer(&self.compositor, self.pointer, self.modifiers);
             }
@@ -277,6 +283,7 @@ impl Ui {
     }
 
     pub fn frame(&mut self) -> Frame<'_> {
+        let _scene = trace_span!("scene").entered();
         Frame {
             scene: self.compositor.scene(self.cache.scale),
             atlas: &mut self.cache.atlas,
@@ -284,7 +291,11 @@ impl Ui {
     }
 
     pub fn stats(&mut self) -> FrameStats {
-        self.tree().stats()
+        FrameStats {
+            text: self.text_system.stats(),
+            reactive: stats(),
+            ..self.tree().stats()
+        }
     }
 
     pub fn bounds_of(&mut self, name: &str) -> Option<Rect> {

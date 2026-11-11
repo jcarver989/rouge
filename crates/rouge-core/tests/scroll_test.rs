@@ -83,7 +83,12 @@ fn scrolling_moves_content_in_the_compositor_and_clamps() -> TestResult {
     ui.update();
     let img = ui.render()?;
     assert_eq!((img.pixel(50, 30), img.pixel(50, 50)), (RED, BLUE));
-    assert_eq!(ui.stats(), stats, "no layout, no paint, no layer repainted");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "no layout, no paint, no layer repainted"
+    );
 
     ui.scroll(Point::new(0.0, -1000.0));
     ui.update();
@@ -435,7 +440,12 @@ fn dragged_scrolling_rubber_bands_then_springs_back() -> TestResult {
     );
     assert_eq!(ui.pixel(50, 10)?, RED);
     assert!(!ui.needs_frame());
-    assert_eq!(ui.stats(), stats, "no layout and no paint");
+    let work = ui.stats() - stats;
+    assert_eq!(
+        (work.layouts, work.paints, work.layer_paints),
+        (0, 0, 0),
+        "no layout and no paint"
+    );
     Ok(())
 }
 
@@ -1021,6 +1031,46 @@ fn linear_links_translate_by_a_clamped_multiple_of_the_offset() {
         linked_y(linear, [0.0, 100.0, 800.0]),
         [Some(0.0), Some(25.0), Some(40.0)]
     );
+}
+
+#[test]
+fn scrolling_within_mounted_rows_does_no_layout_paint_or_building() {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().size(200.0, 200.0).build(|| {
+        virtual_list(
+            || 1000,
+            20.0,
+            |index| text(format!("row {index}")).into_any(),
+        )
+        .size_full()
+    });
+    ui.pointer_moved(Point::new(100.0, 100.0));
+    ui.advance(0.0);
+    let mut quiet = 0;
+    for _ in 0..60 {
+        let before = ui.stats();
+        ui.scroll(Point::new(0.0, -7.0));
+        ui.advance(0.016);
+        let frame = ui.stats() - before;
+        if frame.elements_created + frame.elements_removed > 0 {
+            continue;
+        }
+        quiet += 1;
+        assert_eq!(
+            (
+                frame.layouts,
+                frame.layer_paints,
+                frame.reactive.nodes_created
+            ),
+            (0, 0, 0),
+            "{frame:?}"
+        );
+        assert!(
+            frame.reactive.effects_run + frame.reactive.memos_run <= 8,
+            "{frame:?}"
+        );
+    }
+    assert!(quiet > 30, "{quiet} quiet frames");
 }
 
 fn scroller(state: Signal<ScrollState>) -> TestUi {

@@ -50,7 +50,7 @@ pub use rouge_render::{
     Glass, ImageData, ImageError, Inputs, Keyframes, LayoutTransition, Mask, Point, Pose, Quad,
     Rect, ScrollLinked, ScrollState, Size, Spring, Timing, Tween,
 };
-pub use rouge_text::{SpanStyle, TextAlign, TextStyle, Underline};
+pub use rouge_text::{SpanStyle, TextAlign, TextStats, TextStyle, Underline};
 
 pub use window::{
     Appearance, Decorations, EditAction, Menu, MenuItem, ResizeEdge, WindowCommand, WindowHandle,

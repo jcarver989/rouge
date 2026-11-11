@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 rouge-reactive.workspace = true
 rouge-render.workspace = true
+tracing.workspace = true
 rouge-text.workspace = true
 taffy.workspace = true
 slotmap.workspace = true
