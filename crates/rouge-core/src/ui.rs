@@ -1,4 +1,4 @@
-use crate::clipboard::Clipboard;
+use crate::clipboard::{Clipboard, ClipboardTarget};
 use crate::event::{
     Chord, Cursor, DragEvent, DragPhase, ImeEvent, Key, KeyEvent, Modifiers, PointerButton,
     PointerEvent, ScrollEvent,
@@ -7,6 +7,7 @@ use crate::keymap::Keymap;
 use crate::motion::UiContext;
 use crate::style::Dirty;
 use crate::theme::{Palette, provide_theme};
+use crate::tree::edit::EditOp;
 use crate::tree::{ActionHandler, ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
 use crate::view::{BuildCx, Patch, Patches, View, send};
 use crate::window::{Appearance, WindowCommand, WindowHandle};
@@ -325,6 +326,42 @@ impl Ui {
         self.tree.set_clipboard(Box::new(clipboard));
     }
 
+    pub fn clipboard_target(&mut self) -> Option<ClipboardTarget> {
+        self.tree().clipboard_target()
+    }
+
+    pub fn clipboard_selection(&mut self) -> Option<(ClipboardTarget, String)> {
+        self.tree();
+        self.tree.clipboard_selection(&mut self.text_system)
+    }
+
+    pub fn paste_text(&mut self, target: ClipboardTarget, text: String) -> bool {
+        self.clipboard_edit(&target, EditOp::PasteText(text))
+    }
+
+    pub fn cut_selection(&mut self, target: ClipboardTarget) -> bool {
+        self.clipboard_edit(&target, EditOp::CutSelection)
+    }
+
+    fn clipboard_edit(&mut self, target: &ClipboardTarget, op: EditOp) -> bool {
+        self.tree();
+        let applied = self
+            .scope
+            .run(|| self.tree.clipboard_edit(target, op, &mut self.text_system));
+        self.tree();
+        applied
+    }
+
+    pub fn clear_focus(&mut self) {
+        if self.tree().is_composing() {
+            self.ime(ImeEvent::Preedit {
+                text: String::new(),
+                cursor: None,
+            });
+        }
+        self.tree().set_focus(None, false);
+    }
+
     pub fn text_cursor_area(&mut self) -> Option<Rect> {
         self.tree();
         self.tree.caret_area(&self.compositor)
@@ -383,6 +420,9 @@ impl Ui {
     }
 
     pub fn key_down(&mut self, event: KeyEvent) -> bool {
+        if event.key == Key::Enter && self.tree().is_composing() {
+            return true;
+        }
         if self.key_event(&event, On::KeyDown) {
             return true;
         }

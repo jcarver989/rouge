@@ -1,5 +1,5 @@
 use super::{ElementId, TextData, Tree};
-use crate::clipboard::Clipboard;
+use crate::clipboard::{Clipboard, ClipboardTarget};
 use crate::style::Dirty;
 use rouge_reactive::{Signal, batch};
 use rouge_render::{Color, Compositor, Point, Rect, Size};
@@ -34,6 +34,8 @@ pub(crate) enum EditOp {
     Copy,
     Cut,
     Paste,
+    PasteText(String),
+    CutSelection,
 }
 
 #[derive(Clone)]
@@ -285,8 +287,13 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
             clipboard.write(&content[selection.range()]);
             replace = Some((selection.range(), String::new()));
         }
-        EditOp::Paste => {
-            let pasted = clipboard.read().map(|text| sanitize(text, edit.multiline));
+        EditOp::CutSelection => replace = Some((selection.range(), String::new())),
+        EditOp::Paste | EditOp::PasteText(_) => {
+            let pasted = match op {
+                EditOp::PasteText(text) => Some(text),
+                _ => clipboard.read(),
+            }
+            .map(|text| sanitize(text, edit.multiline));
             replace = pasted
                 .filter(|text| !text.is_empty())
                 .map(|text| (selection.range(), text));
@@ -389,6 +396,9 @@ impl Tree {
             edit.activity = self.time;
             edit.caret_visible = true;
         }
+        if self.focused == Some(id) {
+            Rc::make_mut(&mut self.clipboard_target);
+        }
         let before = text.content.clone();
         apply(text, op, system, &mut *self.clipboard);
         let changed = (text.content != before).then(|| text.content.clone());
@@ -406,6 +416,55 @@ impl Tree {
         );
         if let (Some(content), Some(on_change)) = (changed, on_change) {
             batch(|| on_change(&content));
+        }
+    }
+
+    fn focused_text(&self) -> Option<&TextData> {
+        self.elements.get(self.focused?)?.spec.text.as_ref()
+    }
+
+    pub(crate) fn is_composing(&self) -> bool {
+        self.focused_text()
+            .and_then(|text| text.edit.as_ref())
+            .is_some_and(|edit| edit.composition.is_some())
+    }
+
+    pub(crate) fn clipboard_target(&self) -> Option<ClipboardTarget> {
+        self.focused_text()?.edit.as_ref()?;
+        (!self.is_composing()).then(|| ClipboardTarget(self.clipboard_target.clone()))
+    }
+
+    pub(crate) fn clipboard_selection(
+        &mut self,
+        system: &mut TextSystem,
+    ) -> Option<(ClipboardTarget, String)> {
+        let target = self.clipboard_target()?;
+        let text = self.elements.get_mut(self.focused?)?.spec.text.as_mut()?;
+        let edit = text.edit.as_ref()?;
+        let layout = ensure(
+            &mut text.layout,
+            &text.content,
+            &text.style,
+            text.wrap_width,
+            system,
+        );
+        let range = edit.current(layout, &text.content).range();
+        (!range.is_empty()).then(|| (target, text.content[range].to_owned()))
+    }
+
+    pub(crate) fn clipboard_edit(
+        &mut self,
+        target: &ClipboardTarget,
+        op: EditOp,
+        system: &mut TextSystem,
+    ) -> bool {
+        if let Some(id) = self.focused
+            && Rc::ptr_eq(&self.clipboard_target, &target.0)
+        {
+            self.edit(id, op, system);
+            true
+        } else {
+            false
         }
     }
 

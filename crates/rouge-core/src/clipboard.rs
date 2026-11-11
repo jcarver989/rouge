@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub struct ClipboardTarget(pub(crate) Rc<()>);
+
 pub trait Clipboard {
     fn read(&mut self) -> Option<String>;
     fn write(&mut self, text: &str);

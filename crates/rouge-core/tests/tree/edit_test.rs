@@ -146,6 +146,34 @@ fn multiline_takes_newlines_and_moves_between_lines() {
     );
 }
 
+#[test]
+fn composition_enter_does_not_submit_and_host_blur_cancels_preedit() {
+    let _rt = Runtime::new().enter();
+    let value = signal(String::new());
+    let submitted = Rc::new(RefCell::new(Vec::new()));
+    let mut ui = TestUi::new(|| {
+        let submitted = submitted.clone();
+        editable(value).on_submit(move |text| submitted.borrow_mut().push(text.to_owned()))
+    });
+    assert!(ui.focus_next(false));
+    ui.ime(ImeEvent::Preedit {
+        text: "に".into(),
+        cursor: None,
+    });
+    ui.press(Key::Enter);
+    assert!(submitted.borrow().is_empty());
+    ui.ime(ImeEvent::Commit("日本".into()));
+    ui.press(Key::Enter);
+    assert_eq!(&*submitted.borrow(), &["日本"]);
+    ui.ime(ImeEvent::Preedit {
+        text: "語".into(),
+        cursor: None,
+    });
+    ui.clear_focus();
+    assert_eq!(value.get(), "日本");
+    assert!(!ui.accepts_text());
+}
+
 fn field(value: Signal<String>) -> TestUi {
     TestUiBuilder::default()
         .build(move || div().size_full().p(10.0).child(editable(value).w_full()))

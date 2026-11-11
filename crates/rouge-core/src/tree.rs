@@ -336,6 +336,7 @@ pub(crate) struct Tree {
     measured: Vec<ElementId>,
     overlay: Option<ElementId>,
     clipboard: Box<dyn Clipboard>,
+    clipboard_target: Rc<()>,
     keymap: Option<Keymap>,
 }
 
@@ -367,6 +368,7 @@ impl Tree {
             measured: Vec::new(),
             overlay: None,
             clipboard: Box::new(MemoryClipboard::new()),
+            clipboard_target: Rc::new(()),
             keymap: None,
         };
         tree.root = tree.create_element(ElementSpec {
@@ -719,6 +721,9 @@ impl Tree {
             && let Some(edit) = &mut text.edit
         {
             edit.clear_history();
+            if self.focused == Some(id) {
+                Rc::make_mut(&mut self.clipboard_target);
+            }
         }
         if dirty.needs_layout() {
             text.layout = None;
@@ -1080,6 +1085,7 @@ impl Tree {
         self.restore.retain(|(owner, _)| alive(owner));
         if self.focused.is_some_and(|focused| !alive(&focused)) {
             self.focused = None;
+            Rc::make_mut(&mut self.clipboard_target);
             self.set_focus(fallback, self.focus_visible);
         }
     }
@@ -1133,6 +1139,7 @@ impl Tree {
         (self.focused, self.focus_visible) = (target, visible);
         let mut calls: Vec<(Vec<Listener>, Option<Signal<bool>>, bool)> = Vec::new();
         if previous != target {
+            Rc::make_mut(&mut self.clipboard_target);
             for (id, on) in [(previous, false), (target, true)] {
                 let Some(element) = id.and_then(|id| self.elements.get(id)) else {
                     continue;
