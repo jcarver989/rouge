@@ -43,7 +43,9 @@ pub use style::{BoxShadow, Dirty, GroupStyles, Style, Styled};
 pub use theme::{Palette, Theme, provide_theme, use_theme};
 pub use tree::{ElementId, FrameStats, PaintRegion};
 pub use ui::{Frame, Ui, root_font_size, window_size};
-pub use view::{AnyView, Apply, BuildCx, Div, Text, View, div, rich_text, text};
+pub use view::{
+    AnyView, Apply, BuildCx, Div, FocusKind, Interactions, Text, View, div, rich_text, text,
+};
 
 pub use rouge_render::{
     Affine, BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Corners, Decay, Ease, Edges, Effect,

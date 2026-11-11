@@ -1,8 +1,5 @@
-use rouge_core::{
-    BoxShadow, Color, Cursor, Div, IntoProp, Key, KeyEvent, Style, Styled, Text, Theme,
-};
+use rouge_core::{BoxShadow, Color, Div, IntoProp, Key, KeyEvent, Style, Styled, Text, Theme};
 use rouge_reactive::Signal;
-use std::rc::Rc;
 
 pub(crate) fn ring(theme: Theme) -> impl Fn(Style) -> Style + 'static {
     move |style| {
@@ -41,16 +38,5 @@ pub(crate) fn activates(event: &KeyEvent) -> bool {
 }
 
 pub(crate) fn pressable(root: Div, theme: Theme, on_press: impl Fn() + 'static) -> Div {
-    let clicked = Rc::new(on_press);
-    let pressed = clicked.clone();
-    root.focusable()
-        .cursor(Cursor::Pointer)
-        .focus_visible(ring(theme))
-        .on_click(move |_| clicked())
-        .on_key_down(move |event| {
-            if activates(event) {
-                pressed();
-                event.stop_propagation();
-            }
-        })
+    root.focus_visible(ring(theme)).on_press(on_press)
 }

@@ -1,6 +1,7 @@
 use crate::canvas::TextHit;
 use crate::event::{
-    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers, PointerEvent, ScrollEvent,
+    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, Key, KeyEvent, Modifiers, PointerEvent,
+    ScrollEvent,
 };
 use crate::focus::FocusHandle;
 use crate::length::Length;
@@ -99,6 +100,29 @@ pub trait Apply: Sized {
 }
 
 impl<T> Apply for T {}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Interactions {
+    pub hovered: bool,
+    pub pressed: bool,
+    pub focus: Option<FocusKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusKind {
+    Pointer,
+    Keyboard,
+}
+
+impl Interactions {
+    pub fn focused(self) -> bool {
+        self.focus.is_some()
+    }
+
+    pub fn focus_visible(self) -> bool {
+        self.focus == Some(FocusKind::Keyboard)
+    }
+}
 
 #[derive(Default)]
 pub struct Div {
@@ -318,6 +342,57 @@ impl Div {
         scale: Scale;
         rotate: Rotate;
         opacity: Opacity;
+    }
+
+    pub fn on_press(self, f: impl Fn() + 'static) -> Self {
+        let clicked = Rc::new(f);
+        let pressed = clicked.clone();
+        self.focusable()
+            .cursor(Cursor::Pointer)
+            .on_click(move |event| {
+                event.stop_propagation();
+                clicked();
+            })
+            .on_key_down(move |event| {
+                if matches!(event.key, Key::Enter | Key::Space) {
+                    event.stop_propagation();
+                    pressed();
+                }
+            })
+    }
+
+    pub fn track_interaction(self, state: Signal<Interactions>) -> Self {
+        let change = move |f: fn(&mut Interactions, bool), value: bool| {
+            let mut next = state.get_untracked();
+            f(&mut next, value);
+            state.set_if_changed(next);
+        };
+        self.on_hover(move |inside| {
+            change(
+                |state, inside| {
+                    state.hovered = inside;
+                    state.pressed &= inside;
+                },
+                inside,
+            );
+        })
+        .on_pointer_down(move |_| change(|state, pressed| state.pressed = pressed, true))
+        .on_pointer_up(move |_| change(|state, pressed| state.pressed = pressed, false))
+        .on_focus(move |event| {
+            change(
+                |state, visible| {
+                    state.focus = Some(if visible {
+                        FocusKind::Keyboard
+                    } else {
+                        FocusKind::Pointer
+                    });
+                },
+                event.visible,
+            );
+        })
+        .on_blur(move |_| {
+            change(|state, _| state.focus = None, false);
+        })
     }
 
     pub fn enabled<U>(self, enabled: impl IntoProp<bool, U>) -> Self {
