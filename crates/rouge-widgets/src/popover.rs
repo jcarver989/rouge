@@ -19,19 +19,48 @@ pub enum Placement {
 
 impl Placement {
     pub(crate) fn place(self, panel: Div, anchor: Signal<Rect>) -> Div {
-        let (panel, window) = (panel.absolute(), window_size());
-        let left = move || anchor.get().origin.x;
-        let top = move || anchor.get().origin.y;
-        match self {
-            Placement::Below => panel.left(left).top(move || anchor.get().max().y + GAP),
-            Placement::Above => panel
-                .left(left)
-                .bottom(move || window.get().height - top() + GAP),
-            Placement::Right => panel.left(move || anchor.get().max().x + GAP).top(top),
-            Placement::Left => panel
-                .right(move || window.get().width - left() + GAP)
-                .top(top),
-        }
+        let window = window_size();
+        let measured = signal(Rect::ZERO);
+        let position = move || {
+            let anchor = anchor.get();
+            let size = measured.get().size;
+            let window = window.get();
+            let right = anchor.max().x + GAP;
+            let left = anchor.origin.x - size.width - GAP;
+            let below = anchor.max().y + GAP;
+            let above = anchor.origin.y - size.height - GAP;
+            let (x, y) = match self {
+                Self::Below if below + size.height > window.height && above >= 0.0 => {
+                    (anchor.origin.x, above)
+                }
+                Self::Above if above < 0.0 && below + size.height <= window.height => {
+                    (anchor.origin.x, below)
+                }
+                Self::Right if right + size.width > window.width && left >= 0.0 => {
+                    (left, anchor.origin.y)
+                }
+                Self::Left if left < 0.0 && right + size.width <= window.width => {
+                    (right, anchor.origin.y)
+                }
+                Self::Below => (anchor.origin.x, below),
+                Self::Above => (anchor.origin.x, above),
+                Self::Right => (right, anchor.origin.y),
+                Self::Left => (left, anchor.origin.y),
+            };
+            (
+                x.clamp(0.0, (window.width - size.width).max(0.0)),
+                y.clamp(0.0, (window.height - size.height).max(0.0)),
+            )
+        };
+        panel
+            .absolute()
+            .max_w(move || window.get().width)
+            .max_h(move || window.get().height)
+            .track_bounds(measured)
+            .left(0.0)
+            .top(0.0)
+            .translate_x(move || position().0)
+            .translate_y(move || position().1)
     }
 }
 
