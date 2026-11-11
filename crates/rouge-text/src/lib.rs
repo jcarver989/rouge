@@ -64,6 +64,7 @@ pub struct TextStyle {
     pub line_height: f32,
     pub align: TextAlign,
     pub wrap: bool,
+    pub tab_size: u8,
     pub spans: Vec<(Range<usize>, SpanStyle)>,
 }
 
@@ -77,6 +78,7 @@ impl Default for TextStyle {
             line_height: 1.4,
             align: TextAlign::Start,
             wrap: true,
+            tab_size: 4,
             spans: Vec::new(),
         }
     }
@@ -467,6 +469,35 @@ impl TextSystem {
     }
 
     fn shape(&mut self, text: &str, style: &TextStyle) -> TextLayout {
+        let tabbed = text.contains('\t');
+        let source = if tabbed {
+            Cow::Owned(text.replace('\t', " "))
+        } else {
+            Cow::Borrowed(text)
+        };
+        let mut layout = self.build(&source, style, &[]);
+        if tabbed {
+            layout.break_all_lines(None);
+            let stops = tab_stops(text, style.tab_size, |index| {
+                Cluster::from_byte_index(&layout, index).map_or(0.0, |cluster| cluster.advance())
+            });
+            layout = self.build(&source, style, &stops);
+        }
+        TextLayout {
+            layout,
+            align: style.align,
+            wrap: style.wrap,
+            len: text.len(),
+            broken_at: None,
+        }
+    }
+
+    fn build(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        stops: &[(usize, f32)],
+    ) -> Layout<SpanStyle> {
         let mut builder = self
             .layouts
             .ranged_builder(&mut self.fonts, text, 1.0, false);
@@ -520,13 +551,10 @@ impl TextSystem {
             }
             builder.push(StyleProperty::Brush(span), range);
         }
-        TextLayout {
-            layout: builder.build(text),
-            align: style.align,
-            wrap: style.wrap,
-            len: text.len(),
-            broken_at: None,
+        for &(index, spacing) in stops {
+            builder.push(StyleProperty::LetterSpacing(spacing), index..=index);
         }
+        builder.build(text)
     }
 
     pub fn rasterize(&mut self, glyph: &PositionedGlyph<'_>, key: &GlyphKey) -> Option<GlyphImage> {
@@ -568,6 +596,29 @@ impl TextSystem {
     }
 }
 
+fn tab_stops(text: &str, tab_size: u8, space: impl Fn(usize) -> f32) -> Vec<(usize, f32)> {
+    let tab_size = usize::from(tab_size);
+    let mut column = 0;
+    let mut stops = Vec::new();
+    for (index, c) in text.char_indices() {
+        match c {
+            '\n' => column = 0,
+            '\t' => {
+                let columns = if tab_size == 0 {
+                    0
+                } else {
+                    tab_size - column % tab_size
+                };
+                let advance = space(index);
+                stops.push((index, advance * columns as f32 - advance));
+                column += columns;
+            }
+            _ => column += 1,
+        }
+    }
+    stops
+}
+
 impl Eq for TextStyle {}
 
 impl Hash for TextStyle {
@@ -576,7 +627,7 @@ impl Hash for TextStyle {
         [self.size, self.weight, self.line_height]
             .map(f32::to_bits)
             .hash(state);
-        (self.italic, self.align, self.wrap).hash(state);
+        (self.italic, self.align, self.wrap, self.tab_size).hash(state);
         for (range, span) in &self.spans {
             range.hash(state);
             [span.color, span.background]

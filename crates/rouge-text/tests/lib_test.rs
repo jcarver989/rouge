@@ -217,6 +217,86 @@ fn overlapping_spans_compose_per_field_and_later_values_win() {
     assert_eq!(seen[4].background, None);
 }
 
+#[test]
+fn tabs_render_as_blank_space() {
+    let mut text = TextSystem::new();
+    for style in [style(16.0), monospace()] {
+        let mut layout = text.layout("\tx", &style);
+        layout.break_lines(None);
+        let mut glyphs = Vec::new();
+        let mut images = 0;
+        layout.for_each_glyph(|glyph| {
+            glyphs.push(glyph.glyph_id);
+            let (key, _, _) = glyph.snap((0.0, 0.0), 1.0);
+            images += usize::from(text.rasterize(&glyph, &key).is_some());
+        });
+        assert_eq!(glyphs.len(), 2);
+        assert!(
+            !glyphs.contains(&0),
+            "{} draws no notdef glyph, got {glyphs:?}",
+            style.family
+        );
+        assert_eq!(images, 1, "{} only draws the x", style.family);
+    }
+}
+
+#[test]
+fn tabs_advance_to_the_next_tab_stop() {
+    let mut text = TextSystem::new();
+    for (tabbed, spaced) in [
+        ("\tx", "    x"),
+        ("ab\tx", "ab  x"),
+        ("abcd\tx", "abcd    x"),
+        ("a\t\tx", "a       x"),
+        ("abcdef\nab\tx", "abcdef\nab  x"),
+    ] {
+        let tabbed_x = last_glyph_x(&mut text, tabbed, &monospace());
+        let spaced_x = last_glyph_x(&mut text, spaced, &monospace());
+        assert!(
+            (tabbed_x - spaced_x).abs() < 0.01,
+            "{tabbed:?} places x at {tabbed_x}, {spaced:?} at {spaced_x}"
+        );
+    }
+    let two = TextStyle {
+        tab_size: 2,
+        ..monospace()
+    };
+    let tabbed_x = last_glyph_x(&mut text, "a\tx", &two);
+    let spaced_x = last_glyph_x(&mut text, "a x", &two);
+    assert!((tabbed_x - spaced_x).abs() < 0.01);
+}
+
+#[test]
+fn tabs_keep_byte_offsets_for_hit_testing_and_selection() {
+    let mut text = TextSystem::new();
+    let mut tabbed = text.layout("\tx = 1", &monospace());
+    tabbed.break_lines(None);
+    let mut spaced = text.layout("    x = 1", &monospace());
+    spaced.break_lines(None);
+    let (width, height) = spaced.size();
+    assert!((tabbed.size().0 - width).abs() < 0.01);
+
+    let column = width / 9.0;
+    let y = height / 2.0;
+    assert_eq!(tabbed.index_at(column * 4.5, y), Some(1));
+    assert_eq!(tabbed.index_at(column * 6.5, y), Some(3));
+    assert_eq!(tabbed.index_at(column * 2.0, y), Some(0));
+
+    let caret = tabbed.caret(tabbed.select(1, 1), 1.0);
+    assert!((caret.x - spaced.caret(spaced.select(4, 4), 1.0).x).abs() < 0.01);
+    let tab = tabbed.selection_rects(tabbed.select(0, 1));
+    assert_eq!(tab.len(), 1);
+    assert!((tab[0].width - column * 4.0).abs() < 0.01);
+    let right = tabbed.move_selection(tabbed.select(0, 0), Movement::Right, false);
+    assert_eq!(right.focus(), 1);
+    assert_eq!(
+        tabbed
+            .select_at(column * 6.5, y, Granularity::Caret)
+            .focus(),
+        3
+    );
+}
+
 fn style(size: f32) -> TextStyle {
     TextStyle {
         size,
@@ -228,4 +308,21 @@ fn shaped(content: &str, max_width: Option<f32>) -> TextLayout {
     let mut layout = TextSystem::new().layout(content, &style(16.0));
     layout.break_lines(max_width);
     layout
+}
+
+fn monospace() -> TextStyle {
+    TextStyle {
+        family: "monospace".into(),
+        size: 16.0,
+        wrap: false,
+        ..Default::default()
+    }
+}
+
+fn last_glyph_x(text: &mut TextSystem, content: &str, style: &TextStyle) -> f32 {
+    let mut layout = text.layout(content, style);
+    layout.break_lines(None);
+    let mut x = 0.0;
+    layout.for_each_glyph(|glyph| x = glyph.x);
+    x
 }
