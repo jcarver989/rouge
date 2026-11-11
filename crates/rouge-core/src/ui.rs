@@ -250,7 +250,8 @@ impl Ui {
             changed = true;
             self.tree();
             if relayout && self.pointer.is_some() {
-                self.tree.set_pointer(&self.compositor, self.pointer);
+                self.tree
+                    .set_pointer(&self.compositor, self.pointer, self.modifiers);
             }
         }
         self.last_tick = self.compositor.is_animating().then_some(now);
@@ -298,7 +299,8 @@ impl Ui {
 
     fn refresh_pointer(&mut self) {
         self.tree();
-        self.tree.set_pointer(&self.compositor, self.pointer);
+        self.tree
+            .set_pointer(&self.compositor, self.pointer, self.modifiers);
     }
 
     pub fn pointer_moved(&mut self, position: Point) {
@@ -329,7 +331,10 @@ impl Ui {
     }
 
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
-        self.modifiers = modifiers;
+        if self.modifiers != modifiers {
+            self.modifiers = modifiers;
+            self.refresh_pointer();
+        }
     }
 
     pub fn cursor(&mut self) -> Cursor {
@@ -399,7 +404,7 @@ impl Ui {
     }
 
     fn key_event(&mut self, event: &KeyEvent, on: On) -> bool {
-        self.modifiers = event.modifiers;
+        self.set_modifiers(event.modifiers);
         self.emit_focused(on, Event::Key(event));
         event.stopped.get()
     }
@@ -573,7 +578,8 @@ impl Ui {
     fn dispatch(&mut self, path: &[ElementId], on: On, position: Point, button: PointerButton) {
         self.tree();
         if on == On::Click {
-            self.tree.range_click(&self.compositor, path, position);
+            self.tree
+                .range_click(&self.compositor, path, position, self.modifiers);
         }
         let listeners = self.tree().listeners(path, on);
         let mut event = PointerEvent::new(position, button);

@@ -1,5 +1,5 @@
 use crate::event::{
-    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, PointerEvent, ScrollEvent,
+    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers, PointerEvent, ScrollEvent,
 };
 use crate::focus::FocusHandle;
 use crate::length::Length;
@@ -448,12 +448,26 @@ impl Text {
         self.text_prop(spans, Dirty::Layout, |text, spans| text.style.spans = spans)
     }
 
-    pub fn on_range_hover(mut self, f: impl Fn(Option<usize>) + 'static) -> Self {
+    pub fn on_range_hover(self, f: impl Fn(Option<usize>) + 'static) -> Self {
+        self.on_range_hover_with_modifiers(move |index, _| f(index))
+    }
+
+    pub fn on_range_hover_with_modifiers(
+        mut self,
+        f: impl Fn(Option<usize>, Modifiers) + 'static,
+    ) -> Self {
         self.0.spec.range_hover = Some(Rc::new(f));
         self
     }
 
-    pub fn on_range_click(mut self, f: impl Fn(Option<usize>) + 'static) -> Self {
+    pub fn on_range_click(self, f: impl Fn(Option<usize>) + 'static) -> Self {
+        self.on_range_click_with_modifiers(move |index, _| f(index))
+    }
+
+    pub fn on_range_click_with_modifiers(
+        mut self,
+        f: impl Fn(Option<usize>, Modifiers) + 'static,
+    ) -> Self {
         self.0.spec.range_click = Some(Rc::new(f));
         self
     }

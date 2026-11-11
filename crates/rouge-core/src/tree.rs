@@ -1,7 +1,7 @@
 use crate::canvas::PaintOp;
 use crate::clipboard::{Clipboard, MemoryClipboard};
 use crate::event::{
-    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, PointerEvent, ScrollEvent,
+    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers, PointerEvent, ScrollEvent,
 };
 use crate::image::{Fit, ImageSpec};
 use crate::keymap::Keymap;
@@ -28,6 +28,8 @@ use taffy::{
 use zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
 
 pub(crate) mod edit;
+
+type RangeListener = Rc<dyn Fn(Option<usize>, Modifiers)>;
 
 new_key_type! {
     pub struct ElementId;
@@ -222,8 +224,8 @@ pub(crate) struct ElementSpec {
     pub group: Option<String>,
     pub test_id: Option<String>,
     pub text: Option<TextData>,
-    pub range_hover: Option<Rc<dyn Fn(Option<usize>)>>,
-    pub range_click: Option<Rc<dyn Fn(Option<usize>)>>,
+    pub range_hover: Option<RangeListener>,
+    pub range_click: Option<RangeListener>,
     pub style: Style,
     pub variants: [Option<Variant>; STATES],
     pub listeners: [Vec<Listener>; EVENTS],
@@ -1416,11 +1418,17 @@ impl Tree {
         text.layout.as_ref()?.index_at(point.x, point.y)
     }
 
-    pub(crate) fn range_click(&self, compositor: &Compositor, path: &[ElementId], point: Point) {
+    pub(crate) fn range_click(
+        &self,
+        compositor: &Compositor,
+        path: &[ElementId],
+        point: Point,
+        modifiers: Modifiers,
+    ) {
         batch(|| {
             for id in path.iter().rev() {
                 if let Some(callback) = &self.elements[*id].spec.range_click {
-                    callback(self.text_index(compositor, *id, point));
+                    callback(self.text_index(compositor, *id, point), modifiers);
                 }
             }
         });
@@ -1725,7 +1733,12 @@ impl Tree {
         false
     }
 
-    pub(crate) fn set_pointer(&mut self, compositor: &Compositor, point: Option<Point>) {
+    pub(crate) fn set_pointer(
+        &mut self,
+        compositor: &Compositor,
+        point: Option<Point>,
+        modifiers: Modifiers,
+    ) {
         if self.capture.is_some() {
             return;
         }
@@ -1735,13 +1748,13 @@ impl Tree {
         batch(|| {
             for id in self.hover_path.iter().filter(|id| !path.contains(id)) {
                 if let Some(callback) = &self.elements[*id].spec.range_hover {
-                    callback(None);
+                    callback(None, modifiers);
                 }
             }
             if let Some(point) = point {
                 for id in &path {
                     if let Some(callback) = &self.elements[*id].spec.range_hover {
-                        callback(self.text_index(compositor, *id, point));
+                        callback(self.text_index(compositor, *id, point), modifiers);
                     }
                 }
             }
