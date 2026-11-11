@@ -1,5 +1,6 @@
 mod app;
 pub mod platform;
+mod profile;
 
 pub use app::{App, AppError, WindowOptions};
 pub use rouge_core as core;

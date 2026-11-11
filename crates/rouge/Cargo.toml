@@ -22,6 +22,9 @@ thiserror.workspace = true
 tokio.workspace = true
 arboard.workspace = true
 rouge-widgets.workspace = true
+tracing.workspace = true
+tracing-chrome = "0.7"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 
 [lints]
 workspace = true

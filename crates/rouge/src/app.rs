@@ -2,6 +2,7 @@ use crate::platform::{
     appearance as platform_appearance, cursor_icon, logical_point, logical_size, modifiers,
     named_key, pointer_button, scroll_delta, window_commands,
 };
+use crate::profile::{Profile, present_mode, trace};
 use arboard::Clipboard as SystemClipboard;
 use pollster::block_on;
 use rouge_core::{
@@ -16,6 +17,8 @@ use std::env::var;
 use std::mem::take;
 use std::sync::Arc;
 use thiserror::Error;
+use tracing::trace_span;
+use tracing_chrome::FlushGuard;
 use wgpu::{
     CreateSurfaceError, CurrentSurfaceTexture, Instance, InstanceDescriptor, PresentMode, Surface,
     SurfaceConfiguration, TextureViewDescriptor,
@@ -165,6 +168,7 @@ impl App {
         let mut runner = Runner {
             #[cfg(target_os = "macos")]
             native_menus,
+            _trace: trace(),
             pending: self.windows,
             menus: self.menus,
             fonts: self.fonts,
@@ -182,6 +186,7 @@ impl App {
 struct Runner {
     #[cfg(target_os = "macos")]
     native_menus: crate::platform::native_menu::NativeMenus,
+    _trace: Option<FlushGuard>,
     pending: Vec<(WindowOptions, RootFn)>,
     menus: Vec<Menu>,
     fonts: Vec<Vec<u8>>,
@@ -204,6 +209,7 @@ struct WindowState {
     modifiers: Modifiers,
     cursor: Cursor,
     ime: bool,
+    profile: Option<Profile>,
 }
 
 struct SystemClipboardAdapter(Option<SystemClipboard>);
@@ -240,7 +246,9 @@ impl WindowState {
         let window = Arc::new(event_loop.create_window(attributes)?);
 
         let display = Box::new(event_loop.owned_display_handle());
-        let instance = Instance::new(InstanceDescriptor::new_with_display_handle(display));
+        let instance = Instance::new(InstanceDescriptor::new_with_display_handle_from_env(
+            display,
+        ));
         let surface = instance.create_surface(window.clone())?;
         let gpu = block_on(Gpu::new(instance, Some(&surface)))?;
 
@@ -254,6 +262,16 @@ impl WindowState {
         let format = linear.unwrap_or(config.format);
         config.format = format;
         config.present_mode = PresentMode::AutoVsync;
+        if let Some(mode) = present_mode() {
+            let supported = surface.get_capabilities(&gpu.adapter).present_modes;
+            if supported.contains(&mode)
+                || matches!(mode, PresentMode::AutoVsync | PresentMode::AutoNoVsync)
+            {
+                config.present_mode = mode;
+            } else {
+                eprintln!("rouge: present mode {mode:?} is not supported here ({supported:?})");
+            }
+        }
         surface.configure(&gpu.device, &config);
 
         let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
@@ -275,6 +293,14 @@ impl WindowState {
         ui.set_appearance(platform_appearance(window.theme()));
         ui.set_scale(scale);
         ui.set_clipboard(SystemClipboardAdapter(SystemClipboard::new().ok()));
+        let environment = format!(
+            "{:?}\n{:?} {}x{} at scale {scale}",
+            gpu.adapter.get_info(),
+            config.present_mode,
+            config.width,
+            config.height,
+        );
+        let profile = Profile::from_env(&mut ui, environment);
         Ok(WindowState {
             window,
             surface,
@@ -289,6 +315,7 @@ impl WindowState {
             modifiers: Modifiers::NONE,
             cursor: Cursor::Default,
             ime: false,
+            profile,
         })
     }
 
@@ -355,8 +382,19 @@ impl WindowState {
     }
 
     fn redraw(&mut self) {
+        if let Some(profile) = &mut self.profile {
+            let size = logical_size(self.window.inner_size(), self.ui.scale());
+            profile.before_update(
+                &mut self.ui,
+                Point::new(size.width / 2.0, size.height / 2.0),
+            );
+        }
         self.ui.update();
-        let frame = match self.surface.get_current_texture() {
+        let acquired = {
+            let _acquire = trace_span!("acquire").entered();
+            self.surface.get_current_texture()
+        };
+        let frame = match acquired {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
                 frame
             }
@@ -374,16 +412,33 @@ impl WindowState {
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
         let viewport = Viewport::new(self.config.width, self.config.height, self.ui.scale());
         let ui_frame = self.ui.frame();
-        self.renderer.render(
-            &view,
-            viewport,
-            self.background,
-            &ui_frame.scene,
-            ui_frame.atlas,
-        );
-        self.window.pre_present_notify();
-        self.gpu.queue.present(frame);
+        {
+            let _encode = trace_span!("encode").entered();
+            self.renderer.render(
+                &view,
+                viewport,
+                self.background,
+                &ui_frame.scene,
+                ui_frame.atlas,
+            );
+        }
+        {
+            let _present = trace_span!("present").entered();
+            self.window.pre_present_notify();
+            self.gpu.queue.present(frame);
+        }
+        if let Some(profile) = &mut self.profile {
+            profile.after_frame(&mut self.ui);
+        }
         self.frames += 1;
+    }
+}
+
+impl Drop for WindowState {
+    fn drop(&mut self) {
+        if let Some(profile) = &self.profile {
+            eprintln!("{}", profile.summary());
+        }
     }
 }
 
@@ -404,8 +459,16 @@ impl ApplicationHandler for Runner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let open = self.windows.len();
+        self.windows
+            .retain(|_, state| !state.profile.as_ref().is_some_and(Profile::finished));
+        if open > 0 && self.windows.is_empty() {
+            event_loop.exit();
+            return;
+        }
         for state in self.windows.values_mut() {
-            if !state.occluded && state.ui.needs_frame() {
+            let bench = state.profile.as_ref().is_some_and(Profile::wants_frames);
+            if !state.occluded && (state.ui.needs_frame() || bench) {
                 state.window.request_redraw();
             }
         }
@@ -432,6 +495,7 @@ impl ApplicationHandler for Runner {
         let Some(state) = self.windows.get_mut(&id) else {
             return;
         };
+        let _event = trace_span!("event", ?event).entered();
         match event {
             WindowEvent::CloseRequested => {
                 self.windows.remove(&id);
