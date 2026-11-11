@@ -708,6 +708,9 @@ impl Compositor {
 
     fn unlink(&mut self, id: LayerId) -> Option<Layer> {
         let layer = self.layers.remove(&id)?;
+        if layer.animating {
+            self.animating.retain(|animated| *animated != id);
+        }
         if let Some(parent) = layer.parent.and_then(|parent| self.layers.get_mut(&parent)) {
             parent.orphans.retain(|orphan| *orphan != id);
         }
