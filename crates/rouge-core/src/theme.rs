@@ -1,37 +1,53 @@
-use rouge_reactive::{Signal, batch, expect_context, provide_context, signal};
 use rouge_render::Color;
 
+#[macro_export]
 macro_rules! theme {
-    ($($name:ident: $ty:ty,)*) => {
+    ($vis:vis struct $theme:ident from $palette:ident { $($name:ident: $ty:ty,)* }) => {
         #[derive(Clone, Copy, Debug, PartialEq)]
-        pub struct Palette {
+        $vis struct $palette {
             $(pub $name: $ty,)*
         }
 
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub struct Theme {
-            $(pub $name: Signal<$ty>,)*
+        $vis struct $theme {
+            $(pub $name: $crate::__private::Signal<$ty>,)*
         }
 
-        impl Theme {
-            pub fn new(palette: Palette) -> Theme {
-                Theme { $($name: signal(palette.$name),)* }
+        impl $theme {
+            pub fn new(palette: $palette) -> $theme {
+                $theme { $($name: $crate::__private::signal(palette.$name),)* }
             }
 
-            pub fn set(&self, palette: Palette) {
-                batch(|| {
+            pub fn provide(palette: $palette) -> $theme {
+                let theme = $theme::new(palette);
+                $crate::__private::provide_context(theme);
+                theme
+            }
+
+            #[track_caller]
+            pub fn current() -> $theme {
+                $crate::__private::expect_context::<$theme>()
+            }
+
+            pub fn set(&self, palette: $palette) {
+                $crate::__private::batch(|| {
                     $(self.$name.set_if_changed(palette.$name);)*
                 });
             }
 
-            pub fn palette(&self) -> Palette {
-                Palette { $($name: self.$name.get_untracked(),)* }
+            pub fn get(&self) -> $palette {
+                $palette { $($name: self.$name.get(),)* }
+            }
+
+            pub fn palette(&self) -> $palette {
+                $palette { $($name: self.$name.get_untracked(),)* }
             }
         }
     };
 }
 
 theme! {
+    pub struct Theme from Palette {
     background: Color,
     surface: Color,
     text: Color,
@@ -47,6 +63,7 @@ theme! {
     radius: f32,
     text_size: f32,
     spacing: f32,
+    }
 }
 
 impl Palette {
@@ -96,12 +113,10 @@ impl Default for Palette {
 }
 
 pub fn provide_theme(palette: Palette) -> Theme {
-    let theme = Theme::new(palette);
-    provide_context(theme);
-    theme
+    Theme::provide(palette)
 }
 
 #[track_caller]
 pub fn use_theme() -> Theme {
-    expect_context::<Theme>()
+    Theme::current()
 }

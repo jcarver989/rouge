@@ -39,13 +39,18 @@ pub use scroll::{
     Align, RowHeight, RowKey, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
     virtual_list_handle,
 };
-pub use style::{BoxShadow, Dirty, GroupStyles, Style, Styled};
+pub use style::{BoxShadow, Dirty, GroupStyles, Style, Styled, Typography};
 pub use theme::{Palette, Theme, provide_theme, use_theme};
 pub use tree::{ElementId, FrameStats, PaintRegion};
 pub use ui::{Frame, Ui, root_font_size, window_size};
 pub use view::{
     AnyView, Apply, BuildCx, Div, FocusKind, Interactions, Text, View, div, rich_text, text,
 };
+
+#[doc(hidden)]
+pub mod __private {
+    pub use rouge_reactive::{Signal, batch, expect_context, provide_context, signal};
+}
 
 pub use rouge_render::{
     Affine, BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Corners, Decay, Ease, Edges, Effect,

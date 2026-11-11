@@ -362,6 +362,18 @@ pub trait Styled: Sized {
         self
     }
 
+    fn typography(self, typography: impl Into<Typography>) -> Self {
+        let typography = typography.into();
+        let styled = self
+            .text_size(typography.size)
+            .line_height(typography.line_height)
+            .font_weight(typography.weight);
+        match typography.font {
+            Some(font) => styled.font(font),
+            None => styled,
+        }
+    }
+
     fn italic(self) -> Self {
         self.prop(true, Dirty::Layout, |style, value| {
             style.text_italic = Some(value);
@@ -418,4 +430,29 @@ impl Styled for Style {
         }
         self
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Typography {
+    pub font: Option<&'static str>,
+    pub size: f32,
+    pub line_height: f32,
+    pub weight: f32,
+}
+
+#[macro_export]
+macro_rules! styles {
+    ($vis:vis trait $name:ident { $($style:ident($target:ident) => $body:expr;)* }) => {
+        $vis trait $name: $crate::Styled {
+            $(
+                #[track_caller]
+                fn $style(self) -> Self {
+                    let $target = self;
+                    $body
+                }
+            )*
+        }
+
+        impl<T: $crate::Styled> $name for T {}
+    };
 }
