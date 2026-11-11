@@ -472,6 +472,10 @@ impl Tree {
         self.clipboard = clipboard;
     }
 
+    pub(crate) fn copy_text(&mut self, text: &str) {
+        self.clipboard.write(text);
+    }
+
     pub(crate) fn caret_area(&self, compositor: &Compositor) -> Option<Rect> {
         let id = self.focused?;
         let element = self.elements.get(id)?;

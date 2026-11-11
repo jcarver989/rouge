@@ -1,5 +1,5 @@
-use rouge_core::testing::TestUi;
-use rouge_core::{Clipboard, EditAction, MemoryClipboard, editable};
+use rouge_core::testing::{TestUi, TestUiBuilder};
+use rouge_core::{Clipboard, EditAction, MemoryClipboard, div, editable, window_handle};
 use rouge_reactive::{Runtime, signal};
 
 #[test]
@@ -11,6 +11,17 @@ fn a_memory_clipboard_shares_its_text_between_clones() {
     assert_eq!(clipboard.text().as_deref(), Some("copied"));
     clipboard.set_text("replaced");
     assert_eq!(handle.read().as_deref(), Some("replaced"));
+}
+
+#[test]
+fn copied_text_reaches_the_clipboard_without_the_host() {
+    let _rt = Runtime::new().enter();
+    let clipboard = MemoryClipboard::new();
+    let (mut ui, window) = TestUiBuilder::default().build_with(|| (div(), window_handle()));
+    ui.set_clipboard(clipboard.clone());
+    window.copy_text("review");
+    assert!(ui.take_window_commands().is_empty());
+    assert_eq!(clipboard.text().as_deref(), Some("review"));
 }
 
 #[test]

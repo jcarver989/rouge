@@ -10,7 +10,7 @@ use crate::theme::{Palette, provide_theme};
 use crate::tree::edit::EditOp;
 use crate::tree::{ActionHandler, ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
 use crate::view::{BuildCx, Patch, Patches, View, send};
-use crate::window::{Appearance, WindowCommand, WindowHandle};
+use crate::window::{Appearance, Sent, WindowCommand, WindowHandle};
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, effect, expect_context, poll_tasks, provide_context, signal,
 };
@@ -68,7 +68,7 @@ impl Drag {
 }
 
 pub struct Ui {
-    window_commands: UnboundedReceiver<WindowCommand>,
+    window_commands: UnboundedReceiver<Sent>,
     window_handle: WindowHandle,
     tree: Tree,
     compositor: Compositor,
@@ -196,8 +196,11 @@ impl Ui {
     pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
         poll_tasks();
         let mut commands = Vec::new();
-        while let Ok(command) = self.window_commands.try_recv() {
-            commands.push(command);
+        while let Ok(sent) = self.window_commands.try_recv() {
+            match sent {
+                Sent::Window(command) => commands.push(command),
+                Sent::Copy(text) => self.tree.copy_text(&text),
+            }
         }
         commands
     }

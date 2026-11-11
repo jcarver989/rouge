@@ -170,9 +170,14 @@ pub enum WindowCommand {
     Menu(MenuItem),
 }
 
+pub(crate) enum Sent {
+    Window(WindowCommand),
+    Copy(String),
+}
+
 #[derive(Clone, Copy)]
 pub struct WindowHandle {
-    pub(crate) commands: Signal<UnboundedSender<WindowCommand>>,
+    pub(crate) commands: Signal<UnboundedSender<Sent>>,
     pub(crate) title: Signal<String>,
     pub(crate) appearance: Signal<Appearance>,
 }
@@ -187,6 +192,10 @@ pub fn appearance() -> ReadSignal<Appearance> {
 
 impl WindowHandle {
     fn send(self, command: WindowCommand) {
+        self.post(Sent::Window(command));
+    }
+
+    fn post(self, command: Sent) {
         if self.commands.is_alive() {
             self.commands.with_untracked(|commands| {
                 let _ = commands.send(command);
@@ -227,5 +236,9 @@ impl WindowHandle {
     }
     pub fn dispatch_menu_item(self, item: MenuItem) {
         self.send(WindowCommand::Menu(item));
+    }
+
+    pub fn copy_text(self, text: impl Into<String>) {
+        self.post(Sent::Copy(text.into()));
     }
 }
