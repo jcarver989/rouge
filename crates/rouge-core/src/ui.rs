@@ -526,14 +526,31 @@ impl Ui {
         }
     }
 
-    pub fn scroll(&mut self, delta: Point) {
-        let by = Point::ZERO - delta;
-        if self.scroll_event(delta)
-            && let Some(layer) = self.scroll_target(by, false)
-        {
-            self.tree.scroll_command(layer, LayerCommand::ScrollBy(by));
+    pub fn pointer_cancel(&mut self) {
+        self.held = None;
+        if let (Some(drag), Some(position)) = (self.drag.take().filter(|drag| drag.started), self.pointer) {
+            self.drag_event(&drag, DragPhase::End, position);
         }
+        self.tree.release_capture();
+        self.tree.release();
+        self.pointer_left();
+    }
+
+    pub fn scroll(&mut self, delta: Point) -> bool {
+        if self.pointer.is_none() {
+            return false;
+        }
+        let by = Point::ZERO - delta;
+        let handled = if !self.scroll_event(delta) {
+            true
+        } else if let Some(layer) = self.scroll_target(by, false) {
+            self.tree.scroll_command(layer, LayerCommand::ScrollBy(by));
+            true
+        } else {
+            false
+        };
         self.refresh_pointer();
+        handled
     }
 
     pub fn scroll_drag(&mut self, delta: Point) {

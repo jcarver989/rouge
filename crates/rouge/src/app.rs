@@ -344,7 +344,7 @@ impl WindowState {
         self.tracking |= phase == TouchPhase::Started;
         match (delta, self.tracking) {
             (MouseScrollDelta::PixelDelta(_), true) => self.ui.scroll_drag(by),
-            _ => self.ui.scroll(by),
+            _ => { self.ui.scroll(by); }
         }
         if ended && self.tracking {
             self.tracking = false;
