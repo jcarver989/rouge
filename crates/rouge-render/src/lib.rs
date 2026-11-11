@@ -18,7 +18,7 @@ pub use atlas::{Atlas, AtlasRect};
 pub use color::Color;
 pub use compositor::{
     Command, Commit, Compositor, Content, EffectSlot, LayerCommand, LayerId, LayerPose,
-    MotionCommand, MotionId, Nested, ScrollState,
+    MotionCommand, MotionId, Nested, ScrollLinked, ScrollState,
 };
 pub use effect::{
     BackdropBlur, BlendMode, Blur, ColorMatrix, Effect, EffectDraw, EffectInstance, Glass, Inputs,

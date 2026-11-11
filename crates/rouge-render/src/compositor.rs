@@ -90,7 +90,42 @@ pub struct Content {
     pub nested: Vec<Nested>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScrollLinked {
+    Sticky {
+        lo: f32,
+        hi: f32,
+    },
+    Linear {
+        factor: f32,
+        max: f32,
+        horizontal: bool,
+    },
+}
+
+impl ScrollLinked {
+    fn offset(self, scroll: Point) -> (f32, f32) {
+        match self {
+            ScrollLinked::Sticky { lo, hi } => (0.0, scroll.y.clamp(lo, hi.max(lo)) - scroll.y),
+            ScrollLinked::Linear {
+                factor,
+                max,
+                horizontal,
+            } => {
+                let along = |offset: f32| (offset * factor).clamp(0.0, max.max(0.0));
+                if horizontal {
+                    (along(scroll.x), 0.0)
+                } else {
+                    (0.0, along(scroll.y))
+                }
+            }
+        }
+    }
+}
+
 pub enum LayerCommand {
+    ScrollSource(u64),
+    ScrollLink(Option<(u64, ScrollLinked)>),
     Set {
         prop: LayerProp,
         value: f32,
@@ -247,6 +282,8 @@ struct Layer {
     effects: BTreeMap<EffectSlot, Applied>,
     rasterize: bool,
     scroll: Option<ScrollState>,
+    source: Option<u64>,
+    link: Option<(u64, ScrollLinked)>,
     fling: [Animated; 2],
     lists: Vec<DrawList>,
     nested: Vec<Nested>,
@@ -268,6 +305,8 @@ impl Default for Layer {
             effects: BTreeMap::new(),
             rasterize: false,
             scroll: None,
+            source: None,
+            link: None,
             fling: [Animated::new(0.0); 2],
             lists: Vec::new(),
             nested: Vec::new(),
@@ -474,6 +513,7 @@ pub struct Compositor {
     root: Option<LayerId>,
     animating: Vec<LayerId>,
     moving: Vec<MotionId>,
+    sources: HashMap<u64, LayerId>,
     empty: DrawList,
 }
 
@@ -491,7 +531,23 @@ impl Compositor {
     }
 
     pub fn pose(&self, id: LayerId) -> Option<LayerPose> {
-        self.layers.get(&id).map(|layer| layer.pose(&self.motions))
+        self.layers.get(&id).map(|layer| self.linked_pose(layer))
+    }
+
+    fn linked_pose(&self, layer: &Layer) -> LayerPose {
+        let mut pose = layer.pose(&self.motions);
+        if let Some((key, link)) = layer.link
+            && let Some(scroll) = self
+                .sources
+                .get(&key)
+                .and_then(|source| self.layers.get(source))
+                .and_then(|source| source.scroll)
+        {
+            let (x, y) = link.offset(scroll.offset);
+            pose.translate.x += x;
+            pose.translate.y += y;
+        }
+        pose
     }
 
     pub fn scroll(&self, id: LayerId) -> Option<ScrollState> {
@@ -521,6 +577,7 @@ impl Compositor {
             layers,
             motions,
             animating,
+            sources,
             ..
         } = self;
         let Some(layer) = layers.get_mut(&id) else {
@@ -568,6 +625,11 @@ impl Compositor {
                 }
             }
             LayerCommand::Rasterize(rasterize) => layer.rasterize = rasterize,
+            LayerCommand::ScrollSource(key) => {
+                layer.source = Some(key);
+                sources.insert(key, id);
+            }
+            LayerCommand::ScrollLink(link) => layer.link = link,
             LayerCommand::Frame(frame) => {
                 if let (Some(old), Some(transition)) = (layer.frame, layer.layout_transition) {
                     let moved = old.origin - frame.origin;
@@ -717,6 +779,11 @@ impl Compositor {
         if self.root == Some(id) {
             self.root = None;
         }
+        if let Some(key) = layer.source
+            && self.sources.get(&key) == Some(&id)
+        {
+            self.sources.remove(&key);
+        }
         Some(layer)
     }
 
@@ -803,7 +870,7 @@ impl Compositor {
         let Some(layer) = self.layers.get(&id) else {
             return;
         };
-        let pose = layer.pose(&self.motions);
+        let pose = self.linked_pose(layer);
         if pose.opacity <= 0.0 {
             return;
         }
