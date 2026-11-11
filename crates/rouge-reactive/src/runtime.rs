@@ -1,4 +1,5 @@
 use crate::task::Executor;
+use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
@@ -29,9 +30,11 @@ struct Node {
     value: Option<Value>,
     compute: Option<Compute>,
     sources: Vec<NodeId>,
-    subscribers: Vec<NodeId>,
+    previous: Vec<NodeId>,
+    computing: bool,
+    subscribers: IndexSet<NodeId>,
     owner: Option<NodeId>,
-    children: Vec<NodeId>,
+    children: IndexSet<NodeId>,
     cleanups: Vec<Box<dyn FnOnce()>>,
     contexts: HashMap<TypeId, Rc<dyn Any>>,
 }
@@ -165,7 +168,7 @@ impl Graph {
             ..Default::default()
         });
         if let Some(owner) = owner {
-            nodes[owner].children.push(id);
+            nodes[owner].children.insert(id);
         }
         id
     }
@@ -211,9 +214,9 @@ impl Graph {
         let node = {
             let mut nodes = self.nodes.borrow_mut();
             let Some(node) = nodes.remove(id) else { return };
-            for source in &node.sources {
+            for source in node.sources.iter().chain(&node.previous) {
                 if let Some(s) = nodes.get_mut(*source) {
-                    s.subscribers.retain(|x| *x != id);
+                    s.subscribers.swap_remove(&id);
                 }
             }
             for sub in &node.subscribers {
@@ -222,7 +225,7 @@ impl Graph {
                 }
             }
             if detach_from_owner && let Some(owner) = node.owner.and_then(|o| nodes.get_mut(o)) {
-                owner.children.retain(|x| *x != id);
+                owner.children.swap_remove(&id);
             }
             node
         };
@@ -272,7 +275,7 @@ impl Graph {
             return;
         }
         obs.sources.push(source);
-        nodes[source].subscribers.push(observer);
+        nodes[source].subscribers.insert(observer);
     }
 
     pub(crate) fn with_owner<T>(&self, owner: Option<NodeId>, f: impl FnOnce() -> T) -> T {
@@ -295,20 +298,20 @@ impl Graph {
         let mut stack: Vec<_> = node
             .subscribers
             .iter()
-            .map(|s| (*s, State::Dirty))
+            .map(|s| (*s, State::Dirty, source))
             .collect();
-        while let Some((id, state)) = stack.pop() {
+        while let Some((id, state, from)) = stack.pop() {
             let Some(node) = nodes.get_mut(id) else {
                 continue;
             };
-            if node.state >= state {
+            if node.state >= state || (node.computing && !node.sources.contains(&from)) {
                 continue;
             }
             if node.state == State::Clean && node.value.is_none() {
                 pending.push(id);
             }
             node.state = state;
-            stack.extend(node.subscribers.iter().map(|s| (*s, State::Check)));
+            stack.extend(node.subscribers.iter().map(|s| (*s, State::Check, id)));
         }
     }
 
@@ -343,22 +346,38 @@ impl Graph {
                 return;
             };
             node.state = State::Clean;
-            let sources = take(&mut node.sources);
-            let compute = node.compute.clone();
-            for source in sources {
-                if let Some(s) = nodes.get_mut(source) {
-                    s.subscribers.retain(|x| *x != id);
-                }
-            }
-            compute
+            let mut previous = take(&mut node.sources);
+            previous.append(&mut node.previous);
+            node.previous = previous;
+            node.computing = true;
+            node.compute.clone()
         };
-        let Some(compute) = compute else { return };
+        let Some(compute) = compute else {
+            return;
+        };
         let changed = {
             let _batch = scoped(&self.batch_depth, self.batch_depth.get() + 1);
             let _observer = scoped(&self.observer, Some(id));
             let _owner = scoped(&self.owner, Some(id));
             compute()
         };
+        {
+            let mut nodes = self.nodes.borrow_mut();
+            let Some(node) = nodes.get_mut(id) else {
+                return;
+            };
+            node.computing = false;
+            let previous = take(&mut node.previous);
+            let dropped: Vec<NodeId> = previous
+                .into_iter()
+                .filter(|source| !node.sources.contains(source))
+                .collect();
+            for source in dropped {
+                if let Some(s) = nodes.get_mut(source) {
+                    s.subscribers.swap_remove(&id);
+                }
+            }
+        }
         if changed {
             self.mark_subscribers(id);
         }

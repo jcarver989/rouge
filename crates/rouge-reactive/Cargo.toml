@@ -10,6 +10,7 @@ rust-version.workspace = true
 tokio-rt = ["tokio/rt"]
 
 [dependencies]
+indexmap.workspace = true
 slotmap.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
