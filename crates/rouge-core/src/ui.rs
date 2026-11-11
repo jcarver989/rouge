@@ -531,7 +531,9 @@ impl Ui {
 
     pub fn pointer_cancel(&mut self) {
         self.held = None;
-        if let (Some(drag), Some(position)) = (self.drag.take().filter(|drag| drag.started), self.pointer) {
+        if let (Some(drag), Some(position)) =
+            (self.drag.take().filter(|drag| drag.started), self.pointer)
+        {
             self.drag_event(&drag, DragPhase::End, position);
         }
         self.tree.release_capture();
