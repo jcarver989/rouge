@@ -867,6 +867,7 @@ impl Tree {
         let resolved = self.resolve_style(id);
         let element = &mut self.elements[id];
         let new = resolved.as_ref().unwrap_or(&element.spec.style);
+        let text = !TextProperties::same(new, old);
         let dirty = if new.same_box(old) {
             Dirty::None
         } else if new.layout != old.layout || new.rem_lengths != old.rem_lengths {
@@ -888,7 +889,9 @@ impl Tree {
             self.mark_element(id, dirty);
             self.sync_backing(id);
         }
-        self.refresh_text_subtree(id);
+        if text {
+            self.refresh_text_subtree(id);
+        }
     }
 
     fn flat_followers(&self, anchor: ElementId, out: &mut Vec<ElementId>) {
@@ -999,10 +1002,24 @@ impl Tree {
             .insert_child_at_index(p.taffy, index, child_node)
             .expect("taffy insert");
         self.elements[child].parent = Some(parent);
-        self.refresh_variant_subtree(child);
-        self.refresh_text_subtree(child);
+        if self.is_connected(parent) {
+            self.refresh_variant_subtree(child);
+            self.refresh_text_subtree(child);
+        }
         self.mark_layer(parent, true);
         self.mark(Dirty::Layout);
+    }
+
+    fn is_connected(&self, mut id: ElementId) -> bool {
+        loop {
+            if id == self.root {
+                return true;
+            }
+            match self.elements.get(id).and_then(|element| element.parent) {
+                Some(parent) => id = parent,
+                None => return false,
+            }
+        }
     }
 
     fn detach(&mut self, child: ElementId) {

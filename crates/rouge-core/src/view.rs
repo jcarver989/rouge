@@ -25,7 +25,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 pub(crate) type Patch = Box<dyn FnOnce(&mut BuildCx<'_>)>;
 pub(crate) type Patches = UnboundedSender<Patch>;
-type Binding = Box<dyn FnOnce(&Patches, ElementId)>;
+type Binding = Box<dyn FnOnce(&Patches, &mut ElementSpec, &Rc<Cell<Option<ElementId>>>)>;
 
 pub(crate) fn send(patches: &Patches, patch: impl FnOnce(&mut BuildCx<'_>) + 'static) {
     let _ = patches.send(Box::new(patch));
@@ -123,7 +123,7 @@ impl Div {
     fn bind<T: 'static, U>(
         self,
         value: impl IntoProp<T, U>,
-        init: impl FnOnce(&mut ElementSpec, T),
+        init: impl FnOnce(&mut ElementSpec, T) + 'static,
         apply: impl Fn(&mut Tree, ElementId, T) + 'static,
     ) -> Self {
         self.bind_prop(value.into_prop(), init, apply)
@@ -132,18 +132,34 @@ impl Div {
     fn bind_prop<T: 'static>(
         mut self,
         value: Prop<T>,
-        init: impl FnOnce(&mut ElementSpec, T),
+        init: impl FnOnce(&mut ElementSpec, T) + 'static,
         apply: impl Fn(&mut Tree, ElementId, T) + 'static,
     ) -> Self {
         match value {
             Prop::Static(value) => init(&mut self.spec, value),
-            Prop::Dynamic(compute) => self.bindings.push(Box::new(move |patches, id| {
-                let (patches, apply) = (patches.clone(), Rc::new(apply));
-                effect(move || {
-                    let (value, apply) = (compute(), apply.clone());
-                    send(&patches, move |cx| apply(cx.tree, id, value));
-                });
-            })),
+            Prop::Dynamic(compute) => {
+                self.bindings.push(Box::new(move |patches, spec, element| {
+                    let (patches, apply, element) =
+                        (patches.clone(), Rc::new(apply), element.clone());
+                    let initial = Rc::new(Cell::new(None));
+                    effect({
+                        let initial = initial.clone();
+                        move || {
+                            let value = compute();
+                            match element.get() {
+                                Some(id) => {
+                                    let apply = apply.clone();
+                                    send(&patches, move |cx| apply(cx.tree, id, value));
+                                }
+                                None => initial.set(Some(value)),
+                            }
+                        }
+                    });
+                    if let Some(value) = initial.take() {
+                        init(spec, value);
+                    }
+                }));
+            }
         }
         self
     }
@@ -382,14 +398,11 @@ impl Div {
 impl Scrollable for Div {
     fn scroll_state(mut self, state: Signal<ScrollState>) -> Self {
         self.spec.scroll.get_or_insert_default().observer = Some(state);
-        self.bindings.push(Box::new(move |patches, id| {
-            let patches = patches.clone();
-            effect(move || {
-                let offset = state.get().offset;
-                send(&patches, move |cx| cx.tree.scroll_to(id, offset));
-            });
-        }));
-        self
+        self.bind_prop(
+            Prop::Dynamic(Box::new(move || state.get().offset)),
+            |_, _| {},
+            Tree::scroll_to,
+        )
     }
 }
 
@@ -417,14 +430,14 @@ impl View for Div {
         if let Some(text) = &mut self.spec.text {
             let theme = use_theme();
             text.theme = Some(theme);
-            self.bindings.push(Box::new(move |patches, id| {
-                let patches = patches.clone();
-                effect(move || {
+            self = self.bind_prop(
+                Prop::Dynamic(Box::new(move || {
                     theme.text.get();
                     theme.text_size.get();
-                    send(&patches, move |cx| cx.tree.refresh_text_subtree(id));
-                });
-            }));
+                })),
+                |_, ()| {},
+                |tree, id, ()| tree.refresh_text_subtree(id),
+            );
         }
         if self.spec.scroll.is_some() {
             self.spec.style.layout.overflow = Axes {
@@ -432,10 +445,12 @@ impl View for Div {
                 y: Overflow::Scroll,
             };
         }
-        let id = cx.tree.create_element(self.spec);
+        let element = Rc::new(Cell::new(None));
         for bind in self.bindings {
-            bind(cx.patches, id);
+            bind(cx.patches, &mut self.spec, &element);
         }
+        let id = cx.tree.create_element(self.spec);
+        element.set(Some(id));
         if self.autofocus {
             send(cx.patches, move |cx| cx.tree.autofocus(id));
         }

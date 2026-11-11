@@ -226,6 +226,10 @@ macro_rules! text_properties {
             pub(crate) fn cascade(&self, style: &Style) -> Self {
                 Self { $($field: style.$field.as_ref().or(self.$field.as_ref()).cloned(),)* }
             }
+
+            pub(crate) fn same(a: &Style, b: &Style) -> bool {
+                $(a.$field == b.$field)&&*
+            }
         }
     };
 }
