@@ -829,6 +829,44 @@ fn a_mounted_subtree_applies_its_reactive_props_at_build_and_shapes_each_text_on
     Ok(())
 }
 
+#[test]
+fn a_vec_of_views_builds_its_items_as_siblings_without_a_wrapper() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let visible = signal(true);
+    let mut ui = build(1.0, || {
+        let pair = move || vec![div().w(10.0).h(10.0), div().w(20.0).h(10.0)];
+        div()
+            .flex()
+            .size_full()
+            .child(show(move || visible.get(), pair))
+            .child(div().w(30.0).h(10.0))
+    });
+    assert_eq!(
+        ui.bounds(15.0, 5.0)?.origin.x,
+        10.0,
+        "items follow each other"
+    );
+    assert_eq!(
+        ui.bounds(35.0, 5.0)?.origin.x,
+        30.0,
+        "and their parent's later children follow them"
+    );
+    assert_eq!(
+        ui.stats().elements,
+        7,
+        "root, container, show and vec anchors, three boxes"
+    );
+    visible.set(false);
+    ui.update();
+    assert_eq!(
+        ui.bounds(5.0, 5.0)?.size.width,
+        30.0,
+        "every item leaves with the vec"
+    );
+    assert_eq!(ui.stats().elements, 4);
+    Ok(())
+}
+
 fn build<T: View>(scale: f32, root: impl FnOnce() -> T) -> TestUi {
     TestUiBuilder::default()
         .size(300.0, 200.0)

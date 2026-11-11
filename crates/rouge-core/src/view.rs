@@ -61,6 +61,45 @@ impl View for AnyView {
     }
 }
 
+impl<T: View> View for Vec<T> {
+    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+        let anchor = cx.tree.create_anchor();
+        let followers = self.into_iter().map(|view| view.build(cx)).collect();
+        cx.tree.set_followers(anchor, followers);
+        anchor
+    }
+}
+
+impl View for () {
+    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+        cx.tree.create_anchor()
+    }
+}
+
+impl<T: View> View for Option<T> {
+    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+        match self {
+            Some(view) => view.build(cx),
+            None => cx.tree.create_anchor(),
+        }
+    }
+}
+
+pub trait Apply: Sized {
+    fn when(self, condition: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if condition { f(self) } else { self }
+    }
+
+    fn when_some<T>(self, value: Option<T>, f: impl FnOnce(Self, T) -> Self) -> Self {
+        match value {
+            Some(value) => f(self, value),
+            None => self,
+        }
+    }
+}
+
+impl<T> Apply for T {}
+
 #[derive(Default)]
 pub struct Div {
     pub(crate) spec: ElementSpec,
