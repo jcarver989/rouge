@@ -2,8 +2,9 @@ use rouge_core::{
     AnyView, BoxShadow, BuildCx, Div, ElementId, Key, PointerEvent, Pose, Rect, Styled, Theme,
     Tween, View, div, overlay, show, styled, text, use_theme, window_size,
 };
-use rouge_reactive::{Signal, Task, signal, sleep, spawn};
+use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 const GAP: f32 = 4.0;
@@ -188,7 +189,15 @@ impl View for Tooltip {
         let theme = use_theme();
         let (label, delay, anchor) = (self.label, self.delay, self.anchor);
         let open = signal(false);
-        let pending = Cell::new(None::<Task>);
+        let pending = Rc::new(Cell::new(None::<Task>));
+        on_cleanup({
+            let pending = pending.clone();
+            move || {
+                if let Some(task) = pending.take() {
+                    task.cancel();
+                }
+            }
+        });
         let bubble = overlay(move || {
             let tip = move || {
                 let caption = text(label.clone())

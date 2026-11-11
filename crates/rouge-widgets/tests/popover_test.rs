@@ -2,7 +2,7 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestResult, TestUi, counter};
-use rouge_core::{Key, Point, Rect, Styled, div};
+use rouge_core::{Key, Point, Rect, Styled, div, show};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::{Placement, button, popover, tooltip};
 use std::thread::sleep;
@@ -123,4 +123,22 @@ fn tooltip_appears_after_hovering_for_the_delay_and_hides_on_leave() {
     sleep(Duration::from_millis(40));
     ui.run(0.6);
     assert_eq!(shown(&mut ui), idle, "leaving before the delay cancels it");
+}
+
+#[test]
+fn tooltip_unmounted_while_pending_never_opens() {
+    let _entered = Runtime::new().enter();
+    let mounted = signal(true);
+    let mut ui = builder().build(move || {
+        div().size_full().p(10.0).child(show(
+            move || mounted.get(),
+            || tooltip(div().w(60.0).h(20.0), "Helpful").delay(Duration::from_millis(20)),
+        ))
+    });
+    ui.pointer_moved(Point::new(20.0, 20.0));
+    ui.advance(0.0);
+    mounted.set(false);
+    ui.advance(0.0);
+    sleep(Duration::from_millis(40));
+    ui.run(0.6);
 }
