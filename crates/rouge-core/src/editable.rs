@@ -21,6 +21,7 @@ pub struct Editable {
     state: EditState,
     on_submit: Option<TextHandler>,
     submit_on_enter: bool,
+    select_all_on_focus: bool,
 }
 
 pub fn editable(value: Signal<String>) -> Editable {
@@ -30,6 +31,7 @@ pub fn editable(value: Signal<String>) -> Editable {
         state: EditState::default(),
         on_submit: None,
         submit_on_enter: false,
+        select_all_on_focus: false,
     }
 }
 
@@ -56,6 +58,11 @@ impl Editable {
     }
     pub fn submit_on_enter(mut self, submit: bool) -> Self {
         self.submit_on_enter = submit;
+        self
+    }
+
+    pub fn select_all_on_focus(mut self) -> Self {
+        self.select_all_on_focus = true;
         self
     }
 
@@ -159,6 +166,7 @@ impl View for Editable {
             mut state,
             on_submit,
             submit_on_enter,
+            select_all_on_focus,
         } = self;
         let multiline = state.multiline;
         let selection = state.selection_signal;
@@ -179,6 +187,7 @@ impl View for Editable {
         data.edit = Some(state);
         data.style.wrap = multiline;
 
+        let select = edit.clone();
         let (keys, ime, down, moved, actions) =
             (edit.clone(), edit.clone(), edit.clone(), edit.clone(), edit);
         let dragging = Rc::new(Cell::new(false));
@@ -187,6 +196,11 @@ impl View for Editable {
             .focusable()
             .on_action(move |action: &EditAction| {
                 actions(action.operation());
+            })
+            .on_focus(move |_| {
+                if select_all_on_focus {
+                    select(EditOp::SelectAll);
+                }
             })
             .cursor(Cursor::Text)
             .on_key_down(move |event| {
