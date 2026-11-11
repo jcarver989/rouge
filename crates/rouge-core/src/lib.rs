@@ -48,7 +48,7 @@ pub use view::{AnyView, BuildCx, Div, Text, View, div, rich_text, text};
 pub use rouge_render::{
     Affine, BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Corners, Decay, Ease, Edges, Effect,
     Glass, ImageData, ImageError, Inputs, Keyframes, LayoutTransition, Mask, Point, Pose, Quad,
-    Rect, ScrollState, Size, Spring, Timing, Tween,
+    Rect, ScrollLinked, ScrollState, Size, Spring, Timing, Tween,
 };
 pub use rouge_text::{SpanStyle, TextAlign, TextStyle, Underline};
 

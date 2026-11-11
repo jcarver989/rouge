@@ -6,6 +6,7 @@ use crate::event::{
 use crate::image::{Fit, ImageSpec};
 use crate::keymap::Keymap;
 use crate::path::Path;
+use crate::scroll::scroll_key;
 use crate::style::{Dirty, Style, TextProperties};
 use crate::theme::Theme;
 use edit::{CARET_WIDTH, EditState};
@@ -628,8 +629,11 @@ impl Tree {
             .layer
             .take()
             .map(|layer| self.new_layer(layer.commands));
-        let content = spec.scroll.as_ref().map(|_| self.new_layer(Vec::new()));
-        let observed = spec.scroll.as_ref().is_some_and(|s| s.observer.is_some());
+        let observer = spec.scroll.as_ref().and_then(|s| s.observer);
+        let content = spec.scroll.as_ref().map(|_| {
+            let source = observer.map(|state| LayerCommand::ScrollSource(scroll_key(state)));
+            self.new_layer(source.into_iter().collect())
+        });
         let (measured, disabled) = (
             spec.bounds_observer.is_some() || spec.paint_region.is_some(),
             spec.disabled,
@@ -655,8 +659,9 @@ impl Tree {
                 .set_node_context(taffy, Some(id))
                 .expect("taffy context");
         }
-        if observed {
+        if let Some(state) = observer {
             self.observed.push(id);
+            self.scroll_to(id, state.get_untracked().offset);
         }
         if measured {
             self.measured.push(id);

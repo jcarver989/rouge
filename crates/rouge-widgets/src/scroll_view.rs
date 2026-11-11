@@ -1,6 +1,6 @@
 use rouge_core::{
-    BuildCx, Div, DragPhase, ElementId, Point, PointerButton, PointerEvent, ScrollState,
-    Scrollable, Styled, View, div, show, styled, use_theme,
+    BuildCx, Div, DragPhase, ElementId, Point, PointerButton, PointerEvent, ScrollLinked,
+    ScrollState, Scrollable, Styled, View, div, show, styled, use_theme,
 };
 use rouge_reactive::{Signal, memo, signal};
 use std::cell::Cell;
@@ -133,11 +133,18 @@ fn scrollbar(
         (viewport * viewport / axis.content(state).max(1.0))
             .clamp(viewport.min(style().min_thumb), viewport)
     });
-    let travel = move || {
+    let extent = memo(move || {
         let state = state.get();
-        let range = (axis.content(state) - axis.viewport(state)).max(1.0);
-        (axis.point(state.offset) / range).clamp(0.0, 1.0)
-            * (axis.viewport(state) - length.get()).max(0.0)
+        (axis.viewport(state), axis.content(state))
+    });
+    let link = move || {
+        let (viewport, content) = extent.get();
+        let travel = (viewport - length.get()).max(0.0);
+        ScrollLinked::Linear {
+            factor: travel / (content - viewport).max(1.0),
+            max: travel,
+            horizontal: matches!(axis, Axis::Horizontal),
+        }
     };
     let origin = Cell::new(0.0);
     let thumb = div()
@@ -171,7 +178,7 @@ fn scrollbar(
                 .right(move || style().inset)
                 .w(move || style().thumb)
                 .h(length)
-                .translate_y(travel),
+                .scroll_linked(state, link),
         ),
         Axis::Horizontal => (
             div()
@@ -186,7 +193,7 @@ fn scrollbar(
                 .bottom(move || style().inset)
                 .h(move || style().thumb)
                 .w(length)
-                .translate_x(travel),
+                .scroll_linked(state, link),
         ),
     };
     track

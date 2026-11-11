@@ -7,7 +7,7 @@ use crate::view::{BuildCx, Div, View, div};
 use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal};
 use rouge_render::{Point, Rect, ScrollState, Size};
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -22,6 +22,12 @@ const OVERSCAN: usize = 8;
 
 pub fn scroll() -> Div {
     div().scrollable()
+}
+
+pub(crate) fn scroll_key(state: Signal<ScrollState>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    state.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub trait Scrollable: View {

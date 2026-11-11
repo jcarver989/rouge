@@ -2,8 +2,8 @@ use rouge_core::testing::{
     BLACK, BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, WHITE, counter,
 };
 use rouge_core::{
-    Align, Color, Point, RowKey, ScrollEvent, ScrollState, Scrollable, Size, Styled, View, div,
-    dynamic, rem, root_font_size, scroll, text, virtual_list, virtual_list_handle,
+    Align, Color, Point, RowKey, ScrollEvent, ScrollLinked, ScrollState, Scrollable, Size, Styled,
+    View, div, dynamic, rem, root_font_size, scroll, text, virtual_list, virtual_list_handle,
 };
 use rouge_reactive::{Runtime, Signal, batch, effect, on_cleanup, signal};
 use std::cell::RefCell;
@@ -996,6 +996,33 @@ fn scrolling_a_large_measured_list_only_mounts_nearby_rows() {
     assert_eq!(identities.get(), 100_000);
 }
 
+#[test]
+fn sticky_layers_pin_within_their_range_of_the_scroll_offset() {
+    let _rt = Runtime::new().enter();
+    let sticky = ScrollLinked::Sticky {
+        lo: 100.0,
+        hi: 300.0,
+    };
+    assert_eq!(
+        linked_y(sticky, [0.0, 200.0, 500.0]),
+        [Some(100.0), Some(0.0), Some(-200.0)]
+    );
+}
+
+#[test]
+fn linear_links_translate_by_a_clamped_multiple_of_the_offset() {
+    let _rt = Runtime::new().enter();
+    let linear = ScrollLinked::Linear {
+        factor: 0.25,
+        max: 40.0,
+        horizontal: false,
+    };
+    assert_eq!(
+        linked_y(linear, [0.0, 100.0, 800.0]),
+        [Some(0.0), Some(25.0), Some(40.0)]
+    );
+}
+
 fn scroller(state: Signal<ScrollState>) -> TestUi {
     TestUi::canvas(move || {
         let container = scroll().w(100.0).h(100.0).scroll_state(state);
@@ -1061,3 +1088,33 @@ fn sections() -> (TestUi, Signal<ScrollState>) {
 }
 
 type Mounted = Rc<RefCell<BTreeSet<usize>>>;
+
+fn linked_y(link: ScrollLinked, offsets: [f32; 3]) -> [Option<f32>; 3] {
+    let (mut ui, state) = TestUiBuilder::default().size(200.0, 100.0).build_with(|| {
+        let state = signal(ScrollState::default());
+        let view = div()
+            .relative()
+            .size_full()
+            .child(
+                div()
+                    .test_id("linked")
+                    .absolute()
+                    .top(0.0)
+                    .w(50.0)
+                    .h(20.0)
+                    .scroll_linked(state, link),
+            )
+            .child(
+                scroll()
+                    .size_full()
+                    .scroll_state(state)
+                    .child(div().h(1000.0)),
+            );
+        (view, state)
+    });
+    offsets.map(|offset| {
+        state.update(|state| state.offset.y = offset);
+        ui.advance(0.0);
+        ui.bounds_of("linked").map(|bounds| bounds.origin.y)
+    })
+}

@@ -5,7 +5,7 @@ use crate::focus::FocusHandle;
 use crate::length::Length;
 use crate::motion::MotionProp;
 use crate::prop::{IntoEffect, IntoProp, Prop};
-use crate::scroll::Scrollable;
+use crate::scroll::{Scrollable, scroll_key};
 use crate::style::{Dirty, Style, Styled};
 use crate::styled;
 use crate::theme::use_theme;
@@ -13,7 +13,7 @@ use crate::tree::{ElementId, ElementSpec, Event, Interaction, On, TextData, Tree
 use rouge_reactive::{Signal, effect};
 use rouge_render::{
     BlendMode, Color, Effect, EffectInstance, EffectSlot, Keyframes, LayerCommand, LayerProp,
-    LayoutTransition, Mask, Rect, ScrollState, Timing,
+    LayoutTransition, Mask, Rect, ScrollLinked, ScrollState, Timing,
 };
 use rouge_text::{SpanStyle, TextAlign, TextStyle, TextSystem};
 use std::any::{Any, TypeId};
@@ -203,6 +203,17 @@ impl Div {
                 effect: Some(EffectInstance::new(&effect)),
                 animate,
             })
+        })
+    }
+
+    pub fn scroll_linked<T>(
+        self,
+        state: Signal<ScrollState>,
+        link: impl IntoProp<ScrollLinked, T>,
+    ) -> Self {
+        let key = scroll_key(state);
+        self.layer_bind(link.into_prop(), move |link, _| {
+            Some(LayerCommand::ScrollLink(Some((key, link))))
         })
     }
 
