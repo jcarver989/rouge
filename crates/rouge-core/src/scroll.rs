@@ -1,4 +1,5 @@
 use crate::control::each;
+use crate::length::Length;
 use crate::prop::{IntoProp, Prop, PropFrom, markers};
 use crate::style::{Dirty, Style, Styled};
 use crate::tree::ElementId;
@@ -37,12 +38,32 @@ pub trait Scrollable: View {
 #[derive(Clone)]
 pub enum RowHeight {
     Uniform(f32),
+    Rem(f32),
     Each(Rc<dyn Fn(usize) -> f32>),
+}
+
+impl RowHeight {
+    pub(crate) fn resolve(self, root: impl FnOnce() -> f32) -> Self {
+        match self {
+            RowHeight::Rem(value) => RowHeight::Uniform(value * root()),
+            other => other,
+        }
+    }
 }
 
 impl PropFrom<f32> for RowHeight {
     fn prop_from(value: f32) -> Self {
-        RowHeight::Uniform(value)
+        RowHeight::prop_from(Length::design(value))
+    }
+}
+
+impl PropFrom<Length> for RowHeight {
+    fn prop_from(value: Length) -> Self {
+        match value {
+            Length::Rem(value) => RowHeight::Rem(value),
+            Length::Px(value) => RowHeight::Uniform(value),
+            Length::Fraction(_) | Length::Auto => RowHeight::Uniform(0.0),
+        }
     }
 }
 
@@ -380,7 +401,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
             .absolute()
             .left(0.0)
             .right(0.0)
-            .top(top)
+            .top(move || Length::Px(top()))
             .layer()
             .flex()
             .col()
@@ -420,14 +441,14 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                                 }
                             })
                         });
-                        container = container.h(height);
+                        container = container.h(move || Length::Px(height.get()));
                     }
                     container.child(row(index))
                 },
             ));
         let mut content = div()
             .relative()
-            .h(move || rows.with(|heights| heights.top(heights.count())))
+            .h(move || Length::Px(rows.with(|heights| heights.top(heights.count()))))
             .child(window);
         if mounted.is_some() {
             content.spec.size_observer = Some(width);

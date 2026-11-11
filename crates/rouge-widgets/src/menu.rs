@@ -2,7 +2,7 @@ use crate::popover::{Placement, panel, popup};
 use crate::util::{activates, pressable, themed, tint};
 use rouge_core::{
     BuildCx, Cursor, Div, ElementId, FocusHandle, Key, Menu, Path, Point, PointerButton, Rect,
-    Styled, Theme, View, div, focus_handle, icon, styled, text, use_theme,
+    Styled, Theme, View, div, focus_handle, icon, px, styled, text, use_theme,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
@@ -208,7 +208,8 @@ impl View for ContextMenu {
         let (open, at) = (signal(false), signal(Point::ZERO));
         let body = move || {
             let menu = menu_items(&items, open, theme, focus).absolute();
-            menu.left(move || at.get().x).top(move || at.get().y)
+            menu.left(move || px(at.get().x))
+                .top(move || px(at.get().y))
         };
         self.root
             .on_pointer_down(move |event| {

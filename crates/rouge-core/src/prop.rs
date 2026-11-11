@@ -1,4 +1,4 @@
-use crate::length::Length;
+use crate::length::{Length, Radii};
 use rouge_reactive::{ReadSignal, Signal};
 use rouge_render::{Color, Corners, Effect};
 
@@ -28,13 +28,13 @@ impl<T> PropFrom<T> for T {
 
 impl PropFrom<f32> for Length {
     fn prop_from(value: f32) -> Self {
-        Length::Px(value)
+        Length::design(value)
     }
 }
 
 impl PropFrom<i32> for Length {
     fn prop_from(value: i32) -> Self {
-        Length::Px(value as f32)
+        Length::design(value as f32)
     }
 }
 
@@ -50,9 +50,24 @@ impl PropFrom<u32> for Color {
     }
 }
 
-impl PropFrom<f32> for Corners {
+impl PropFrom<f32> for Radii {
     fn prop_from(value: f32) -> Self {
-        Corners::all(value)
+        Radii::all(Length::design(value))
+    }
+}
+
+impl PropFrom<Length> for Radii {
+    fn prop_from(value: Length) -> Self {
+        Radii::all(value)
+    }
+}
+
+impl PropFrom<Corners> for Radii {
+    fn prop_from(corners: Corners) -> Self {
+        Radii {
+            corners,
+            rem: false,
+        }
     }
 }
 

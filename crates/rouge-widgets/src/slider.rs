@@ -1,7 +1,7 @@
 use crate::util::ring;
 use rouge_core::{
     BuildCx, Color, Cursor, Div, ElementId, Key, PointerButton, Rect, Styled, Theme, View, div,
-    pct, styled, use_theme,
+    pct, px, styled, use_theme,
 };
 use rouge_reactive::{Signal, signal};
 use std::cell::Cell;
@@ -24,9 +24,9 @@ pub fn slider(value: Signal<f32>) -> Slider {
         .relative()
         .flex()
         .items_center()
-        .h(THUMB)
+        .h(px(THUMB))
         .min_w(40.0)
-        .rounded(THUMB / 2.0);
+        .rounded(px(THUMB / 2.0));
     Slider {
         root,
         value,
@@ -81,12 +81,12 @@ impl View for Slider {
             .w(move || pct(fraction() * 100.0));
         let thumb = div()
             .absolute()
-            .size(THUMB)
-            .rounded(THUMB / 2.0)
+            .size(px(THUMB))
+            .rounded(px(THUMB / 2.0))
             .bg(Color::WHITE)
             .border(1.0)
             .border_color(theme.border)
-            .left(move || (bounds.get().size.width - THUMB).max(0.0) * fraction());
+            .left(move || px((bounds.get().size.width - THUMB).max(0.0) * fraction()));
         self.root
             .track_bounds(bounds)
             .focusable()

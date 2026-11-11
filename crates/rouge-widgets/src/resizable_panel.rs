@@ -1,4 +1,4 @@
-use rouge_core::{BuildCx, Cursor, Div, DragPhase, ElementId, Styled, View, div, styled};
+use rouge_core::{BuildCx, Cursor, Div, DragPhase, ElementId, Styled, View, div, px, styled};
 use rouge_reactive::{Signal, effect};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -85,7 +85,7 @@ impl View for ResizablePanel {
         } = self;
         let max = max.max(min);
         let scale = move || unit.map_or(1.0, |unit| unit.get().max(0.001));
-        let dimension = move || size.get() * scale();
+        let dimension = move || px(size.get() * scale());
         effect(move || {
             size.set_if_changed(size.get().clamp(min, max));
         });
@@ -131,7 +131,7 @@ impl View for ResizablePanel {
                 let handle = handle
                     .top(0.0)
                     .bottom(0.0)
-                    .w(move || 6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 })
+                    .w(move || px(6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 }))
                     .cursor(Cursor::ResizeHorizontal);
                 if side == Side::Left {
                     handle.right(0.0)
@@ -144,7 +144,7 @@ impl View for ResizablePanel {
                 let handle = handle
                     .left(0.0)
                     .right(0.0)
-                    .h(move || 6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 })
+                    .h(move || px(6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 }))
                     .cursor(Cursor::ResizeVertical);
                 if side == Side::Top {
                     handle.bottom(0.0)

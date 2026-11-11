@@ -1,7 +1,7 @@
-use crate::length::Length;
+use crate::length::{Length, Radii};
 use crate::prop::{IntoProp, Prop};
 use crate::tree::Variant;
-use rouge_render::{Color, Corners, Point};
+use rouge_render::{Color, Point};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::rc::Rc;
@@ -103,7 +103,7 @@ pub struct Style {
     pub text_line_height: Option<f32>,
     pub background: Option<Color>,
     pub border_color: Color,
-    pub corner_radii: Corners,
+    pub corner_radii: Radii,
     pub shadows: Vec<BoxShadow>,
 }
 
@@ -124,7 +124,7 @@ impl Default for Style {
             text_line_height: None,
             background: None,
             border_color: Color::BLACK,
-            corner_radii: Corners::ZERO,
+            corner_radii: Radii::default(),
             shadows: Vec::new(),
         }
     }
@@ -380,7 +380,7 @@ pub trait Styled: Sized {
 
         border_color(Color) [Paint] |s, v| s.border_color = v;
         bg(Color) [Backing] |s, v| s.background = Some(v);
-        rounded(Corners) [Backing] |s, v| s.corner_radii = v;
+        rounded(Radii) [Backing] |s, v| s.corner_radii = v;
         shadow(BoxShadow) [Paint] |s, v| s.shadows = vec![v];
         shadows(Vec<BoxShadow>) [Paint] |s, v| s.shadows = v;
     }

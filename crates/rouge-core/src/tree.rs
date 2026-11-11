@@ -481,7 +481,7 @@ impl Tree {
         let style = element.effective_style();
         let backing = (
             style.background.unwrap_or(Color::TRANSPARENT),
-            style.corner_radii,
+            style.corner_radii.resolve(self.root_font_size),
         );
         let Some(layer) = &mut element.layers[Slot::Own as usize] else {
             return;
@@ -561,6 +561,10 @@ impl Tree {
                     )
                     .expect("taffy set style");
                 self.mark_element(id, Dirty::Layout);
+            }
+            if self.elements[id].effective_style().corner_radii.rem {
+                self.mark_element(id, Dirty::Backing);
+                self.sync_backing(id);
             }
         }
         self.refresh_text_subtree(self.root);
@@ -1724,6 +1728,7 @@ impl Tree {
                 repaint_all,
                 layer_paints: 0,
                 focused,
+                root_font_size: self.root_font_size,
             };
             paint_layers(
                 &mut self.elements,
@@ -1975,6 +1980,7 @@ struct PaintCx<'a> {
     repaint_all: bool,
     layer_paints: u64,
     focused: Option<ElementId>,
+    root_font_size: f32,
 }
 
 struct LayerTarget {
@@ -2085,7 +2091,7 @@ fn paint(
     let radii = if backing {
         Corners::ZERO
     } else {
-        style.corner_radii
+        style.corner_radii.resolve(cx.root_font_size)
     };
     let bounds = Rect {
         origin: element.bounds.origin - target.origin,

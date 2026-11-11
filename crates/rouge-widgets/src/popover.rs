@@ -1,6 +1,6 @@
 use rouge_core::{
     AnyView, BoxShadow, BuildCx, Div, ElementId, Key, PointerEvent, Pose, Rect, Styled, Theme,
-    Tween, View, div, overlay, show, styled, text, use_theme, window_size,
+    Tween, View, div, overlay, px, show, styled, text, use_theme, window_size,
 };
 use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -55,8 +55,8 @@ impl Placement {
         };
         panel
             .absolute()
-            .max_w(move || window.get().width)
-            .max_h(move || window.get().height)
+            .max_w(move || px(window.get().width))
+            .max_h(move || px(window.get().height))
             .track_bounds(measured)
             .left(0.0)
             .top(0.0)
