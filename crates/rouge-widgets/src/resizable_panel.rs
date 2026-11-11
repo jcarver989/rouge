@@ -18,6 +18,8 @@ pub struct ResizablePanel {
     min: f32,
     max: f32,
     reset: f32,
+    unit: Option<Signal<f32>>,
+    on_reset: Option<Rc<dyn Fn()>>,
     on_resize: Option<Rc<dyn Fn(f32)>>,
 }
 
@@ -29,6 +31,8 @@ pub fn resizable_panel(edge: Side, size: Signal<f32>) -> ResizablePanel {
         min: 0.0,
         max: f32::MAX,
         reset: size.get_untracked(),
+        unit: None,
+        on_reset: None,
         on_resize: None,
     }
 }
@@ -50,6 +54,14 @@ impl ResizablePanel {
         self.on_resize = Some(Rc::new(f));
         self
     }
+    pub fn unit(mut self, unit: Signal<f32>) -> Self {
+        self.unit = Some(unit);
+        self
+    }
+    pub fn on_reset(mut self, f: impl Fn() + 'static) -> Self {
+        self.on_reset = Some(Rc::new(f));
+        self
+    }
     pub fn child(mut self, child: impl View) -> Self {
         self.root = self.root.child(child);
         self
@@ -67,9 +79,13 @@ impl View for ResizablePanel {
             min,
             max,
             reset,
+            unit,
+            on_reset,
             on_resize,
         } = self;
         let max = max.max(min);
+        let scale = move || unit.map_or(1.0, |unit| unit.get().max(0.001));
+        let dimension = move || size.get() * scale();
         effect(move || {
             size.set_if_changed(size.get().clamp(min, max));
         });
@@ -91,6 +107,9 @@ impl View for ResizablePanel {
             .on_pointer_down(move |event| {
                 if event.click_count == 2 {
                     reset_to(reset);
+                    if let Some(reset) = &on_reset {
+                        reset();
+                    }
                 }
                 event.stop_propagation();
             })
@@ -104,15 +123,15 @@ impl View for ResizablePanel {
                     Side::Top => event.translation.y,
                     Side::Bottom => -event.translation.y,
                 };
-                set(origin.get() + delta);
+                set(origin.get() + delta / scale());
             });
         let handle = match side {
             Side::Left | Side::Right => {
-                root = root.w(size);
+                root = root.w(dimension);
                 let handle = handle
                     .top(0.0)
                     .bottom(0.0)
-                    .w(6.0)
+                    .w(move || 6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 })
                     .cursor(Cursor::ResizeHorizontal);
                 if side == Side::Left {
                     handle.right(0.0)
@@ -121,11 +140,11 @@ impl View for ResizablePanel {
                 }
             }
             Side::Top | Side::Bottom => {
-                root = root.h(size);
+                root = root.h(dimension);
                 let handle = handle
                     .left(0.0)
                     .right(0.0)
-                    .h(6.0)
+                    .h(move || 6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 })
                     .cursor(Cursor::ResizeVertical);
                 if side == Side::Top {
                     handle.bottom(0.0)
