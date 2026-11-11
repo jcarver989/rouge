@@ -1,8 +1,9 @@
 use crate::popover::{Placement, panel, popup};
+use crate::roving::RovingFocus;
 use crate::util::{activates, pressable, themed, tint};
 use rouge_core::{
-    BuildCx, Cursor, Div, ElementId, FocusHandle, Key, Menu, Path, Point, PointerButton, Rect,
-    Styled, Theme, View, div, focus_handle, icon, px, styled, text, use_theme,
+    BuildCx, Cursor, Div, ElementId, Key, Menu, Path, Point, PointerButton, Rect, Styled, Theme,
+    View, div, icon, px, styled, text, use_theme,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
@@ -86,11 +87,10 @@ fn render_items(
     focus: MenuFocus,
     close: Rc<dyn Fn()>,
 ) -> Div {
-    let handles: Rc<[FocusHandle]> = items
+    let actionable = items
         .iter()
-        .filter(|item| !matches!(item, MenuItem::Separator))
-        .map(|_| focus_handle())
-        .collect();
+        .filter(|item| !matches!(item, MenuItem::Separator));
+    let handles = RovingFocus::new(actionable.count());
     let mut index = 0;
     let rows = items.iter().cloned().map(|item| {
         if matches!(item, MenuItem::Separator) {
@@ -146,13 +146,13 @@ fn render_items(
         if matches!(focus, MenuFocus::Take) {
             let handles = handles.clone();
             row = row
-                .track_focus(handles[current])
+                .track_focus(handles.handle(current))
                 .focus(tint(theme.surface, theme.hover))
                 .on_key_down(move |event| {
-                    let count = handles.len();
                     match event.key {
-                        Key::ArrowDown => handles[(current + 1) % count].focus(),
-                        Key::ArrowUp => handles[(current + count - 1) % count].focus(),
+                        Key::ArrowDown | Key::ArrowUp => {
+                            handles.step(current, &event.key);
+                        }
                         Key::ArrowLeft => open.set(false),
                         Key::ArrowRight if submenu => activate(),
                         _ if activates(event) => activate(),

@@ -160,18 +160,32 @@ impl View for Popover {
 
 pub struct Tooltip {
     root: Div,
-    label: String,
+    label: Option<String>,
     delay: Duration,
     anchor: Signal<Rect>,
 }
 
 pub fn tooltip(target: impl View, label: impl Into<String>) -> Tooltip {
-    let (root, anchor) = anchored(target);
-    Tooltip {
-        root,
-        label: label.into(),
-        delay: Duration::from_millis(500),
-        anchor,
+    target.hint(Some(label))
+}
+
+pub trait Hint: View + Sized {
+    fn tooltip(self, label: impl Into<String>) -> Tooltip {
+        self.hint(Some(label))
+    }
+
+    fn hint(self, label: Option<impl Into<String>>) -> Tooltip;
+}
+
+impl<T: View> Hint for T {
+    fn hint(self, label: Option<impl Into<String>>) -> Tooltip {
+        let (root, anchor) = anchored(self);
+        Tooltip {
+            root,
+            label: label.map(Into::into),
+            delay: Duration::from_millis(500),
+            anchor,
+        }
     }
 }
 
@@ -187,7 +201,10 @@ styled!(Tooltip => root);
 impl View for Tooltip {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
         let theme = use_theme();
-        let (label, delay, anchor) = (self.label, self.delay, self.anchor);
+        let Some(label) = self.label else {
+            return self.root.build(cx);
+        };
+        let (delay, anchor) = (self.delay, self.anchor);
         let open = signal(false);
         let pending = Rc::new(Cell::new(None::<Task>));
         on_cleanup({

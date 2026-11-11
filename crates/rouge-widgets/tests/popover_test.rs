@@ -4,7 +4,7 @@ use common::builder;
 use rouge_core::testing::{TestResult, TestUi, counter};
 use rouge_core::{Key, Point, Rect, Styled, div, show};
 use rouge_reactive::{Runtime, signal};
-use rouge_widgets::{Placement, button, popover, tooltip};
+use rouge_widgets::{Hint, Placement, button, popover, tooltip};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -123,6 +123,30 @@ fn tooltip_appears_after_hovering_for_the_delay_and_hides_on_leave() {
     sleep(Duration::from_millis(40));
     ui.run(0.6);
     assert_eq!(shown(&mut ui), idle, "leaving before the delay cancels it");
+}
+
+#[test]
+fn any_view_takes_an_optional_hint_and_none_adds_nothing() {
+    let _entered = Runtime::new().enter();
+    let mut ui = builder().build(|| {
+        let hinted = div().w(60.0).h(20.0).hint(Some("Helpful"));
+        let plain = div().w(60.0).h(20.0).hint(None::<&str>);
+        div()
+            .size_full()
+            .child(hinted.delay(Duration::from_millis(20)))
+            .child(plain.delay(Duration::from_millis(20)))
+    });
+    let shown = |ui: &mut TestUi| ui.stats().elements;
+    let idle = shown(&mut ui);
+    ui.pointer_moved(Point::new(20.0, 30.0));
+    sleep(Duration::from_millis(40));
+    ui.run(0.6);
+    assert_eq!(shown(&mut ui), idle, "no hint, no tooltip");
+    ui.pointer_moved(Point::new(20.0, 10.0));
+    assert!(
+        ui.wait_until(|ui| shown(ui) > idle),
+        "the hinted view shows one"
+    );
 }
 
 #[test]
