@@ -35,7 +35,7 @@ pub use motion::{Animation, Motion, MotionProp, motion};
 pub use path::{Path, PathBuilder};
 pub use prop::{IntoEffect, IntoProp, Prop, PropFrom};
 pub use scroll::{
-    Align, RowHeight, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
+    Align, RowHeight, RowKey, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
     virtual_list_handle,
 };
 pub use style::{BoxShadow, Dirty, GroupStyles, Style, Styled};

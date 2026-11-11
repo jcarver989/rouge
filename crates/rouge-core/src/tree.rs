@@ -1616,7 +1616,7 @@ impl Tree {
                 origin: Point::ZERO,
                 layer: (self.root, Slot::Own),
             };
-            self.resolve_bounds(self.root, Point::ZERO, space, &mut cx);
+            batch(|| self.resolve_bounds(self.root, Point::ZERO, space, &mut cx));
             for layer in cx.moved {
                 if let Some(layer) = layer_mut(&mut self.elements, layer) {
                     layer.dirty = true;

@@ -2,10 +2,10 @@ use rouge_core::testing::{
     BLACK, BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, WHITE, counter,
 };
 use rouge_core::{
-    Align, Color, Point, ScrollEvent, ScrollState, Scrollable, Size, Styled, View, div, dynamic,
-    scroll, virtual_list, virtual_list_handle,
+    Align, Color, Point, RowKey, ScrollEvent, ScrollState, Scrollable, Size, Styled, View, div,
+    dynamic, rem, root_font_size, scroll, text, virtual_list, virtual_list_handle,
 };
-use rouge_reactive::{Runtime, Signal, effect, on_cleanup, signal};
+use rouge_reactive::{Runtime, Signal, batch, effect, on_cleanup, signal};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -514,6 +514,40 @@ fn list_handle_scrolls_to_each_alignment_and_exposes_mounted_bounds() -> TestRes
 }
 
 #[test]
+fn list_reveal_leaves_space_for_an_overlay_at_the_top() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, handle) = TestUiBuilder::default().build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(|| 100, 20.0, |_| div().h(20.0))
+                .measure_rows(|| 0)
+                .handle(handle)
+                .w(100.0)
+                .h(100.0),
+            handle,
+        )
+    });
+    handle.scroll_to_row(20, Align::Top);
+    ui.advance(0.0);
+    handle.reveal_row(20, 32.0);
+    ui.advance(0.0);
+    assert_eq!(
+        handle.row_bounds(20).ok_or("row is mounted")?.origin.y,
+        32.0
+    );
+    handle.reveal_row(80, 32.0);
+    ui.advance(0.0);
+    assert_eq!(
+        handle.row_bounds(80).ok_or("row is mounted")?.origin.y,
+        80.0
+    );
+    handle.reveal_row(0, 32.0);
+    ui.advance(0.0);
+    assert_eq!(handle.row_bounds(0).ok_or("row is mounted")?.origin.y, 0.0);
+    Ok(())
+}
+
+#[test]
 fn top_row_reports_the_first_fully_visible_row_once_after_wheel_scrolling() {
     let _rt = Runtime::new().enter();
     let (mut ui, handle) = TestUiBuilder::default().build_with(|| {
@@ -568,6 +602,398 @@ fn reactive_row_heights_only_recompute_affected_inputs_and_preserve_the_anchor()
     assert_eq!(handle.top_row().get(), 21);
     assert_eq!(handle.scroll_state().get().offset.y, 425.0);
     assert_eq!(handle.row_top(20), 420.0);
+}
+
+#[test]
+fn rows_from_a_superseded_presentation_are_not_mounted() {
+    let _rt = Runtime::new().enter();
+    let count = signal(1);
+    let mut ui = TestUi::canvas(move || {
+        virtual_list(
+            move || count.get(),
+            20.0,
+            move |index| {
+                assert!(index < count.get_untracked());
+                div().size_full()
+            },
+        )
+        .row_identity(|index| RowKey::new(index, 0))
+        .size_full()
+    });
+    count.set(100);
+    count.set(1);
+    ui.update();
+}
+
+#[test]
+fn keyed_rows_refresh_the_view_and_pointer_target_at_the_same_index() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let replacement = signal(false);
+    let clicked = signal(None);
+    let mut ui = TestUi::canvas(move || {
+        virtual_list(
+            || 100,
+            20.0,
+            move |index| {
+                if replacement.get_untracked() && (index == 0 || index == 50) {
+                    div()
+                        .size_full()
+                        .bg(Color::BLUE)
+                        .on_click(move |_| clicked.set(Some((index, true))))
+                } else {
+                    div()
+                        .size_full()
+                        .bg(Color::RED)
+                        .on_click(move |_| clicked.set(Some((index, false))))
+                }
+            },
+        )
+        .row_identity(move |index| {
+            let replaced = replacement.get() && (index == 0 || index == 50);
+            RowKey::new(
+                if replaced && index == 50 { 1000 } else { index },
+                u64::from(replaced),
+            )
+        })
+        .size_full()
+    });
+    assert_eq!(ui.pixel(10, 10)?, RED);
+    replacement.set(true);
+    ui.update();
+    assert_eq!(ui.pixel(10, 10)?, BLUE);
+    ui.click_at(10.0, 10.0);
+    assert_eq!(clicked.get(), Some((0, true)));
+    ui.scroll(Point::new(0.0, -1000.0));
+    ui.update();
+    assert_eq!(ui.pixel(10, 10)?, BLUE);
+    ui.click_at(10.0, 10.0);
+    assert_eq!(clicked.get(), Some((50, true)));
+    Ok(())
+}
+
+#[test]
+fn keyed_anchor_survives_reorder_and_falls_forward_when_removed() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let ids = signal((0..100).collect::<Vec<_>>());
+    let (mut ui, handle) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(move || ids.with(Vec::len), 20.0, |_| div().size_full())
+                .row_identity(move |index| RowKey::new(ids.with(|ids| ids[index]), 0))
+                .handle(handle)
+                .size_full(),
+            handle,
+        )
+    });
+    handle.scroll_to(Point::new(0.0, 405.0));
+    ui.update();
+    ids.update(|ids| ids.splice(0..0, [100, 101]).for_each(drop));
+    ui.update();
+    assert_eq!(handle.scroll_state().get().offset.y, 445.0);
+    ids.update(|ids| ids.swap(22, 40));
+    ui.update();
+    assert_eq!(
+        handle
+            .row_bounds(40)
+            .ok_or("reordered anchor is mounted")?
+            .origin
+            .y,
+        -5.0
+    );
+    ids.update(|ids| {
+        ids.remove(40);
+        ids.remove(40);
+        ids.swap(40, 50);
+    });
+    ui.update();
+    assert_eq!(
+        handle
+            .row_bounds(50)
+            .ok_or("surviving successor is mounted")?
+            .origin
+            .y,
+        -5.0
+    );
+    Ok(())
+}
+
+#[test]
+fn indexed_estimates_use_the_current_presentation_and_keep_the_keyed_anchor() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let model = signal((0..100).map(|id| (id, 20.0)).collect::<Vec<_>>());
+    let (mut ui, handle) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(
+                move || model.with(Vec::len),
+                move |i: usize| model.with(|rows| rows[i].1),
+                |_| div().size_full(),
+            )
+            .row_identity(move |index| RowKey::new(model.with(|rows| rows[index].0), 0))
+            .handle(handle)
+            .size_full(),
+            handle,
+        )
+    });
+    handle.scroll_to(Point::new(0.0, 405.0));
+    ui.update();
+    model.update(|rows| {
+        rows.truncate(50);
+        rows.insert(0, (100, 150.0));
+    });
+    ui.update();
+    assert_eq!(handle.row_top(21), 550.0);
+    assert_eq!(
+        handle.row_bounds(21).ok_or("anchor is mounted")?.origin.y,
+        -5.0
+    );
+    Ok(())
+}
+
+#[test]
+fn measured_rows_keep_the_partial_anchor_and_align_using_actual_heights() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let expanded = signal(false);
+    let (mut ui, handle) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(
+                || 100,
+                20.0,
+                move |index| {
+                    div().h(move || match index {
+                        19 if expanded.get() => 50.0,
+                        70 => 60.0,
+                        _ => 20.0,
+                    })
+                },
+            )
+            .measure_rows(|| 0)
+            .handle(handle)
+            .size_full(),
+            handle,
+        )
+    });
+    handle.scroll_to(Point::new(0.0, 405.0));
+    ui.update();
+    expanded.set(true);
+    ui.update();
+    assert_eq!(handle.row_top(20), 430.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 435.0);
+    assert_eq!(
+        handle.row_bounds(20).ok_or("anchor is mounted")?.origin.y,
+        -5.0
+    );
+    handle.scroll_to_row(70, Align::Center);
+    ui.update();
+    let row = handle.row_bounds(70).ok_or("centered row is mounted")?;
+    assert_eq!(row.size.height, 60.0);
+    assert_eq!(row.origin.y, 20.0);
+    handle.scroll_to_row(70, Align::Bottom);
+    ui.update();
+    assert_eq!(
+        handle
+            .row_bounds(70)
+            .ok_or("bottom-aligned row is mounted")?
+            .origin
+            .y,
+        40.0
+    );
+    assert!(
+        !ui.update(),
+        "measurement settles without keeping the list dirty"
+    );
+    Ok(())
+}
+
+#[test]
+fn measured_list_reflows_wrapped_text_and_invalidates_offscreen_cache() {
+    let _rt = Runtime::new().enter();
+    let revision = signal(0);
+    let (mut ui, (handle, font)) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(
+                || 200,
+                20.0,
+                |index| {
+                    if index == 0 {
+                        text("This paragraph wraps to several lines at a narrow width")
+                            .text_size(rem(1.0))
+                            .into_any()
+                    } else {
+                        div().h(20.0).into_any()
+                    }
+                },
+            )
+            .row_identity(|index| RowKey::new(index, 0))
+            .measure_rows(move || revision.get())
+            .handle(handle)
+            .size_full(),
+            (handle, root_font_size()),
+        )
+    });
+    let narrow = handle.row_top(1);
+    assert!(narrow > 20.0);
+    ui.set_size(Size::new(250.0, 100.0));
+    ui.update();
+    let wide = handle.row_top(1);
+    assert!(wide < narrow);
+    font.set(26.0);
+    ui.update();
+    assert!(handle.row_top(1) > wide);
+    handle.scroll_to_row(100, Align::Top);
+    ui.update();
+    assert!(handle.row_bounds(0).is_none());
+    assert!(handle.row_top(1) > 20.0);
+    revision.set(1);
+    ui.update();
+    assert_eq!(handle.row_top(1), 20.0);
+    assert_eq!(handle.scroll_state().get().offset.y, 2000.0);
+    for width in [100.0, 250.0, 100.0] {
+        ui.set_size(Size::new(width, 100.0));
+        ui.update();
+        assert_eq!(handle.scroll_state().get().offset.y, 2000.0);
+    }
+}
+
+#[test]
+fn offscreen_measurements_follow_identity_but_not_content_revision() {
+    let _rt = Runtime::new().enter();
+    let swapped = signal(false);
+    let changed = signal(false);
+    let index_id = move |index| match (swapped.get(), index) {
+        (true, 0) => 5,
+        (true, 5) => 0,
+        _ => index,
+    };
+    let (mut ui, handle) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(
+                || 200,
+                20.0,
+                move |index| {
+                    let special = index_id(index) == 0;
+                    div().h(if !special {
+                        20.0
+                    } else if changed.get_untracked() {
+                        30.0
+                    } else {
+                        80.0
+                    })
+                },
+            )
+            .row_identity(move |index| {
+                let id = index_id(index);
+                RowKey::new(id, u64::from(id == 0 && changed.get()))
+            })
+            .measure_rows(|| 0)
+            .handle(handle)
+            .size_full(),
+            handle,
+        )
+    });
+    assert_eq!(handle.row_top(1), 80.0);
+    handle.scroll_to_row(100, Align::Top);
+    ui.update();
+    assert!(handle.row_bounds(0).is_none());
+    swapped.set(true);
+    ui.update();
+    assert_eq!(handle.row_top(1), 20.0);
+    assert_eq!(handle.row_top(6), 180.0);
+    assert!(handle.row_bounds(5).is_none());
+    changed.set(true);
+    ui.update();
+    assert_eq!(handle.row_top(6), 120.0);
+    assert_eq!(handle.top_row().get(), 100);
+    handle.scroll_to_row(5, Align::Top);
+    ui.update();
+    assert_eq!(handle.row_top(6), 130.0);
+    assert_eq!(handle.top_row().get(), 5);
+}
+
+#[test]
+fn hidden_rows_and_zero_viewports_do_not_mount_offscreen_content() {
+    let _rt = Runtime::new().enter();
+    let count = signal(100_000);
+    let visible = signal(0..0);
+    let (mounts, bump) = counter();
+    let (mut ui, handle) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(
+                move || count.get(),
+                |i| if i == 0 || i == 99_999 { 20.0 } else { 0.0 },
+                move |_| {
+                    bump();
+                    div().size_full()
+                },
+            )
+            .track_rows(visible)
+            .handle(handle)
+            .size_full(),
+            handle,
+        )
+    });
+    assert_eq!(mounts.get(), 2);
+    assert_eq!(handle.scroll_state().get().content.height, 100.0);
+    assert!(handle.row_bounds(1).is_none());
+    ui.set_size(Size::new(100.0, 0.0));
+    ui.update();
+    assert!(visible.get().is_empty());
+    assert!(handle.row_bounds(0).is_none());
+    batch(|| {
+        count.set(0);
+        handle.scroll_to_row(10, Align::Top);
+    });
+    ui.set_size(Size::new(100.0, 100.0));
+    ui.update();
+    assert!(visible.get().is_empty());
+    assert_eq!(handle.top_row().get(), 0);
+    assert_eq!(handle.row_top(100), 0.0);
+    assert_eq!(mounts.get(), 2);
+}
+
+#[test]
+fn scrolling_a_large_measured_list_only_mounts_nearby_rows() {
+    let _rt = Runtime::new().enter();
+    let (identities, identify) = counter();
+    let (mounts, mount) = counter();
+    let (mut ui, handle) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(
+                || 100_000,
+                20.0,
+                move |index| {
+                    mount();
+                    div().h(if index % 2 == 0 { 20.0 } else { 24.0 })
+                },
+            )
+            .row_identity(move |index| {
+                identify();
+                RowKey::new(index, 0)
+            })
+            .measure_rows(|| 0)
+            .handle(handle)
+            .size_full(),
+            handle,
+        )
+    });
+    assert_eq!(identities.get(), 100_000);
+    assert!(mounts.get() <= 24);
+    let nodes = ui.stats().elements;
+    for target in [50_000, 98_000, 20_000, 50_000] {
+        let before = mounts.get();
+        handle.scroll_to_row(target, Align::Top);
+        ui.update();
+        assert_eq!(handle.top_row().get(), target);
+        assert!(mounts.get() - before <= 32);
+        assert!(ui.stats().elements <= nodes + 32);
+        assert!(handle.row_bounds(target).is_some());
+    }
+    assert_eq!(identities.get(), 100_000);
 }
 
 fn scroller(state: Signal<ScrollState>) -> TestUi {

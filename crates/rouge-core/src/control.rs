@@ -181,8 +181,9 @@ where
 
         effect(move || {
             let (items, state) = (items(), state.clone());
+            let pending = Scope::new();
             send(&patches, move |cx| {
-                if !rows_scope.is_alive() {
+                if !pending.is_alive() || !rows_scope.is_alive() {
                     return;
                 }
                 let (key, view, rows) = &*state;
