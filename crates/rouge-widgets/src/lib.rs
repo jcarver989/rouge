@@ -22,7 +22,7 @@ pub use modal::{Modal, modal};
 pub use popover::{Placement, Popover, Tooltip, popover, tooltip};
 pub use progress::{Separator, progress, separator, spinner};
 pub use resizable_panel::{ResizablePanel, Side, resizable_panel};
-pub use scroll_view::{ScrollView, scroll_view};
+pub use scroll_view::{ScrollView, ScrollbarStyle, scroll_view, vertical_scrollbar};
 pub use slider::{Slider, slider};
 pub use tabs::{Tabs, tabs};
 

@@ -7,6 +7,45 @@ use std::cell::Cell;
 
 const MIN_THUMB: f32 = 24.0;
 
+#[derive(Clone, Copy)]
+pub struct ScrollbarStyle {
+    pub track: f32,
+    pub inset: f32,
+    pub thumb: f32,
+    pub min_thumb: f32,
+    pub radius: f32,
+}
+
+impl Default for ScrollbarStyle {
+    fn default() -> Self {
+        Self {
+            track: 10.0,
+            inset: 2.0,
+            thumb: 6.0,
+            min_thumb: MIN_THUMB,
+            radius: 3.0,
+        }
+    }
+}
+
+pub fn vertical_scrollbar(
+    state: Signal<ScrollState>,
+    style: impl Fn() -> ScrollbarStyle + Copy + 'static,
+) -> impl View {
+    scrollbar_if_needed(state, Axis::Vertical, style)
+}
+
+fn scrollbar_if_needed(
+    state: Signal<ScrollState>,
+    axis: Axis,
+    style: impl Fn() -> ScrollbarStyle + Copy + 'static,
+) -> impl View {
+    show(
+        move || axis.content(state.get()) > axis.viewport(state.get()) + 0.5,
+        move || scrollbar(state, axis, style),
+    )
+}
+
 pub struct ScrollView<T> {
     root: Div,
     content: T,
@@ -33,12 +72,8 @@ styled!(ScrollView<T> => root);
 impl<T: Scrollable + Styled> View for ScrollView<T> {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
         let state = self.state.unwrap_or_else(|| signal(ScrollState::default()));
-        let bars = [Axis::Vertical, Axis::Horizontal].map(|axis| {
-            show(
-                move || axis.content(state.get()) > axis.viewport(state.get()) + 0.5,
-                move || scrollbar(state, axis),
-            )
-        });
+        let bars = [Axis::Vertical, Axis::Horizontal]
+            .map(|axis| scrollbar_if_needed(state, axis, ScrollbarStyle::default));
         self.root
             .child(self.content.size_full().scroll_state(state))
             .children(bars)
@@ -86,13 +121,17 @@ impl Axis {
     }
 }
 
-fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
+fn scrollbar(
+    state: Signal<ScrollState>,
+    axis: Axis,
+    style: impl Fn() -> ScrollbarStyle + Copy + 'static,
+) -> Div {
     let theme = use_theme();
     let length = memo(move || {
         let state = state.get();
         let viewport = axis.viewport(state);
         (viewport * viewport / axis.content(state).max(1.0))
-            .clamp(viewport.min(MIN_THUMB), viewport)
+            .clamp(viewport.min(style().min_thumb), viewport)
     });
     let travel = move || {
         let state = state.get();
@@ -103,7 +142,7 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
     let origin = Cell::new(0.0);
     let thumb = div()
         .absolute()
-        .rounded(3.0)
+        .rounded(move || style().radius)
         .bg(move || theme.text_muted.get().with_alpha(0.5))
         .on_pointer_down(PointerEvent::stop_propagation)
         .on_drag(move |event| {
@@ -125,12 +164,12 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
                 .top(0.0)
                 .bottom(0.0)
                 .right(0.0)
-                .w(10.0),
+                .w(move || style().track),
             thumb
                 .test_id("scroll-thumb-vertical")
                 .top(0.0)
-                .right(2.0)
-                .w(6.0)
+                .right(move || style().inset)
+                .w(move || style().thumb)
                 .h(length)
                 .translate_y(travel),
         ),
@@ -140,12 +179,12 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
                 .left(0.0)
                 .right(0.0)
                 .bottom(0.0)
-                .h(10.0),
+                .h(move || style().track),
             thumb
                 .test_id("scroll-thumb-horizontal")
                 .left(0.0)
-                .bottom(2.0)
-                .h(6.0)
+                .bottom(move || style().inset)
+                .h(move || style().thumb)
                 .w(length)
                 .translate_x(travel),
         ),
