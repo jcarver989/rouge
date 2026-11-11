@@ -299,7 +299,8 @@ impl Ui {
             .hit_test(&self.compositor, position)
             .iter()
             .rev()
-            .find_map(|id| self.tree.text_index(&self.compositor, *id, position))
+            .find_map(|id| self.tree.text_hit(&self.compositor, *id, position))
+            .map(|hit| hit.index)
     }
 
     pub fn bounds_at(&mut self, position: Point) -> Option<Rect> {
@@ -652,7 +653,7 @@ impl Ui {
         self.tree();
         if on == On::Click {
             self.tree
-                .range_click(&self.compositor, path, position, self.modifiers);
+                .text_click(&self.compositor, path, position, self.modifiers);
         }
         let listeners = self.tree().listeners(path, on);
         let mut event = PointerEvent::new(position, button);

@@ -1,3 +1,4 @@
+use crate::canvas::TextHit;
 use crate::event::{
     Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers, PointerEvent, ScrollEvent,
 };
@@ -492,7 +493,9 @@ impl Text {
         mut self,
         f: impl Fn(Option<usize>, Modifiers) + 'static,
     ) -> Self {
-        self.0.spec.range_hover = Some(Rc::new(f));
+        self.0.spec.text_hover = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
+            f(hit.map(|hit| hit.index), modifiers);
+        }));
         self
     }
 
@@ -504,7 +507,9 @@ impl Text {
         mut self,
         f: impl Fn(Option<usize>, Modifiers) + 'static,
     ) -> Self {
-        self.0.spec.range_click = Some(Rc::new(f));
+        self.0.spec.text_click = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
+            f(hit.map(|hit| hit.index), modifiers);
+        }));
         self
     }
 

@@ -1,11 +1,103 @@
+use crate::event::Modifiers;
 use crate::path::Path;
 use crate::prop::{IntoProp, Prop};
 use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, View, div, send};
-use rouge_reactive::{effect, signal};
+use rouge_reactive::{Signal, effect, signal};
 use rouge_render::{Color, ImageData, ImageQuad, Point, Quad, Rect, Size};
 use rouge_text::{TextLayout, TextStyle};
+use std::rc::Rc;
+
+pub(crate) type HitListener = Rc<dyn Fn(Option<TextHit>, Modifiers)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextHit {
+    pub tag: u32,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRun {
+    pub content: String,
+    pub style: TextStyle,
+    pub origin: Point,
+    pub color: Color,
+    pub clip: Option<Rect>,
+    pub tag: Option<u32>,
+    pub name: Option<String>,
+    pub right_aligned: bool,
+}
+
+impl TextRun {
+    pub fn new(content: impl Into<String>, origin: Point, style: &TextStyle, color: Color) -> Self {
+        TextRun {
+            content: content.into(),
+            style: style.clone(),
+            origin,
+            color,
+            clip: None,
+            tag: None,
+            name: None,
+            right_aligned: false,
+        }
+    }
+
+    pub fn right_aligned(mut self) -> Self {
+        self.right_aligned = true;
+        self
+    }
+
+    pub fn clip(mut self, clip: Rect) -> Self {
+        self.clip = Some(clip);
+        self
+    }
+
+    pub fn tag(mut self, tag: u32) -> Self {
+        self.tag = Some(tag);
+        self
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+}
+
+pub(crate) struct ShapedRun {
+    pub(crate) run: TextRun,
+    pub(crate) layout: Option<Box<TextLayout>>,
+}
+
+impl ShapedRun {
+    pub(crate) fn bounds(&self) -> Rect {
+        let (width, height) = self
+            .layout
+            .as_ref()
+            .map_or((0.0, 0.0), |layout| layout.size());
+        Rect {
+            origin: self.run.origin,
+            size: Size::new(width, height),
+        }
+    }
+
+    pub(crate) fn hit(&self, point: Point) -> Option<TextHit> {
+        let tag = self.run.tag?;
+        if self.run.clip.is_some_and(|clip| !clip.contains(point)) || !self.bounds().contains(point)
+        {
+            return None;
+        }
+        let local = point - self.run.origin;
+        let index = self.layout.as_ref()?.index_at(local.x, local.y)?;
+        Some(TextHit { tag, index })
+    }
+
+    pub(crate) fn overflow(&self) -> f32 {
+        self.run
+            .clip
+            .map_or(0.0, |clip| (self.bounds().max().x - clip.max().x).max(0.0))
+    }
+}
 
 pub(crate) enum PaintOp {
     Quad(Quad),
@@ -15,12 +107,10 @@ pub(crate) enum PaintOp {
         stroke: Option<(f32, bool)>,
         color: Color,
     },
-    Text {
-        content: String,
-        style: TextStyle,
-        origin: Point,
-        color: Color,
-        layout: Option<Box<TextLayout>>,
+    Text(ShapedRun),
+    Region {
+        name: String,
+        rect: Rect,
     },
 }
 
@@ -78,13 +168,18 @@ impl Painter {
         style: &TextStyle,
         color: Color,
     ) {
-        let (content, style) = (content.into(), style.clone());
-        self.ops.push(PaintOp::Text {
-            content,
-            style,
-            origin,
-            color,
-            layout: None,
+        self.run(TextRun::new(content, origin, style, color));
+    }
+
+    pub fn run(&mut self, run: TextRun) {
+        self.ops
+            .push(PaintOp::Text(ShapedRun { run, layout: None }));
+    }
+
+    pub fn region(&mut self, name: impl Into<String>, rect: Rect) {
+        self.ops.push(PaintOp::Region {
+            name: name.into(),
+            rect,
         });
     }
 }
@@ -92,6 +187,28 @@ impl Painter {
 pub struct Canvas {
     div: Div,
     draw: Box<dyn Fn(&mut Painter)>,
+}
+
+impl Canvas {
+    pub fn element(mut self, configure: impl FnOnce(Div) -> Div) -> Self {
+        self.div = configure(self.div);
+        self
+    }
+
+    pub fn on_text_hover(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
+        self.div.spec.text_hover = Some(Rc::new(f));
+        self
+    }
+
+    pub fn on_text_click(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
+        self.div.spec.text_click = Some(Rc::new(f));
+        self
+    }
+
+    pub fn track_overflow(mut self, overflow: Signal<f32>) -> Self {
+        self.div.spec.overflow_observer = Some(overflow);
+        self
+    }
 }
 
 pub fn canvas(draw: impl Fn(&mut Painter) + 'static) -> Canvas {
@@ -112,8 +229,12 @@ impl View for Canvas {
         let id = div.build(cx);
         let patches = cx.patches.clone();
         effect(move || {
+            let size = size.get();
+            if size.width <= 0.0 || size.height <= 0.0 {
+                return;
+            }
             let mut painter = Painter {
-                size: size.get(),
+                size,
                 ops: Vec::new(),
             };
             draw(&mut painter);

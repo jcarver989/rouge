@@ -1,4 +1,4 @@
-use crate::canvas::PaintOp;
+use crate::canvas::{HitListener, PaintOp, ShapedRun, TextHit};
 use crate::clipboard::{Clipboard, MemoryClipboard};
 use crate::event::{
     Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers, PointerEvent, ScrollEvent,
@@ -29,8 +29,6 @@ use taffy::{
 use zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
 
 pub(crate) mod edit;
-
-type RangeListener = Rc<dyn Fn(Option<usize>, Modifiers)>;
 
 new_key_type! {
     pub struct ElementId;
@@ -225,8 +223,9 @@ pub(crate) struct ElementSpec {
     pub group: Option<String>,
     pub test_id: Option<String>,
     pub text: Option<TextData>,
-    pub range_hover: Option<RangeListener>,
-    pub range_click: Option<RangeListener>,
+    pub text_hover: Option<HitListener>,
+    pub text_click: Option<HitListener>,
+    pub overflow_observer: Option<Signal<f32>>,
     pub style: Style,
     pub variants: [Option<Variant>; STATES],
     pub listeners: [Vec<Listener>; EVENTS],
@@ -768,18 +767,21 @@ impl Tree {
         let Some(element) = self.elements.get_mut(id) else {
             return;
         };
+        let mut overflow = 0.0_f32;
         for op in &mut ops {
-            if let PaintOp::Text {
-                content,
-                style,
-                layout,
-                ..
-            } = op
-            {
-                let mut shaped = system.layout(content, style);
-                shaped.break_lines(None);
-                *layout = Some(Box::new(shaped));
+            if let PaintOp::Text(shaped) = op {
+                let mut layout = system.layout(&shaped.run.content, &shaped.run.style);
+                layout.break_lines(None);
+                if shaped.run.right_aligned {
+                    shaped.run.origin.x -= layout.size().0;
+                    shaped.run.right_aligned = false;
+                }
+                shaped.layout = Some(Box::new(layout));
+                overflow = overflow.max(shaped.overflow());
             }
+        }
+        if let Some(observer) = element.spec.overflow_observer.filter(|o| o.is_alive()) {
+            observer.set_if_changed(overflow);
         }
         element.spec.canvas = Some(ops);
         self.mark_element(id, Dirty::Paint);
@@ -1449,23 +1451,21 @@ impl Tree {
             if element.spec.test_id.as_deref() == Some(name) {
                 bounds.push(self.window_bounds(compositor, id));
             }
+            for op in element.spec.canvas.iter().flatten() {
+                let rect = match op {
+                    PaintOp::Region { name: region, rect } if region == name => *rect,
+                    PaintOp::Text(run) if run.run.name.as_deref() == Some(name) => run.bounds(),
+                    _ => continue,
+                };
+                let rect = rect.translate(element.bounds.origin);
+                bounds.push(self.to_window(compositor, id, rect));
+            }
             pending.extend(element.children.iter().rev());
         }
         bounds
     }
 
-    pub(crate) fn text_index(
-        &self,
-        compositor: &Compositor,
-        id: ElementId,
-        point: Point,
-    ) -> Option<usize> {
-        let text = self.elements.get(id)?.spec.text.as_ref()?;
-        let point = self.to_local(compositor, id, point) - text.inset;
-        text.layout.as_ref()?.index_at(point.x, point.y)
-    }
-
-    pub(crate) fn range_click(
+    pub(crate) fn text_click(
         &self,
         compositor: &Compositor,
         path: &[ElementId],
@@ -1474,11 +1474,30 @@ impl Tree {
     ) {
         batch(|| {
             for id in path.iter().rev() {
-                if let Some(callback) = &self.elements[*id].spec.range_click {
-                    callback(self.text_index(compositor, *id, point), modifiers);
+                if let Some(callback) = &self.elements[*id].spec.text_click {
+                    callback(self.text_hit(compositor, *id, point), modifiers);
                 }
             }
         });
+    }
+
+    pub(crate) fn text_hit(
+        &self,
+        compositor: &Compositor,
+        id: ElementId,
+        point: Point,
+    ) -> Option<TextHit> {
+        let spec = &self.elements.get(id)?.spec;
+        let local = self.to_local(compositor, id, point);
+        if let Some(text) = &spec.text {
+            let point = local - text.inset;
+            let index = text.layout.as_ref()?.index_at(point.x, point.y)?;
+            return Some(TextHit { tag: 0, index });
+        }
+        spec.canvas.as_ref()?.iter().rev().find_map(|op| match op {
+            PaintOp::Text(run) => run.hit(local),
+            _ => None,
+        })
     }
 
     pub(crate) fn to_local(&self, compositor: &Compositor, id: ElementId, point: Point) -> Point {
@@ -1830,14 +1849,14 @@ impl Tree {
             .unwrap_or_default();
         batch(|| {
             for id in self.hover_path.iter().filter(|id| !path.contains(id)) {
-                if let Some(callback) = &self.elements[*id].spec.range_hover {
+                if let Some(callback) = &self.elements[*id].spec.text_hover {
                     callback(None, modifiers);
                 }
             }
             if let Some(point) = point {
                 for id in &path {
-                    if let Some(callback) = &self.elements[*id].spec.range_hover {
-                        callback(self.text_index(compositor, *id, point), modifiers);
+                    if let Some(callback) = &self.elements[*id].spec.text_hover {
+                        callback(self.text_hit(compositor, *id, point), modifiers);
                     }
                 }
             }
@@ -2246,15 +2265,16 @@ fn paint_canvas(
                     });
                 }
             }
-            PaintOp::Text {
-                origin: at,
-                color,
+            PaintOp::Text(ShapedRun {
+                run,
                 layout: Some(layout),
-                ..
-            } => {
-                paint_glyphs(layout, origin + *at, clip, *color, out, cx);
+            }) => {
+                let clip = run
+                    .clip
+                    .map_or(clip, |own| clip.intersect(&own.translate(origin)));
+                paint_glyphs(layout, origin + run.origin, clip, run.color, out, cx);
             }
-            PaintOp::Text { .. } => {}
+            PaintOp::Text(_) | PaintOp::Region { .. } => {}
         }
     }
 }

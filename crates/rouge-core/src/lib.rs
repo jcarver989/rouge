@@ -20,7 +20,7 @@ mod ui;
 mod view;
 mod window;
 
-pub use canvas::{Canvas, Icon, Painter, canvas, icon};
+pub use canvas::{Canvas, Icon, Painter, TextHit, TextRun, canvas, icon};
 pub use clipboard::{Clipboard, ClipboardTarget, MemoryClipboard};
 pub use control::{Each, Show, dynamic, each, overlay, show};
 pub use editable::{Editable, editable};
