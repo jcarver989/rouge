@@ -114,6 +114,7 @@ type RootFn = Box<dyn FnOnce() -> AnyView>;
 pub struct App {
     windows: Vec<(WindowOptions, RootFn)>,
     menus: Vec<Menu>,
+    fonts: Vec<Vec<u8>>,
 }
 
 impl App {
@@ -130,6 +131,11 @@ impl App {
 
     pub fn new() -> App {
         App::default()
+    }
+
+    pub fn fonts(mut self, fonts: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        self.fonts.extend(fonts);
+        self
     }
 
     pub fn window<T: View>(
@@ -161,6 +167,7 @@ impl App {
             native_menus,
             pending: self.windows,
             menus: self.menus,
+            fonts: self.fonts,
             windows: HashMap::new(),
             error: None,
             exit_after_frames: var("ROUGE_EXIT_AFTER_FRAMES")
@@ -177,6 +184,7 @@ struct Runner {
     native_menus: crate::platform::native_menu::NativeMenus,
     pending: Vec<(WindowOptions, RootFn)>,
     menus: Vec<Menu>,
+    fonts: Vec<Vec<u8>>,
     windows: HashMap<WindowId, WindowState>,
     error: Option<AppError>,
     exit_after_frames: Option<u64>,
@@ -217,6 +225,7 @@ impl WindowState {
         options: WindowOptions,
         root: RootFn,
         menus: Vec<Menu>,
+        fonts: &[Vec<u8>],
     ) -> Result<WindowState, AppError> {
         let mut attributes = Window::default_attributes()
             .with_title(options.title.clone())
@@ -248,16 +257,20 @@ impl WindowState {
 
         let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
         let chrome = options.decorations == Decorations::Client || !window.is_decorated();
-        let mut ui = Ui::new(logical_size(physical, scale), move || {
-            let handle = window_handle();
-            handle.set_title(options.title);
-            let root = crate::platform::menu_root(menus, root());
-            if chrome {
-                window_chrome(handle.title(), root).into_any()
-            } else {
-                root
-            }
-        });
+        let mut ui = Ui::with_fonts(
+            logical_size(physical, scale),
+            fonts.iter().cloned(),
+            move || {
+                let handle = window_handle();
+                handle.set_title(options.title);
+                let root = crate::platform::menu_root(menus, root());
+                if chrome {
+                    window_chrome(handle.title(), root).into_any()
+                } else {
+                    root
+                }
+            },
+        );
         ui.set_appearance(platform_appearance(window.theme()));
         ui.set_scale(scale);
         ui.set_clipboard(SystemClipboardAdapter(SystemClipboard::new().ok()));
@@ -373,7 +386,7 @@ impl WindowState {
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         for (options, root) in take(&mut self.pending) {
-            match WindowState::new(event_loop, options, root, self.menus.clone()) {
+            match WindowState::new(event_loop, options, root, self.menus.clone(), &self.fonts) {
                 Ok(state) => {
                     self.windows.insert(state.window.id(), state);
                 }

@@ -94,9 +94,20 @@ pub struct Frame<'a> {
 
 impl Ui {
     pub fn new<T: View>(size: Size, root: impl FnOnce() -> T) -> Ui {
+        Self::with_fonts(size, [], root)
+    }
+
+    pub fn with_fonts<T: View>(
+        size: Size,
+        fonts: impl IntoIterator<Item = Vec<u8>>,
+        root: impl FnOnce() -> T,
+    ) -> Ui {
         let (patches, pending) = unbounded_channel();
         let mut tree = Tree::new(size);
         let mut text_system = TextSystem::new();
+        for font in fonts {
+            text_system.add_font(font);
+        }
         let scope = Scope::root();
         let (commands, window_commands) = unbounded_channel();
         let (size, window_handle) = scope.run(|| {

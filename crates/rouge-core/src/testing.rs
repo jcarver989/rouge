@@ -33,6 +33,7 @@ pub const CLEAR: [u8; 4] = [0, 0, 0, 0];
 const STEP: f64 = 0.05;
 
 pub struct TestUiBuilder {
+    fonts: Vec<Vec<u8>>,
     size: Size,
     scale: f32,
     clear: Color,
@@ -41,6 +42,7 @@ pub struct TestUiBuilder {
 impl Default for TestUiBuilder {
     fn default() -> Self {
         TestUiBuilder {
+            fonts: Vec::new(),
             size: Size::new(200.0, 100.0),
             scale: 1.0,
             clear: Color::TRANSPARENT,
@@ -64,13 +66,18 @@ impl TestUiBuilder {
         self
     }
 
+    pub fn fonts(mut self, fonts: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        self.fonts.extend(fonts);
+        self
+    }
+
     pub fn build<T: View>(self, root: impl FnOnce() -> T) -> TestUi {
         self.build_with(|| (root(), ())).0
     }
 
     pub fn build_with<T: View, U>(self, root: impl FnOnce() -> (T, U)) -> (TestUi, U) {
         let mut extra = None;
-        let mut ui = Ui::new(self.size, || {
+        let mut ui = Ui::with_fonts(self.size, self.fonts, || {
             let (view, value) = root();
             extra = Some(value);
             view
