@@ -199,6 +199,7 @@ struct WindowState {
     ui: Ui,
     background: Color,
     frames: u64,
+    occluded: bool,
     tracking: bool,
     modifiers: Modifiers,
     cursor: Cursor,
@@ -283,6 +284,7 @@ impl WindowState {
             ui,
             background: options.background,
             frames: 0,
+            occluded: false,
             tracking: false,
             modifiers: Modifiers::NONE,
             cursor: Cursor::Default,
@@ -401,7 +403,7 @@ impl ApplicationHandler for Runner {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         for state in self.windows.values_mut() {
-            if state.ui.needs_frame() {
+            if !state.occluded && state.ui.needs_frame() {
                 state.window.request_redraw();
             }
         }
@@ -470,9 +472,16 @@ impl ApplicationHandler for Runner {
                 state.ui.ime(ImeEvent::Preedit { text, cursor });
             }
             WindowEvent::Ime(Ime::Commit(text)) => state.ui.ime(ImeEvent::Commit(text)),
-            WindowEvent::Occluded(false) => state.window.request_redraw(),
+            WindowEvent::Occluded(occluded) => {
+                state.occluded = occluded;
+                if !occluded {
+                    state.window.request_redraw();
+                }
+            }
             WindowEvent::RedrawRequested => {
-                state.redraw();
+                if !state.occluded {
+                    state.redraw();
+                }
                 if self.exit_after_frames.is_some_and(|n| state.frames >= n) {
                     self.windows.clear();
                     event_loop.exit();
