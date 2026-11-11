@@ -1,7 +1,7 @@
 use thiserror::Error;
 use wgpu::{
-    Adapter, Device, DeviceDescriptor, Instance, Queue, RequestAdapterError, RequestAdapterOptions,
-    RequestDeviceError, Surface,
+    Adapter, Device, DeviceDescriptor, Instance, PowerPreference, Queue, RequestAdapterError,
+    RequestAdapterOptions, RequestDeviceError, Surface,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,6 +35,7 @@ impl Gpu {
         let adapter = instance
             .request_adapter(&RequestAdapterOptions {
                 compatible_surface,
+                power_preference: PowerPreference::from_env().unwrap_or_default(),
                 ..Default::default()
             })
             .await?;
