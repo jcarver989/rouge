@@ -1,4 +1,5 @@
 use crate::util::{pressable, themed, tint};
+use rouge_core::component;
 use rouge_core::{
     AnyView, BuildCx, Color, Div, ElementId, IntoProp, Prop, Styled, Text, Theme, View, div,
     styled, text, use_theme,
@@ -15,6 +16,7 @@ pub struct Button {
     theme: Theme,
 }
 
+#[component]
 #[track_caller]
 pub fn button<U>(label: impl IntoProp<String, U>) -> Button {
     let theme = use_theme();

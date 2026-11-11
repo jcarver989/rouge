@@ -12,6 +12,7 @@ use crate::style::{Dirty, Style, Styled};
 use crate::styled;
 use crate::theme::use_theme;
 use crate::tree::{ElementId, ElementSpec, Event, Interaction, On, TextData, Tree};
+use rouge_macros::component;
 use rouge_reactive::{Signal, effect};
 use rouge_render::{
     BlendMode, Color, Effect, EffectInstance, EffectSlot, Keyframes, LayerCommand, LayerProp,
@@ -133,6 +134,7 @@ pub struct Div {
     autofocus: bool,
 }
 
+#[component]
 pub fn div() -> Div {
     Div::default()
 }
@@ -579,19 +581,21 @@ impl View for Div {
 
 pub struct Text(pub(crate) Div);
 
-pub fn text<U>(content: impl IntoProp<String, U>) -> Text {
+#[component]
+pub fn text<U>(children: impl IntoProp<String, U>) -> Text {
     Text(div().bind(
-        content,
+        children,
         |spec, content| spec.text.get_or_insert_default().content = content,
         Tree::set_text_content,
     ))
 }
 
+#[component]
 pub fn rich_text<T, U>(
-    content: impl IntoProp<String, T>,
+    children: impl IntoProp<String, T>,
     spans: impl IntoProp<Vec<(Range<usize>, SpanStyle)>, U>,
 ) -> Text {
-    text(content).spans(spans)
+    text(children).spans(spans)
 }
 
 impl Text {

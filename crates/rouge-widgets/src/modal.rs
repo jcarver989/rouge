@@ -1,4 +1,5 @@
 use crate::popover::{panel, popup};
+use rouge_core::component;
 use rouge_core::{AnyView, BuildCx, Div, ElementId, ScrollEvent, Styled, View, use_theme};
 use rouge_reactive::Signal;
 
@@ -8,10 +9,11 @@ pub struct Modal {
     dismissable: bool,
 }
 
-pub fn modal<T: View>(open: Signal<bool>, content: impl Fn() -> T + 'static) -> Modal {
+#[component]
+pub fn modal<T: View>(open: Signal<bool>, children: impl Fn() -> T + 'static) -> Modal {
     Modal {
         open,
-        content: Box::new(move || content().into_any()),
+        content: Box::new(move || children().into_any()),
         dismissable: true,
     }
 }

@@ -1,4 +1,5 @@
 use crate::util::{either, pressable, themed};
+use rouge_core::component;
 use rouge_core::{
     BuildCx, Color, Div, ElementId, IntoProp, Path, Spring, Styled, Text, Theme, View, div, icon,
     show, styled, text, use_theme,
@@ -8,6 +9,7 @@ use std::rc::Rc;
 
 const CHECK: &str = "M5 12.5 L10 17.5 L19 7";
 
+#[component]
 #[track_caller]
 pub fn toggle(checked: Signal<bool>) -> Div {
     let theme = use_theme();
@@ -35,12 +37,14 @@ pub struct Choice {
     theme: Theme,
 }
 
+#[component]
 #[track_caller]
 pub fn checkbox(checked: Signal<bool>) -> Choice {
     let flip = move || checked.update(|on| *on = !*on);
     choice(move || checked.get(), flip, false)
 }
 
+#[component]
 #[track_caller]
 pub fn radio<T: Clone + PartialEq + 'static>(selected: Signal<T>, value: T) -> Choice {
     let chosen = value.clone();

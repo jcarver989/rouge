@@ -1,4 +1,5 @@
 use crate::util::{either, ring, themed};
+use rouge_core::component;
 use rouge_core::{
     AnyView, BuildCx, Color, Cursor, Div, ElementId, Key, Styled, View, div, dynamic, styled, text,
     use_theme,
@@ -15,6 +16,7 @@ pub struct Tabs {
     tabs: Vec<(String, Content)>,
 }
 
+#[component]
 pub fn tabs(selected: Signal<usize>) -> Tabs {
     Tabs {
         root: div().flex().col(),

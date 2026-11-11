@@ -16,6 +16,12 @@ impl<T: Clone> Prop<T> {
     }
 }
 
+impl<T: Default> Default for Prop<T> {
+    fn default() -> Self {
+        Prop::Static(T::default())
+    }
+}
+
 pub trait PropFrom<T> {
     fn prop_from(value: T) -> Self;
 }
@@ -81,6 +87,7 @@ pub(crate) mod markers {
     pub struct Func;
     pub struct Reactive;
     pub struct Indexed;
+    pub struct Same;
 }
 
 impl<T: PropFrom<U>, U> IntoProp<T, markers::Value> for U {
@@ -104,6 +111,12 @@ impl<T: PropFrom<U>, U: Clone + 'static> IntoProp<T, markers::Reactive> for Read
 impl<T: PropFrom<U>, U: Clone + 'static> IntoProp<T, markers::Reactive> for Signal<U> {
     fn into_prop(self) -> Prop<T> {
         self.read_only().into_prop()
+    }
+}
+
+impl<T> IntoProp<T, markers::Same> for Prop<T> {
+    fn into_prop(self) -> Prop<T> {
+        self
     }
 }
 

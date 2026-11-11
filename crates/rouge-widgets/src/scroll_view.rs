@@ -1,3 +1,4 @@
+use rouge_core::component;
 use rouge_core::{
     BuildCx, Div, DragPhase, ElementId, Length, Point, PointerButton, PointerEvent, ScrollLinked,
     ScrollState, Scrollable, Styled, View, div, px, root_font_size, show, styled, use_theme,
@@ -28,6 +29,7 @@ impl Default for ScrollbarStyle {
     }
 }
 
+#[component]
 pub fn vertical_scrollbar(state: Signal<ScrollState>, style: ScrollbarStyle) -> impl View {
     scrollbar_if_needed(state, Axis::Vertical, style)
 }
@@ -45,10 +47,11 @@ pub struct ScrollView<T> {
     state: Option<Signal<ScrollState>>,
 }
 
-pub fn scroll_view<T: Scrollable + Styled>(content: T) -> ScrollView<T> {
+#[component]
+pub fn scroll_view<T: Scrollable + Styled>(children: T) -> ScrollView<T> {
     ScrollView {
         root: div().relative(),
-        content,
+        content: children,
         state: None,
     }
 }

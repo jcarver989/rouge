@@ -1,3 +1,4 @@
+use rouge_core::component;
 use rouge_core::{
     AnyView, BoxShadow, BuildCx, Div, ElementId, Key, PointerEvent, Pose, Rect, Styled, Theme,
     Tween, View, div, overlay, px, show, styled, text, use_theme, window_size,
@@ -120,17 +121,18 @@ pub struct Popover {
     placement: Placement,
 }
 
+#[component]
 pub fn popover<T: View, U: View>(
     open: Signal<bool>,
     trigger: T,
-    content: impl Fn() -> U + 'static,
+    children: impl Fn() -> U + 'static,
 ) -> Popover {
     let (root, anchor) = anchored(trigger);
     Popover {
         root,
         open,
         anchor,
-        content: Box::new(move || content().into_any()),
+        content: Box::new(move || children().into_any()),
         placement: Placement::default(),
     }
 }
@@ -165,8 +167,9 @@ pub struct Tooltip {
     anchor: Signal<Rect>,
 }
 
-pub fn tooltip(target: impl View, label: impl Into<String>) -> Tooltip {
-    target.hint(Some(label))
+#[component]
+pub fn tooltip(children: impl View, label: impl Into<String>) -> Tooltip {
+    children.hint(Some(label))
 }
 
 pub trait Hint: View + Sized {

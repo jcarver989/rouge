@@ -5,6 +5,7 @@ use crate::style::{Dirty, Style, Styled};
 use crate::tree::ElementId;
 use crate::ui::root_font_size;
 use crate::view::{BuildCx, Div, View, div};
+use rouge_macros::component;
 use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal};
 use rouge_render::{Point, Rect, ScrollState, Size};
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ type Identity<T> = Box<dyn Fn(usize) -> RowKey<T>>;
 
 const OVERSCAN: usize = 8;
 
+#[component]
 pub fn scroll() -> Div {
     div().scrollable()
 }
@@ -220,16 +222,17 @@ pub struct VirtualList<T, U = usize> {
     handle: Option<VirtualListHandle>,
 }
 
+#[component]
 pub fn virtual_list<T: View, U>(
     count: impl Fn() -> usize + 'static,
     row_height: impl IntoProp<RowHeight, U>,
-    row: impl Fn(usize) -> T + 'static,
+    children: impl Fn(usize) -> T + 'static,
 ) -> VirtualList<T> {
     VirtualList {
         container: scroll(),
         count: Box::new(count),
         row_height: row_height.into_prop(),
-        row: Rc::new(row),
+        row: Rc::new(children),
         identity: None,
         measure: None,
         overscan: OVERSCAN,

@@ -1,6 +1,7 @@
 use crate::popover::{Placement, panel, popup};
 use crate::roving::RovingFocus;
 use crate::util::{activates, pressable, themed, tint};
+use rouge_core::component;
 use rouge_core::{
     BuildCx, Cursor, Div, ElementId, Key, Menu, Path, Point, PointerButton, Rect, Styled, Theme,
     View, div, icon, px, styled, text, use_theme,
@@ -185,9 +186,10 @@ pub struct ContextMenu {
     focus: MenuFocus,
 }
 
-pub fn context_menu(target: impl View, items: impl IntoIterator<Item = MenuItem>) -> ContextMenu {
+#[component]
+pub fn context_menu(children: impl View, items: impl IntoIterator<Item = MenuItem>) -> ContextMenu {
     ContextMenu {
-        root: div().child(target),
+        root: div().child(children),
         items: items.into_iter().collect(),
         focus: MenuFocus::Take,
     }
@@ -231,6 +233,7 @@ pub struct Select<T> {
     theme: Theme,
 }
 
+#[component]
 #[track_caller]
 pub fn select<T: Clone + PartialEq + 'static>(
     value: Signal<T>,

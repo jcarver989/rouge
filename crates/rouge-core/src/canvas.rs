@@ -4,6 +4,7 @@ use crate::prop::{IntoProp, Prop};
 use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, View, div, send};
+use rouge_macros::component;
 use rouge_reactive::{Signal, effect, signal};
 use rouge_render::{Color, ImageData, ImageQuad, Point, Quad, Rect, Size};
 use rouge_text::{TextLayout, TextStyle};
@@ -211,6 +212,7 @@ impl Canvas {
     }
 }
 
+#[component]
 pub fn canvas(draw: impl Fn(&mut Painter) + 'static) -> Canvas {
     Canvas {
         div: div(),
@@ -254,6 +256,7 @@ pub struct Icon {
     stroke: Option<(f32, bool)>,
 }
 
+#[component]
 pub fn icon(path: Path) -> Icon {
     Icon {
         canvas: div(),

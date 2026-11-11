@@ -2138,6 +2138,7 @@ name = "rouge-core"
 version = "0.1.0"
 dependencies = [
  "image",
+ "rouge-macros",
  "rouge-reactive",
  "rouge-render",
  "rouge-text",
@@ -2148,6 +2149,18 @@ dependencies = [
  "tracing",
  "web-time",
  "zeno",
+]
+
+[[package]]
+name = "rouge-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "rouge-core",
+ "rouge-reactive",
+ "syn 2.0.119",
 ]
 
 [[package]]

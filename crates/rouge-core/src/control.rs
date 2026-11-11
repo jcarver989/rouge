@@ -1,5 +1,6 @@
 use crate::tree::{ElementId, Presence};
 use crate::view::{AnyView, BuildCx, View, send};
+use rouge_macros::component;
 use rouge_reactive::{ReadSignal, Scope, Signal, effect, memo, on_cleanup, signal, untrack};
 use rouge_render::{Pose, Timing};
 use std::cell::RefCell;
@@ -9,8 +10,12 @@ use std::rc::Rc;
 
 type ViewFn = Box<dyn Fn() -> AnyView>;
 
-pub fn dynamic<T: View>(f: impl Fn() -> T + 'static) -> impl View {
-    Dynamic(Box::new(move || Some(f().into_any())), Presence::default())
+#[component]
+pub fn dynamic<T: View>(children: impl Fn() -> T + 'static) -> impl View {
+    Dynamic(
+        Box::new(move || Some(children().into_any())),
+        Presence::default(),
+    )
 }
 
 struct Dynamic(Box<dyn Fn() -> Option<AnyView>>, Presence);
@@ -41,8 +46,9 @@ impl View for Dynamic {
     }
 }
 
-pub fn overlay<T: View>(view: impl FnOnce() -> T + 'static) -> impl View {
-    Overlay(Box::new(move || view().into_any()))
+#[component]
+pub fn overlay<T: View>(children: impl FnOnce() -> T + 'static) -> impl View {
+    Overlay(Box::new(move || children().into_any()))
 }
 
 struct Overlay(Box<dyn FnOnce() -> AnyView>);
@@ -66,10 +72,14 @@ pub struct Show {
     presence: Presence,
 }
 
-pub fn show<T: View>(when: impl Fn() -> bool + 'static, view: impl Fn() -> T + 'static) -> Show {
+#[component]
+pub fn show<T: View>(
+    when: impl Fn() -> bool + 'static,
+    children: impl Fn() -> T + 'static,
+) -> Show {
     Show {
         when: Box::new(when),
-        then: Box::new(move || view().into_any()),
+        then: Box::new(move || children().into_any()),
         otherwise: None,
         presence: Presence::default(),
     }
@@ -132,10 +142,11 @@ impl<T, U> Each<T, U> {
     }
 }
 
+#[component]
 pub fn each<T, U, V>(
     items: impl Fn() -> Vec<T> + 'static,
     key: impl Fn(&T) -> U + 'static,
-    view: impl Fn(ReadSignal<T>) -> V + 'static,
+    children: impl Fn(ReadSignal<T>) -> V + 'static,
 ) -> Each<T, U>
 where
     T: PartialEq + 'static,
@@ -145,7 +156,7 @@ where
     Each {
         items: Box::new(items),
         key: Box::new(key),
-        view: Box::new(move |item| view(item).into_any()),
+        view: Box::new(move |item| children(item).into_any()),
         presence: Presence::default(),
     }
 }

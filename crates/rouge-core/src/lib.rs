@@ -52,6 +52,10 @@ pub mod __private {
     pub use rouge_reactive::{Signal, batch, expect_context, provide_context, signal};
 }
 
+#[doc(hidden)]
+pub use rouge_macros::__element;
+pub use rouge_macros::{component, view};
+
 pub use rouge_render::{
     Affine, BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Corners, Decay, Ease, Edges, Effect,
     Glass, ImageData, ImageError, Inputs, Keyframes, LayoutTransition, Mask, Point, Pose, Quad,

@@ -1,0 +1,23 @@
+[package]
+name = "rouge-macros"
+description = "The view! and #[component] macros for Rouge."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro-crate = "3"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+rouge-core.workspace = true
+rouge-reactive.workspace = true
+
+[lints]
+workspace = true

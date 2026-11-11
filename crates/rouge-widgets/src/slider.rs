@@ -1,4 +1,5 @@
 use crate::util::ring;
+use rouge_core::component;
 use rouge_core::{
     BuildCx, Color, Cursor, Div, ElementId, Key, PointerButton, Rect, Styled, Theme, View, div,
     pct, px, styled, use_theme,
@@ -17,6 +18,7 @@ pub struct Slider {
     theme: Theme,
 }
 
+#[component]
 #[track_caller]
 pub fn slider(value: Signal<f32>) -> Slider {
     let theme = use_theme();

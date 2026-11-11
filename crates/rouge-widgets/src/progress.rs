@@ -1,3 +1,4 @@
+use rouge_core::component;
 use rouge_core::{
     BuildCx, Div, Ease, ElementId, IntoProp, Keyframes, Path, Styled, View, auto, div, icon, pct,
     styled, use_theme,
@@ -10,6 +11,7 @@ pub struct Separator {
     vertical: bool,
 }
 
+#[component]
 #[track_caller]
 pub fn separator() -> Separator {
     Separator {
@@ -37,6 +39,7 @@ impl View for Separator {
     }
 }
 
+#[component]
 #[track_caller]
 pub fn progress<U>(value: impl IntoProp<f32, U>) -> Div {
     let theme = use_theme();
@@ -54,6 +57,7 @@ pub fn progress<U>(value: impl IntoProp<f32, U>) -> Div {
         .child(fill)
 }
 
+#[component]
 #[track_caller]
 pub fn spinner() -> Div {
     let arc = Path::builder()

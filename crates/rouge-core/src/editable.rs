@@ -7,6 +7,7 @@ use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Text, View, send, text};
 use crate::window::EditAction;
 use crate::{Styled, styled};
+use rouge_macros::component;
 use rouge_reactive::{Signal, effect};
 use rouge_render::Color;
 use rouge_text::Movement;
@@ -24,6 +25,7 @@ pub struct Editable {
     select_all_on_focus: bool,
 }
 
+#[component]
 pub fn editable(value: Signal<String>) -> Editable {
     Editable {
         text: text(value),

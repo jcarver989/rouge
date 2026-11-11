@@ -1,4 +1,5 @@
 use crate::util::{either, themed};
+use rouge_core::component;
 use rouge_core::{
     BuildCx, Cursor, Div, Editable, ElementId, Styled, Theme, View, div, editable, focus_handle,
     show, styled, text, use_theme,
@@ -14,6 +15,7 @@ pub struct TextInput {
     theme: Theme,
 }
 
+#[component]
 #[track_caller]
 pub fn text_input(value: Signal<String>) -> TextInput {
     let theme = use_theme();
@@ -40,6 +42,7 @@ pub fn text_input(value: Signal<String>) -> TextInput {
     }
 }
 
+#[component]
 #[track_caller]
 pub fn text_area(value: Signal<String>) -> TextInput {
     let input = text_input(value);

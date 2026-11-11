@@ -1,9 +1,11 @@
+use rouge_core::component;
 use rouge_core::{
     Div, IntoProp, PointerEvent, ResizeEdge, Styled, View, WindowHandle, div, text, use_theme,
     window_handle,
 };
 
-pub fn window_chrome<T, U>(title: impl IntoProp<String, U>, root: T) -> Div
+#[component]
+pub fn window_chrome<T, U>(title: impl IntoProp<String, U>, children: T) -> Div
 where
     T: View,
 {
@@ -47,7 +49,7 @@ where
             .test_id("window-content")
             .flex_1()
             .min_h(0.0)
-            .child(root),
+            .child(children),
     );
     for (edge, x, y) in [
         (ResizeEdge::North, 0, -1),

@@ -3,6 +3,7 @@ use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, Patches, View, div, send};
 use image::{ImageError as DecodeError, load_from_memory};
+use rouge_macros::component;
 #[cfg(not(target_arch = "wasm32"))]
 use rouge_reactive::background;
 use rouge_reactive::{effect, spawn};
@@ -118,6 +119,7 @@ pub struct Image {
     on_error: Option<ErrorHandler>,
 }
 
+#[component]
 pub fn image<U>(source: impl IntoProp<ImageSource, U>) -> Image {
     Image {
         div: div(),

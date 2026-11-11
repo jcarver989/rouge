@@ -1,3 +1,4 @@
+use rouge_core::component;
 use rouge_core::{BuildCx, Cursor, Div, DragPhase, ElementId, Styled, View, div, px, styled};
 use rouge_reactive::{Signal, effect};
 use std::cell::Cell;
@@ -23,6 +24,7 @@ pub struct ResizablePanel {
     on_resize: Option<Rc<dyn Fn(f32)>>,
 }
 
+#[component]
 pub fn resizable_panel(edge: Side, size: Signal<f32>) -> ResizablePanel {
     ResizablePanel {
         root: div().relative().flex_none(),
