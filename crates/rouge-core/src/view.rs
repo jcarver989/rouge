@@ -554,6 +554,10 @@ impl Text {
     pub fn no_wrap(self) -> Self {
         self.text_style(|style| style.wrap = false)
     }
+
+    pub fn tab_size(self, columns: u8) -> Self {
+        self.text_style(|style| style.tab_size = columns)
+    }
 }
 
 styled!(Text => 0);

@@ -749,6 +749,20 @@ fn range_click_and_hover_report_cluster_start_bytes_and_leave() {
 }
 
 #[test]
+fn tabs_advance_to_the_configured_tab_stop_without_shifting_byte_offsets() {
+    let _rt = Runtime::new().enter();
+    for (tab_size, index) in [(2, Some(1)), (4, Some(0))] {
+        let mut ui = TestUi::canvas(move || {
+            rich_text("\tx", Vec::new())
+                .text_size(32.0)
+                .font("monospace")
+                .tab_size(tab_size)
+        });
+        assert_eq!(ui.text_index_at(Point::new(48.0, 15.0)), index);
+    }
+}
+
+#[test]
 fn reactive_spans_update_and_decorations_paint_over_glyphs() -> TestResult {
     let _rt = Runtime::new().enter();
     let spans = signal(vec![(
