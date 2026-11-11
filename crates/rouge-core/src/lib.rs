@@ -40,7 +40,7 @@ pub use scroll::{
 };
 pub use style::{BoxShadow, Dirty, GroupStyles, Style, Styled};
 pub use theme::{Palette, Theme, provide_theme, use_theme};
-pub use tree::{ElementId, FrameStats};
+pub use tree::{ElementId, FrameStats, PaintRegion};
 pub use ui::{Frame, Ui, root_font_size, window_size};
 pub use view::{AnyView, BuildCx, Div, Text, View, div, rich_text, text};
 

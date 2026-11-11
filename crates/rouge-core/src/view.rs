@@ -301,6 +301,11 @@ impl Div {
         self
     }
 
+    pub fn track_paint_region(mut self, region: Signal<crate::PaintRegion>) -> Self {
+        self.spec.paint_region = Some(region);
+        self
+    }
+
     pub fn bind_key<T: Any>(mut self, chord: Chord, action: T) -> Self {
         self.spec.bindings.push((chord, Rc::new(action)));
         self

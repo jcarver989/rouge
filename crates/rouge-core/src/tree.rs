@@ -238,6 +238,7 @@ pub(crate) struct ElementSpec {
     pub preserve_focus: bool,
     pub cursor: Option<Cursor>,
     pub bounds_observer: Option<Signal<Rect>>,
+    pub paint_region: Option<Signal<PaintRegion>>,
     pub size_observer: Option<Signal<Size>>,
     pub image: Option<ImageSpec>,
     pub canvas: Option<Vec<PaintOp>>,
@@ -292,6 +293,12 @@ impl Element {
         let overflow = self.effective_style().layout.overflow;
         overflow.x != Overflow::Visible || overflow.y != Overflow::Visible
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaintRegion {
+    pub bounds: Rect,
+    pub order: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -559,6 +566,14 @@ impl Tree {
             if let Some(observer) = observer.filter(|observer| observer.is_alive()) {
                 observer.set_if_changed(self.window_bounds(compositor, *id));
             }
+            if let Some(observer) = self
+                .elements
+                .get(*id)
+                .and_then(|element| element.spec.paint_region)
+                .filter(|observer| observer.is_alive())
+            {
+                observer.set_if_changed(self.paint_region(compositor, *id));
+            }
         }
         for id in &self.observed {
             let Some(element) = self.elements.get_mut(*id) else {
@@ -613,7 +628,10 @@ impl Tree {
             .map(|layer| self.new_layer(layer.commands));
         let content = spec.scroll.as_ref().map(|_| self.new_layer(Vec::new()));
         let observed = spec.scroll.as_ref().is_some_and(|s| s.observer.is_some());
-        let (measured, disabled) = (spec.bounds_observer.is_some(), spec.disabled);
+        let (measured, disabled) = (
+            spec.bounds_observer.is_some() || spec.paint_region.is_some(),
+            spec.disabled,
+        );
         let handle = spec.focus.and_then(|focus| focus.handle);
         let id = self.elements.insert(Element {
             spec,
@@ -1448,6 +1466,42 @@ impl Tree {
             return Rect::ZERO;
         };
         self.to_window(compositor, id, element.bounds)
+    }
+
+    fn paint_region(&self, compositor: &Compositor, id: ElementId) -> PaintRegion {
+        let chain = self.chain(id);
+        let mut bounds = self.window_bounds(compositor, id).intersect(&Rect::new(
+            0.0,
+            0.0,
+            self.size.width,
+            self.size.height,
+        ));
+        let mut order = Vec::with_capacity(chain.len());
+        for (i, &node) in chain.iter().enumerate() {
+            let element = &self.elements[node];
+            if element.hidden() || bounds.is_empty() {
+                return PaintRegion::default();
+            }
+            let Some(child) = chain.get(i + 1) else {
+                break;
+            };
+            let Some(index) = element.children.iter().position(|id| id == child) else {
+                return PaintRegion::default();
+            };
+            order.push(index);
+            if element.clips_children() {
+                let r = element.bounds;
+                let b = element.border;
+                let clip = Rect::new(
+                    r.origin.x + b.left,
+                    r.origin.y + b.top,
+                    r.size.width - b.left - b.right,
+                    r.size.height - b.top - b.bottom,
+                );
+                bounds = bounds.intersect(&self.to_window(compositor, node, clip));
+            }
+        }
+        PaintRegion { bounds, order }
     }
 
     fn to_window(&self, compositor: &Compositor, id: ElementId, rect: Rect) -> Rect {
