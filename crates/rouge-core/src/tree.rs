@@ -359,6 +359,7 @@ pub(crate) struct Tree {
     replaced_focus: Option<(u64, Option<(String, EditState)>)>,
     focus_visible: bool,
     restore: Vec<(ElementId, Option<ElementId>)>,
+    focus_fallback: Option<ElementId>,
     handles: HashMap<u64, (ElementId, Signal<bool>)>,
     measured: Vec<ElementId>,
     overlay: Option<ElementId>,
@@ -391,6 +392,7 @@ impl Tree {
             replaced_focus: None,
             focus_visible: false,
             restore: Vec::new(),
+            focus_fallback: None,
             handles: HashMap::new(),
             measured: Vec::new(),
             overlay: None,
@@ -950,7 +952,17 @@ impl Tree {
         self.place_followers(anchor);
     }
 
-    pub(crate) fn restore_replaced_focus(&mut self) {
+    pub(crate) fn settle_focus(&mut self) {
+        let fallback = self.focus_fallback.take();
+        self.restore_replaced_focus();
+        if self.focused.is_none()
+            && let Some(fallback) = fallback.filter(|id| self.elements.contains_key(*id))
+        {
+            self.set_focus(Some(fallback), self.focus_visible);
+        }
+    }
+
+    fn restore_replaced_focus(&mut self) {
         let Some((handle, edit)) = self.replaced_focus.take() else {
             return;
         };
@@ -1139,7 +1151,9 @@ impl Tree {
         if self.focused.is_some_and(|focused| !alive(&focused)) {
             self.focused = None;
             Rc::make_mut(&mut self.clipboard_target);
-            self.set_focus(fallback, self.focus_visible);
+            self.focus_fallback = fallback;
+        } else if self.focus_fallback.is_some_and(|pending| !alive(&pending)) {
+            self.focus_fallback = fallback;
         }
     }
 

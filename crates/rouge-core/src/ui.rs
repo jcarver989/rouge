@@ -182,7 +182,7 @@ impl Ui {
                     });
                     self.tree.stats.patches += 1;
                 }
-                self.tree.restore_replaced_focus();
+                self.tree.settle_focus();
             });
         });
         self.tree.publish_bindings();
