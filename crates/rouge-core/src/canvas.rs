@@ -12,7 +12,7 @@ pub(crate) enum PaintOp {
     Image(ImageQuad),
     Path {
         path: Path,
-        stroke: Option<f32>,
+        stroke: Option<(f32, bool)>,
         color: Color,
     },
     Text {
@@ -53,7 +53,7 @@ impl Painter {
     pub fn stroke(&mut self, path: &Path, width: f32, color: Color) {
         self.ops.push(PaintOp::Path {
             path: path.clone(),
-            stroke: Some(width),
+            stroke: Some((width, false)),
             color,
         });
     }
@@ -61,6 +61,14 @@ impl Painter {
     pub fn image(&mut self, image: &ImageData, rect: Rect) {
         self.ops
             .push(PaintOp::Image(ImageQuad::new(rect, image.clone())));
+    }
+
+    pub fn stroke_round(&mut self, path: &Path, width: f32, color: Color) {
+        self.ops.push(PaintOp::Path {
+            path: path.clone(),
+            stroke: Some((width, true)),
+            color,
+        });
     }
 
     pub fn text(
@@ -122,7 +130,7 @@ pub struct Icon {
     path: Path,
     view_box: Size,
     color: Prop<Color>,
-    stroke: Option<f32>,
+    stroke: Option<(f32, bool)>,
 }
 
 pub fn icon(path: Path) -> Icon {
@@ -147,7 +155,12 @@ impl Icon {
     }
 
     pub fn stroke(mut self, width: f32) -> Self {
-        self.stroke = Some(width);
+        self.stroke = Some((width, false));
+        self
+    }
+
+    pub fn stroke_round(mut self, width: f32) -> Self {
+        self.stroke = Some((width, true));
         self
     }
 }
@@ -177,7 +190,8 @@ impl View for Icon {
             );
             let scale = (size.width / view_box.width).min(size.height / view_box.height);
             match stroke {
-                Some(width) => painter.stroke(&fitted, width * scale, color.get()),
+                Some((width, true)) => painter.stroke_round(&fitted, width * scale, color.get()),
+                Some((width, false)) => painter.stroke(&fitted, width * scale, color.get()),
                 None => painter.fill(&fitted, color.get()),
             }
         };

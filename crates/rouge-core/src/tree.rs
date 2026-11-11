@@ -25,7 +25,7 @@ use taffy::{
     AvailableSpace, Dimension, Display, NodeId, Overflow, Position, Rect as Sides, Size as Extent,
     TaffyTree, compute_leaf_layout,
 };
-use zeno::{Fill, Mask, Stroke, Transform};
+use zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
 
 pub(crate) mod edit;
 
@@ -162,7 +162,7 @@ pub(crate) struct PaintCache {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct PathKey {
     path: u64,
-    stroke: u32,
+    stroke: Option<(u32, bool)>,
     scale: u32,
     offset: (u8, u8),
 }
@@ -2062,7 +2062,7 @@ fn fit_image(fit: Fit, bounds: Rect, data: &ImageData) -> (Rect, Rect) {
 fn path_mask(
     cache: &mut PaintCache,
     path: &Path,
-    stroke: Option<f32>,
+    stroke: Option<(f32, bool)>,
     origin: Point,
 ) -> Option<(ImageData, Rect)> {
     let scale = cache.scale;
@@ -2076,7 +2076,7 @@ fn path_mask(
     let offset = (bucket(device.0, base.0), bucket(device.1, base.1));
     let key = PathKey {
         path: path.id(),
-        stroke: stroke.map_or(u32::MAX, f32::to_bits),
+        stroke: stroke.map(|(width, round)| (width.to_bits(), round)),
         scale: scale.to_bits(),
         offset: (offset.0 as u8, offset.1 as u8),
     };
@@ -2089,7 +2089,13 @@ fn path_mask(
         let mut mask = Mask::new(path.commands());
         mask.transform(Some(transform));
         match stroke {
-            Some(width) => mask.style(Stroke::new(width)),
+            Some((width, round)) => {
+                let mut stroke = Stroke::new(width);
+                if round {
+                    stroke.cap(Cap::Round).join(Join::Round);
+                }
+                mask.style(stroke)
+            }
             None => mask.style(Fill::NonZero),
         };
         let (pixels, placement) = mask.render();
