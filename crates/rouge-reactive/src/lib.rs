@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 mod blocking;
 mod effect;
 mod handle;
@@ -8,9 +9,12 @@ mod scope;
 mod sender;
 mod signal;
 mod task;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
+#[cfg_attr(target_arch = "wasm32", path = "timer_web.rs")]
 mod timer;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use blocking::background;
 pub use effect::{Effect, effect};
 pub use memo::{Memo, memo};

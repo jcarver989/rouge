@@ -19,8 +19,11 @@ use rouge_text::TextSystem;
 use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 #[derive(Clone, Copy)]
 struct WindowSize(ReadSignal<Size>);

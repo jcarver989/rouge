@@ -1,8 +1,11 @@
 use thiserror::Error;
 use wgpu::{
-    Adapter, Device, DeviceDescriptor, Instance, MapRangeError, PollError, Queue,
-    RequestAdapterError, RequestAdapterOptions, RequestDeviceError, Surface,
+    Adapter, Device, DeviceDescriptor, Instance, Queue, RequestAdapterError, RequestAdapterOptions,
+    RequestDeviceError, Surface,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use wgpu::{MapRangeError, PollError};
 
 pub struct Gpu {
     pub adapter: Adapter,
@@ -16,8 +19,10 @@ pub enum GpuError {
     NoAdapter(#[from] RequestAdapterError),
     #[error("failed to create GPU device: {0}")]
     NoDevice(#[from] RequestDeviceError),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("failed to wait for the GPU: {0}")]
     Poll(#[from] PollError),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("failed to read back the rendered frame: {0}")]
     Readback(#[from] MapRangeError),
 }

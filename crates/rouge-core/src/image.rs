@@ -3,10 +3,15 @@ use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, Patches, View, div, send};
 use image::{ImageError as DecodeError, load_from_memory};
-use rouge_reactive::{background, effect, spawn};
+#[cfg(not(target_arch = "wasm32"))]
+use rouge_reactive::background;
+use rouge_reactive::{effect, spawn};
 use rouge_render::{ImageData, ImageError};
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs::read;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Error as IoError;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -15,6 +20,7 @@ use thiserror::Error;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageSource {
     Data(ImageData),
+    #[cfg(not(target_arch = "wasm32"))]
     File(PathBuf),
     Bytes(Arc<[u8]>),
 }
@@ -25,18 +31,21 @@ impl PropFrom<ImageData> for ImageSource {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PropFrom<PathBuf> for ImageSource {
     fn prop_from(value: PathBuf) -> Self {
         ImageSource::File(value)
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PropFrom<&Path> for ImageSource {
     fn prop_from(value: &Path) -> Self {
         ImageSource::File(value.to_owned())
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PropFrom<&str> for ImageSource {
     fn prop_from(value: &str) -> Self {
         ImageSource::File(value.into())
@@ -51,6 +60,7 @@ impl PropFrom<Vec<u8>> for ImageSource {
 
 #[derive(Debug, Error)]
 pub enum ImageLoadError {
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("failed to read image `{path}`")]
     Read {
         path: PathBuf,
@@ -76,6 +86,7 @@ fn load(source: ImageSource) -> Result<ImageData, ImageLoadError> {
     match source {
         ImageSource::Data(data) => Ok(data),
         ImageSource::Bytes(bytes) => decode_image(&bytes),
+        #[cfg(not(target_arch = "wasm32"))]
         ImageSource::File(path) => match read(&path) {
             Ok(bytes) => decode_image(&bytes),
             Err(source) => Err(ImageLoadError::Read { path, source }),
@@ -136,7 +147,11 @@ fn show(patches: &Patches, id: ElementId, source: ImageSource, on_error: Option<
     }
     let patches = patches.clone();
     spawn(async move {
-        match background(async move { load(source) }).await {
+        #[cfg(not(target_arch = "wasm32"))]
+        let loaded = background(async move { load(source) }).await;
+        #[cfg(target_arch = "wasm32")]
+        let loaded = load(source);
+        match loaded {
             Ok(data) => send(&patches, move |cx| cx.tree.set_image(id, Some(data))),
             Err(error) => {
                 send(&patches, move |cx| cx.tree.set_image(id, None));

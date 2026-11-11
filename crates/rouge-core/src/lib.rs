@@ -12,6 +12,7 @@ mod path;
 mod prop;
 mod scroll;
 mod style;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
 mod theme;
 mod tree;

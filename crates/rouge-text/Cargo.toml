@@ -8,8 +8,13 @@ rust-version.workspace = true
 
 [dependencies]
 rouge-render.workspace = true
-parley = "0.12"
 swash = "0.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+parley = "0.12"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+parley = { version = "0.12", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

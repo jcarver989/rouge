@@ -5,6 +5,7 @@ mod compositor;
 mod effect;
 mod geometry;
 mod gpu;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 mod image;
 mod renderer;
