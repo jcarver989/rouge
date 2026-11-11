@@ -13,7 +13,7 @@ use crate::tree::{ElementId, ElementSpec, Event, Interaction, On, TextData, Tree
 use rouge_reactive::{Signal, effect};
 use rouge_render::{
     BlendMode, Color, Effect, EffectInstance, EffectSlot, Keyframes, LayerCommand, LayerProp,
-    LayoutTransition, Mask, Rect, ScrollLinked, ScrollState, Timing,
+    LayoutTransition, Mask, Rect, ScrollLinked, ScrollState, Size, Timing,
 };
 use rouge_text::{SpanStyle, TextAlign, TextStyle, TextSystem};
 use std::any::{Any, TypeId};
@@ -304,6 +304,11 @@ impl Div {
 
     pub fn cursor(mut self, cursor: Cursor) -> Self {
         self.spec.cursor = Some(cursor);
+        self
+    }
+
+    pub fn track_size(mut self, size: Signal<Size>) -> Self {
+        self.spec.size_observer = Some(size);
         self
     }
 

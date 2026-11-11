@@ -64,7 +64,7 @@ pub enum Align {
 pub struct VirtualListHandle {
     state: Signal<ScrollState>,
     rows: Signal<Option<Rows>>,
-    bounds: Signal<HashMap<usize, Signal<Rect>>>,
+    geometry: Signal<(Rect, (usize, usize))>,
     request: Signal<Option<RowRequest>>,
     top: Memo<usize>,
 }
@@ -96,7 +96,7 @@ pub fn virtual_list_handle() -> VirtualListHandle {
     VirtualListHandle {
         state,
         rows,
-        bounds: signal(HashMap::new()),
+        geometry: signal((Rect::ZERO, (0, 0))),
         request: signal(None),
         top,
     }
@@ -152,8 +152,25 @@ impl VirtualListHandle {
     }
 
     pub fn row_bounds(self, index: usize) -> Option<Rect> {
-        self.bounds
-            .with(|bounds| bounds.get(&index).map(|bounds| bounds.get()))
+        let (frame, window) = self.geometry.get();
+        if !(window.0..window.1).contains(&index) {
+            return None;
+        }
+        let offset = self.state.get().offset;
+        self.rows.with(|rows| {
+            let rows = rows.as_ref().filter(|rows| rows.version.is_alive())?;
+            rows.with(|heights| {
+                let height = heights.height(index);
+                (index < heights.count() && height > 0.0).then(|| {
+                    Rect::new(
+                        frame.origin.x - offset.x,
+                        frame.origin.y + heights.top(index) - offset.y,
+                        frame.size.width,
+                        height,
+                    )
+                })
+            })
+        })
     }
 }
 
@@ -405,9 +422,6 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                         });
                         container = container.h(height);
                     }
-                    if let Some(handle) = handle {
-                        container = track_row_bounds(container, handle, index);
-                    }
                     container.child(row(index))
                 },
             ));
@@ -418,7 +432,15 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         if mounted.is_some() {
             content.spec.size_observer = Some(width);
         }
-        self.container.scroll_state(state).child(content).build(cx)
+        let mut container = self.container;
+        if let Some(handle) = handle {
+            let frame = signal(Rect::ZERO);
+            effect(move || {
+                handle.geometry.set_if_changed((frame.get(), range.get()));
+            });
+            container = container.track_bounds(frame);
+        }
+        container.scroll_state(state).child(content).build(cx)
     }
 }
 
@@ -524,21 +546,4 @@ fn attach_handle<T: Clone + Eq + Hash + 'static>(
             state.update(|state| state.offset.y = y);
         }
     });
-}
-
-fn track_row_bounds(container: Div, handle: VirtualListHandle, index: usize) -> Div {
-    let bounds = signal(Rect::ZERO);
-    handle.bounds.update(|mounted| {
-        mounted.insert(index, bounds);
-    });
-    on_cleanup(move || {
-        if handle.bounds.is_alive() {
-            handle.bounds.update(|mounted| {
-                if mounted.get(&index) == Some(&bounds) {
-                    mounted.remove(&index);
-                }
-            });
-        }
-    });
-    container.track_bounds(bounds)
 }
