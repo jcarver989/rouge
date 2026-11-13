@@ -9,13 +9,14 @@ use crate::keymap::Keymap;
 use crate::path::Path;
 use crate::scroll::scroll_key;
 use crate::style::{Dirty, Style, TextProperties};
+use crate::surface::{SurfaceOp, SurfaceSpec};
 use crate::theme::Theme;
 use edit::{CARET_WIDTH, EditState};
 use rouge_reactive::{ReactiveStats, Signal, batch};
 use rouge_render::{
     Affine, Atlas, AtlasRect, Color, Command, Commit, Compositor, Content, Corners, DrawList,
     Edges, Glyph, ImageData, ImageQuad, LayerCommand, LayerId, MotionCommand, MotionId, Nested,
-    Point, Pose, Quad, Rect, ScrollState, Shadow, Size, Timing,
+    Placement, Point, Pose, Quad, Rect, ScrollState, Shadow, Size, Timing,
 };
 use rouge_text::{GlyphKey, TextLayout, TextRect, TextStats, TextStyle, TextSystem};
 use slotmap::{SlotMap, new_key_type};
@@ -253,6 +254,7 @@ pub(crate) struct ElementSpec {
     pub paint_region: Option<Signal<PaintRegion>>,
     pub size_observer: Option<Signal<Size>>,
     pub image: Option<ImageSpec>,
+    pub surface: Option<SurfaceSpec>,
     pub canvas: Option<Vec<PaintOp>>,
     pub canvas_measure: Option<CanvasMeasure>,
 }
@@ -381,6 +383,9 @@ pub(crate) struct Tree {
     clipboard: Box<dyn Clipboard>,
     clipboard_target: Rc<()>,
     keymap: Option<Keymap>,
+    surfaces: Vec<ElementId>,
+    surface_ops: Vec<SurfaceOp>,
+    window_visible: bool,
 }
 
 impl Tree {
@@ -414,6 +419,9 @@ impl Tree {
             clipboard: Box::new(MemoryClipboard::new()),
             clipboard_target: Rc::new(()),
             keymap: None,
+            surfaces: Vec::new(),
+            surface_ops: Vec::new(),
+            window_visible: true,
         };
         tree.root = tree.create_element(ElementSpec {
             style: root_style(size),
@@ -643,6 +651,40 @@ impl Tree {
         }
     }
 
+    pub(crate) fn publish_surfaces(&mut self, compositor: &Compositor, scale: f32) {
+        for index in 0..self.surfaces.len() {
+            let id = self.surfaces[index];
+            let Some(element) = self.elements.get(id) else {
+                continue;
+            };
+            let size = element.bounds.size;
+            let shown = self.window_visible
+                && !element.unseen()
+                && !self.paint_region(compositor, id).bounds.is_empty();
+            let placement = Placement {
+                width: (size.width * scale).round().max(0.0) as u32,
+                height: (size.height * scale).round().max(0.0) as u32,
+                scale,
+                visible: shown,
+            };
+            let Some(surface) = self.elements[id].spec.surface.as_mut() else {
+                continue;
+            };
+            if surface.placement.replace(placement) != Some(placement) {
+                self.surface_ops
+                    .push(SurfaceOp::Place(surface.id, placement));
+            }
+        }
+    }
+
+    pub(crate) fn take_surface_ops(&mut self) -> Vec<SurfaceOp> {
+        take(&mut self.surface_ops)
+    }
+
+    pub(crate) fn set_window_visible(&mut self, visible: bool) {
+        self.window_visible = visible;
+    }
+
     pub(crate) fn scroll_targets(&self) -> Vec<LayerId> {
         let path = self.hover_path.iter().rev();
         path.filter_map(|id| Some(self.elements.get(*id)?.layer(Slot::Content)?.id))
@@ -687,6 +729,11 @@ impl Tree {
             spec.disabled,
         );
         let handle = spec.focus.and_then(|focus| focus.handle);
+        let attach = spec
+            .surface
+            .as_mut()
+            .and_then(|surface| surface.attach.take());
+        let has_surface = spec.surface.is_some();
         let id = self.elements.insert(Element {
             spec,
             taffy,
@@ -713,6 +760,12 @@ impl Tree {
         }
         if measured {
             self.measured.push(id);
+        }
+        if let Some((source, status)) = attach {
+            self.surface_ops.push(SurfaceOp::Attach(source, status));
+        }
+        if has_surface {
+            self.surfaces.push(id);
         }
         if let Some((handle, focused)) = handle {
             self.handles.insert(handle, (id, focused));
@@ -1147,6 +1200,9 @@ impl Tree {
             while let Some(element) = stack.pop().and_then(|id| self.elements.remove(id)) {
                 self.stats.elements_removed += 1;
                 self.taffy.remove(element.taffy).expect("taffy remove");
+                if let Some(surface) = &element.spec.surface {
+                    self.surface_ops.push(SurfaceOp::Detach(surface.id));
+                }
                 for layer in element.layers.into_iter().flatten().filter(|_| !exits) {
                     self.commit.push(Command::Remove(layer.id));
                 }
@@ -1159,6 +1215,7 @@ impl Tree {
             &mut self.press_path,
             &mut self.observed,
             &mut self.measured,
+            &mut self.surfaces,
         ] {
             list.retain(|e| elements.contains_key(*e));
         }

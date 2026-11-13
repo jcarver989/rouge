@@ -15,7 +15,9 @@ use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, effect, expect_context, poll_tasks, provide_context, signal,
     stats,
 };
-use rouge_render::{Atlas, Compositor, Item, LayerCommand, LayerId, Point, Rect, Size};
+use rouge_render::{
+    Atlas, Compositor, Item, LayerCommand, LayerId, Point, Rect, Size, SurfaceRegistrar, SurfaceUse,
+};
 use rouge_text::TextSystem;
 use rouge_theme::UiPalette;
 use std::any::{Any, TypeId};
@@ -116,6 +118,7 @@ pub struct Ui {
     clock: Option<f64>,
     last_tick: Option<f64>,
     shortcuts: Vec<(Chord, MenuItem)>,
+    surfaces: Option<SurfaceRegistrar>,
 }
 
 pub struct Frame<'a> {
@@ -194,6 +197,7 @@ impl Ui {
             clock: None,
             last_tick: None,
             shortcuts: Vec::new(),
+            surfaces: None,
         }
     }
 
@@ -221,7 +225,39 @@ impl Ui {
         if let Some(commit) = self.tree.take_commit() {
             self.compositor.apply(commit);
         }
+        self.forward_surfaces();
         &mut self.tree
+    }
+
+    fn forward_surfaces(&mut self) {
+        let Some(registrar) = &self.surfaces else {
+            return;
+        };
+        for op in self.tree.take_surface_ops() {
+            op.send(registrar);
+        }
+        for usage in self.compositor.take_surface_uses() {
+            match usage {
+                SurfaceUse::Bound(id) => registrar.bind(id),
+                SurfaceUse::Unbound(id) => registrar.unbind(id),
+            }
+        }
+    }
+
+    pub fn set_surfaces(&mut self, registrar: SurfaceRegistrar) {
+        self.surfaces = Some(registrar);
+        self.tree();
+    }
+
+    pub fn set_visible(&mut self, visible: bool) {
+        self.tree.set_window_visible(visible);
+        self.tree
+            .publish_surfaces(&self.compositor, self.cache.scale);
+        self.tree();
+    }
+
+    pub fn has_surfaces(&self) -> bool {
+        self.compositor.has_surfaces()
     }
 
     pub fn set_appearance(&mut self, appearance: Appearance) {
@@ -314,6 +350,9 @@ impl Ui {
                     .set_pointer(&self.compositor, self.pointer, self.modifiers);
             }
         }
+        self.tree
+            .publish_surfaces(&self.compositor, self.cache.scale);
+        self.tree();
         self.last_tick = self.compositor.is_animating().then_some(now);
         changed
     }

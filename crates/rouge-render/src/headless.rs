@@ -1,4 +1,4 @@
-use crate::{Atlas, Color, Gpu, GpuError, Item, RenderStats, Renderer, Viewport};
+use crate::{Atlas, Color, Gpu, GpuError, Item, RenderStats, Renderer, Surfaces, Viewport};
 use image::ExtendedColorType::Rgba8;
 use image::codecs::png::PngEncoder;
 use image::{ImageEncoder, ImageError};
@@ -49,9 +49,16 @@ pub fn assert_near(actual: [u8; 4], expected: [u8; 4], what: &str) {
     }
 }
 
+pub fn headless_gpu() -> Result<Gpu, GpuError> {
+    let mut descriptor = InstanceDescriptor::new_without_display_handle();
+    descriptor.flags = InstanceFlags::from_build_config().difference(InstanceFlags::DEBUG);
+    block_on(Gpu::new(Instance::new(descriptor), None))
+}
+
 pub struct Headless {
     gpu: Gpu,
     renderer: Renderer,
+    surfaces: Surfaces,
     texture: Texture,
     view: TextureView,
     viewport: Viewport,
@@ -59,10 +66,10 @@ pub struct Headless {
 
 impl Headless {
     pub fn new(viewport: Viewport) -> Result<Self, GpuError> {
-        let mut descriptor = InstanceDescriptor::new_without_display_handle();
-        descriptor.flags = InstanceFlags::from_build_config().difference(InstanceFlags::DEBUG);
-        let instance = Instance::new(descriptor);
-        let gpu = block_on(Gpu::new(instance, None))?;
+        Ok(Self::with_gpu(headless_gpu()?, viewport))
+    }
+
+    pub fn with_gpu(gpu: Gpu, viewport: Viewport) -> Self {
         let format = TextureFormat::Rgba8Unorm;
         let texture = gpu.device.create_texture(&TextureDescriptor {
             label: Some("rouge headless target"),
@@ -80,18 +87,35 @@ impl Headless {
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
         let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
-        Ok(Headless {
+        let surfaces = Surfaces::new(&gpu);
+        Headless {
             gpu,
             renderer,
+            surfaces,
             texture,
             view,
             viewport,
-        })
+        }
+    }
+
+    pub fn gpu(&self) -> &Gpu {
+        &self.gpu
+    }
+
+    pub fn surfaces(&mut self) -> &mut Surfaces {
+        &mut self.surfaces
     }
 
     pub fn render(&mut self, clear: Color, items: &[Item<'_>], atlas: &mut Atlas) -> RenderStats {
-        self.renderer
-            .render(&self.view, self.viewport, clear, items, atlas);
+        self.renderer.render(
+            &self.view,
+            self.viewport,
+            clear,
+            items,
+            atlas,
+            &self.surfaces,
+        );
+        self.surfaces.maintain();
         self.renderer.stats()
     }
 

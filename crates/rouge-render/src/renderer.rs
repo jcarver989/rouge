@@ -1,5 +1,6 @@
-use crate::effect::{EffectDraw, Passthrough, Shader};
+use crate::effect::{EffectDraw, Passthrough, Shader, SurfaceSample};
 use crate::scene::{DrawList, Instance};
+use crate::surface::{AlphaMode, BufferRef, Latched, Origin, SurfaceId, Surfaces};
 use crate::{Affine, Atlas, Color, Corners, ImageData, ImageFormat, Rect};
 use bytemuck::{Pod, Zeroable, bytes_of};
 use std::collections::HashMap;
@@ -114,9 +115,33 @@ pub struct Group<'a> {
     pub items: Vec<Item<'a>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceDraw {
+    pub id: SurfaceId,
+    pub bounds: Rect,
+    pub transform: Affine,
+    pub opacity: f32,
+    pub radii: Corners,
+    pub scissor: Option<Rect>,
+}
+
+impl SurfaceDraw {
+    pub fn new(id: SurfaceId, bounds: Rect) -> Self {
+        SurfaceDraw {
+            id,
+            bounds,
+            transform: Affine::IDENTITY,
+            opacity: 1.0,
+            radii: Corners::ZERO,
+            scissor: None,
+        }
+    }
+}
+
 pub enum Item<'a> {
     Layer(LayerDraw<'a>),
     Group(Group<'a>),
+    Surface(SurfaceDraw),
 }
 
 impl<'a> From<LayerDraw<'a>> for Item<'a> {
@@ -146,6 +171,10 @@ impl Item<'_> {
                 };
                 (reach?, draw.scissor)
             }
+            Item::Surface(draw) => (
+                device_rect(&draw.transform, &draw.bounds, scale).inflate(1.0),
+                draw.scissor,
+            ),
             Item::Group(group) => {
                 let spread = group.effect.map_or(0.0, |effect| {
                     let blur = Kernel::new(effect.effect.content_blur() * scale);
@@ -191,6 +220,13 @@ impl Item<'_> {
                 rect(&draw.scissor, hasher);
                 effect(&draw.backdrop, hasher);
             }
+            Item::Surface(draw) => {
+                (2u8, draw.id, draw.opacity.to_bits()).hash(hasher);
+                rect(&Some(draw.bounds), hasher);
+                affine(&draw.transform, hasher);
+                draw.radii.to_array().map(f32::to_bits).hash(hasher);
+                rect(&draw.scissor, hasher);
+            }
             Item::Group(group) => {
                 (1u8, group.key, group.signature, group.opacity.to_bits()).hash(hasher);
                 rect(&Some(group.bounds), hasher);
@@ -215,6 +251,7 @@ pub struct RenderStats {
     pub content_blurs: u32,
     pub image_bytes_uploaded: u64,
     pub images: u32,
+    pub surfaces: u32,
 }
 
 type Scissor = [u32; 4];
@@ -479,7 +516,14 @@ enum Step<'a> {
         scissor: Scissor,
     },
     Snapshot(Vec<Blur>),
+    Surface {
+        key: SurfaceKey,
+        uniform: u32,
+        scissor: Scissor,
+    },
 }
+
+type SurfaceKey = (SurfaceId, BufferRef);
 
 enum Pass<'a> {
     Raster { key: u64, steps: Vec<Step<'a>> },
@@ -609,6 +653,7 @@ pub struct Renderer {
     blank: Option<Target>,
     atlas: Option<Target>,
     images: HashMap<u64, CachedImage>,
+    surface_binds: HashMap<SurfaceKey, BindGroup>,
     frame: u64,
     stats: RenderStats,
 }
@@ -712,6 +757,7 @@ impl Renderer {
             blank: None,
             atlas: None,
             images: HashMap::new(),
+            surface_binds: HashMap::new(),
             frame: 0,
             stats: RenderStats::default(),
         }
@@ -787,25 +833,29 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
-        let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+        let bind_group = self.texture_bind_group(label, &view);
+        Target {
+            texture,
+            view,
+            bind_group,
+        }
+    }
+
+    fn texture_bind_group(&self, label: &str, view: &TextureView) -> BindGroup {
+        self.device.create_bind_group(&BindGroupDescriptor {
             label: Some(label),
             layout: &self.texture_layout,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: BindingResource::TextureView(&view),
+                    resource: BindingResource::TextureView(view),
                 },
                 BindGroupEntry {
                     binding: 1,
                     resource: BindingResource::Sampler(&self.sampler),
                 },
             ],
-        });
-        Target {
-            texture,
-            view,
-            bind_group,
-        }
+        })
     }
 
     fn offscreen(&self, label: &str, size: (u32, u32), reuse: Option<Target>) -> Target {
@@ -1014,16 +1064,98 @@ impl Renderer {
         });
     }
 
+    fn plan_surface(
+        &mut self,
+        draw: &SurfaceDraw,
+        latched: &Latched,
+        scissor: Scissor,
+        surface: Surface,
+        frame: &mut Frame<'_>,
+    ) -> Option<Step<'static>> {
+        let t = draw.transform;
+        let inverse = t.inverse()?;
+        let key = (draw.id, latched.buffer);
+        if !self.surface_binds.contains_key(&key) {
+            let view = latched
+                .texture
+                .create_view(&TextureViewDescriptor::default());
+            let bind_group = self.texture_bind_group("rouge surface", &view);
+            self.surface_binds.insert(key, bind_group);
+        }
+        let (width, height) = (
+            latched.texture.width() as f32,
+            latched.texture.height() as f32,
+        );
+        let region = latched.region;
+        let map = match latched.origin {
+            Origin::TopLeft => [
+                region.origin.x / width,
+                region.origin.y / height,
+                region.size.width / width,
+                region.size.height / height,
+            ],
+            Origin::BottomLeft => [
+                region.origin.x / width,
+                region.max().y / height,
+                region.size.width / width,
+                -region.size.height / height,
+            ],
+        };
+        let (half_x, half_y) = (0.5 / width, 0.5 / height);
+        let limit = [
+            region.origin.x / width + half_x,
+            region.origin.y / height + half_y,
+            region.max().x / width - half_x,
+            region.max().y / height - half_y,
+        ];
+        let mut params = [0.0; 16];
+        params[0] = f32::from(u8::from(latched.alpha == AlphaMode::Opaque));
+        let quad = device_rect(&t, &draw.bounds, frame.scale).inflate(1.0);
+        let uniform = frame.push(&LayerUniform {
+            matrix: [t.a, t.b, t.c, t.d],
+            translation_opacity: [t.tx, t.ty, draw.opacity, 0.0],
+            target: surface.target(),
+            rect: quad.to_array(),
+            fill: [0.0; 4],
+            radii: draw.radii.to_array(),
+            inverse: [inverse.a, inverse.b, inverse.c, inverse.d],
+            bounds: draw.bounds.to_array(),
+            content_map: map,
+            content_bounds: limit,
+            backdrop_map: [0.0; 4],
+            backdrop_bounds: [0.0; 4],
+            scale: [frame.scale; 4],
+            params,
+        });
+        self.ensure_pipeline(Shader::of::<SurfaceSample>());
+        Some(Step::Surface {
+            key,
+            uniform,
+            scissor,
+        })
+    }
+
     fn plan<'a>(
         &mut self,
         items: &'a [Item<'a>],
         surface: Surface,
         mut behind: Option<&mut Behind>,
         frame: &mut Frame<'a>,
+        surfaces: &Surfaces,
     ) -> Vec<Step<'a>> {
         let mut steps = Vec::with_capacity(items.len());
         for item in items {
             match item {
+                Item::Surface(draw) => {
+                    let scissor = surface.scissor(draw.scissor).filter(|_| draw.opacity > 0.0);
+                    let latched = surfaces.latched(draw.id);
+                    if let (Some(scissor), Some(latched)) = (scissor, latched)
+                        && let Some(step) =
+                            self.plan_surface(draw, latched, scissor, surface, frame)
+                    {
+                        steps.push(step);
+                    }
+                }
                 Item::Layer(draw) => {
                     let Some(scissor) =
                         surface.scissor(draw.scissor).filter(|_| draw.opacity > 0.0)
@@ -1085,12 +1217,20 @@ impl Renderer {
                         cover.size.0.next_multiple_of(GROUP_TEXTURE_STEP),
                         cover.size.1.next_multiple_of(GROUP_TEXTURE_STEP),
                     );
+                    let signature = {
+                        let mut hasher = DefaultHasher::new();
+                        group.signature.hash(&mut hasher);
+                        for item in &group.items {
+                            surface_frames(item, surfaces, &mut hasher);
+                        }
+                        hasher.finish()
+                    };
                     let existing = self
                         .groups
                         .remove(&group.key)
                         .filter(|g| g.target.dims() == needed);
                     let fresh = existing.as_ref().is_some_and(|g| {
-                        g.signature == group.signature
+                        g.signature == signature
                             && g.surface.origin == cover.origin
                             && g.surface.size == cover.size
                     });
@@ -1103,7 +1243,7 @@ impl Renderer {
                             origin: cover.origin,
                             size: needed,
                         };
-                        let steps = self.plan(&group.items, inner, None, frame);
+                        let steps = self.plan(&group.items, inner, None, frame, surfaces);
                         frame.passes.push(Pass::Raster {
                             key: group.key,
                             steps,
@@ -1156,7 +1296,7 @@ impl Renderer {
                     let entry = GroupTarget {
                         target,
                         surface: cover,
-                        signature: group.signature,
+                        signature,
                         blurred,
                         used: true,
                     };
@@ -1173,6 +1313,7 @@ impl Renderer {
             }
             if let Some(behind) = behind.as_deref_mut() {
                 item.fingerprint(&mut behind.hasher);
+                surface_frames(item, surfaces, &mut behind.hasher);
                 behind.since.extend(item.extent(frame.scale));
             }
         }
@@ -1285,6 +1426,28 @@ impl Renderer {
                         stats.layers += 1;
                     }
                 }
+                Step::Surface {
+                    key,
+                    uniform,
+                    scissor,
+                } => {
+                    let pipeline = self.effects.get(&Shader::of::<SurfaceSample>());
+                    let (Some(pipeline), Some(texture), Some(blank)) =
+                        (pipeline, self.surface_binds.get(key), blank)
+                    else {
+                        continue;
+                    };
+                    pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, texture, &[]);
+                    pass.set_bind_group(1, &self.layer_bind_group, &[*uniform]);
+                    pass.set_bind_group(2, blank, &[]);
+                    pass.draw(0..4, 0..1);
+                    pass.set_pipeline(&self.primitive_pipeline);
+                    pass.set_bind_group(0, atlas, &[]);
+                    stats.surfaces += 1;
+                    stats.draw_calls += 1;
+                }
                 Step::Effect {
                     shader,
                     uniform,
@@ -1329,6 +1492,7 @@ impl Renderer {
         clear: Color,
         items: &[Item<'_>],
         atlas: &mut Atlas,
+        surfaces: &Surfaces,
     ) {
         self.stats = RenderStats::default();
         self.frame += 1;
@@ -1364,8 +1528,10 @@ impl Renderer {
             clear.to_array().map(f32::to_bits),
         )
             .hash(&mut behind.hasher);
-        let steps = self.plan(items, surface, Some(&mut behind), &mut frame);
+        let steps = self.plan(items, surface, Some(&mut behind), &mut frame, surfaces);
         self.groups.retain(|_, group| take(&mut group.used));
+        self.surface_binds
+            .retain(|(id, buffer), _| surfaces.holds(*id, buffer.set));
         self.backdrops.truncate(behind.backdrops);
         let blit = frame.push(&RegionUniform {
             rect: [0.0, 0.0, 1.0, 1.0],
@@ -1433,6 +1599,21 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
         self.stats = stats;
         self.evict_images();
+    }
+}
+
+fn surface_frames(item: &Item<'_>, surfaces: &Surfaces, hasher: &mut DefaultHasher) {
+    match item {
+        Item::Surface(draw) => surfaces
+            .latched(draw.id)
+            .map(|latched| latched.frame)
+            .hash(hasher),
+        Item::Group(group) => {
+            for item in &group.items {
+                surface_frames(item, surfaces, hasher);
+            }
+        }
+        Item::Layer(_) => {}
     }
 }
 

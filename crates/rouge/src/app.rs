@@ -16,13 +16,13 @@ use rouge_core::{
 #[cfg(feature = "tokio-rt")]
 use rouge_reactive::set_tokio;
 use rouge_reactive::{ReadSignal, Runtime};
-use rouge_render::{Color, Gpu, GpuError, Point, Rect, Renderer, Size, Viewport};
+use rouge_render::{Color, Gpu, GpuError, Point, Rect, Renderer, Size, Surfaces, Viewport};
 use rouge_widgets::window_chrome;
 use std::collections::HashMap;
 use std::env::var;
 use std::mem::take;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle;
@@ -38,7 +38,7 @@ use winit::error::{EventLoopError, OsError};
 use winit::event::{
     ElementState, Ime, KeyEvent as WinitKeyEvent, MouseScrollDelta, TouchPhase, WindowEvent,
 };
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, SmolStr};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
@@ -189,9 +189,12 @@ impl App {
             set_tokio(handle);
         }
         event_loop.set_control_flow(ControlFlow::Wait);
+        let waker = event_loop.create_proxy();
         let mut runner = Runner {
             #[cfg(target_os = "macos")]
             native_menus,
+            waker,
+            shared: None,
             _trace: trace(),
             pending: self.windows,
             menus: self.menus,
@@ -210,6 +213,8 @@ impl App {
 struct Runner {
     #[cfg(target_os = "macos")]
     native_menus: NativeMenus,
+    waker: EventLoopProxy<()>,
+    shared: Option<Shared>,
     _trace: Option<FlushGuard>,
     pending: Vec<(WindowOptions, RootFn)>,
     menus: Vec<Menu>,
@@ -217,6 +222,36 @@ struct Runner {
     windows: HashMap<WindowId, WindowState>,
     error: Option<AppError>,
     exit_after_frames: Option<u64>,
+}
+
+struct Shared {
+    instance: Instance,
+    gpu: Gpu,
+    surfaces: Surfaces,
+}
+
+impl Shared {
+    fn new(
+        event_loop: &ActiveEventLoop,
+        window: &Arc<Window>,
+        waker: EventLoopProxy<()>,
+    ) -> Result<(Shared, Surface<'static>), AppError> {
+        let display = Box::new(event_loop.owned_display_handle());
+        let instance = Instance::new(InstanceDescriptor::new_with_display_handle_from_env(
+            display,
+        ));
+        let surface = instance.create_surface(window.clone())?;
+        let gpu = block_on(Gpu::new(instance.clone(), Some(&surface)))?;
+        let surfaces = Surfaces::new(&gpu).with_waker(move || {
+            let _ = waker.send_event(());
+        });
+        let shared = Shared {
+            instance,
+            gpu,
+            surfaces,
+        };
+        Ok((shared, surface))
+    }
 }
 
 struct WindowState {
@@ -276,6 +311,8 @@ impl Clipboard for SystemClipboardAdapter {
 impl WindowState {
     fn new(
         event_loop: &ActiveEventLoop,
+        shared: &mut Option<Shared>,
+        waker: &EventLoopProxy<()>,
         options: WindowOptions,
         root: RootFn,
         menus: Vec<Menu>,
@@ -292,12 +329,15 @@ impl WindowState {
         }
         let window = Arc::new(event_loop.create_window(attributes)?);
 
-        let display = Box::new(event_loop.owned_display_handle());
-        let instance = Instance::new(InstanceDescriptor::new_with_display_handle_from_env(
-            display,
-        ));
-        let surface = instance.create_surface(window.clone())?;
-        let gpu = block_on(Gpu::new(instance, Some(&surface)))?;
+        let surface = if let Some(shared) = shared {
+            shared.instance.create_surface(window.clone())?
+        } else {
+            let (created, surface) = Shared::new(event_loop, &window, waker.clone())?;
+            *shared = Some(created);
+            surface
+        };
+        let shared = shared.as_mut().expect("the shared GPU was created");
+        let gpu = shared.gpu.clone();
 
         let physical = window.inner_size();
         let scale = window.scale_factor() as f32;
@@ -342,6 +382,7 @@ impl WindowState {
         ui.set_scale(scale);
         ui.set_clipboard(SystemClipboardAdapter(SystemClipboard::new().ok()));
         ui.bind_menus(&shortcuts);
+        ui.set_surfaces(shared.surfaces.registrar());
         let environment = format!(
             "{:?}\n{:?} {}x{} at scale {scale}",
             gpu.adapter.get_info(),
@@ -439,7 +480,17 @@ impl WindowState {
         }
     }
 
-    fn redraw(&mut self) {
+    fn refresh_interval(&self) -> Duration {
+        let millihertz = self
+            .window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+            .filter(|rate| *rate > 0)
+            .unwrap_or(60_000);
+        Duration::from_secs_f64(1000.0 / f64::from(millihertz))
+    }
+
+    fn redraw(&mut self, surfaces: &mut Surfaces) {
         if let Some(profile) = &mut self.profile {
             let size = logical_size(self.window.inner_size(), self.ui.scale());
             profile.before_update(
@@ -469,6 +520,8 @@ impl WindowState {
         };
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
         let viewport = Viewport::new(self.config.width, self.config.height, self.ui.scale());
+        let interval = self.refresh_interval();
+        surfaces.latch(Instant::now() + interval / 2);
         let ui_frame = self.ui.frame();
         {
             let _encode = trace_span!("encode").entered();
@@ -478,6 +531,7 @@ impl WindowState {
                 self.background,
                 &ui_frame.scene,
                 ui_frame.atlas,
+                surfaces,
             );
         }
         {
@@ -485,6 +539,8 @@ impl WindowState {
             self.window.pre_present_notify();
             self.gpu.queue.present(frame);
         }
+        surfaces.presented(Instant::now(), interval);
+        surfaces.maintain();
         if let Some(profile) = &mut self.profile {
             profile.after_frame(&mut self.ui);
         }
@@ -503,7 +559,16 @@ impl Drop for WindowState {
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         for (options, root) in take(&mut self.pending) {
-            match WindowState::new(event_loop, options, root, self.menus.clone(), &self.fonts) {
+            let created = WindowState::new(
+                event_loop,
+                &mut self.shared,
+                &self.waker,
+                options,
+                root,
+                self.menus.clone(),
+                &self.fonts,
+            );
+            match created {
                 Ok(state) => {
                     self.windows.insert(state.window.id(), state);
                 }
@@ -524,12 +589,23 @@ impl ApplicationHandler for Runner {
             event_loop.exit();
             return;
         }
+        let surfaced = self.shared.as_mut().is_some_and(|shared| {
+            let changed = shared.surfaces.latch(Instant::now());
+            shared.surfaces.maintain();
+            changed || shared.surfaces.needs_frame()
+        });
         for state in self.windows.values_mut() {
             let bench = state.profile.as_ref().is_some_and(Profile::wants_frames);
-            if !state.occluded && (state.ui.needs_frame() || bench) {
+            let surface = surfaced && state.ui.has_surfaces();
+            if !state.occluded && (state.ui.needs_frame() || bench || surface) {
                 state.window.request_redraw();
             }
         }
+        let deadline = self
+            .shared
+            .as_ref()
+            .and_then(|shared| shared.surfaces.next_deadline());
+        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
         self.process_window_commands(event_loop);
     }
 
@@ -608,13 +684,16 @@ impl ApplicationHandler for Runner {
             WindowEvent::Ime(Ime::Commit(text)) => state.ui.ime(ImeEvent::Commit(text)),
             WindowEvent::Occluded(occluded) => {
                 state.occluded = occluded;
+                state.ui.set_visible(!occluded);
                 if !occluded {
                     state.window.request_redraw();
                 }
             }
             WindowEvent::RedrawRequested => {
-                if !state.occluded {
-                    state.redraw();
+                if !state.occluded
+                    && let Some(shared) = &mut self.shared
+                {
+                    state.redraw(&mut shared.surfaces);
                 }
                 if self.exit_after_frames.is_some_and(|n| state.frames >= n) {
                     self.windows.clear();

@@ -7,12 +7,16 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rouge-interop.workspace = true
 rouge-theme.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 image.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster.workspace = true

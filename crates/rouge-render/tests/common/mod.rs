@@ -4,10 +4,13 @@ use rouge_render::headless::{Headless, Image};
 use rouge_render::{
     Atlas, Color, Command, Commit, Compositor, Content, DrawList, Ease, Effect, EffectDraw,
     EffectInstance, EffectSlot, Glass, GpuError, Item, LayerCommand, LayerDraw, LayerId, LayerProp,
-    MotionCommand, MotionId, Nested, Point, Pose, Quad, Rect, RenderStats, Size, Timing, Tween,
-    Viewport,
+    MotionCommand, MotionId, Nested, Placement, Point, Pose, Quad, Rect, RenderStats, Size,
+    SurfaceSource, SurfaceStatus, SurfaceUse, Surfaces, Timing, Tween, Viewport,
 };
+use std::cell::RefCell;
 use std::error::Error;
+use std::rc::Rc;
+use std::time::Instant;
 use tokio::sync::oneshot::{Receiver, channel};
 
 pub(crate) type TestResult = Result<(), Box<dyn Error>>;
@@ -93,12 +96,26 @@ pub(crate) fn square() -> DrawList {
     quads([Quad::new(Rect::new(0.0, 0.0, 20.0, 20.0), Color::RED)])
 }
 
-#[derive(Default)]
 pub(crate) struct StageBuilder {
     background: Option<DrawList>,
     child: Option<DrawList>,
     origin: Point,
+    size: Size,
     clip: Option<Rect>,
+    surface: Option<SurfaceSource>,
+}
+
+impl Default for StageBuilder {
+    fn default() -> Self {
+        StageBuilder {
+            background: None,
+            child: None,
+            origin: Point::ZERO,
+            size: Size::new(20.0, 20.0),
+            clip: None,
+            surface: None,
+        }
+    }
 }
 
 impl StageBuilder {
@@ -122,23 +139,52 @@ impl StageBuilder {
         self
     }
 
+    pub(crate) fn sized(mut self, width: f32, height: f32) -> Self {
+        self.size = Size::new(width, height);
+        self
+    }
+
+    pub(crate) fn surface(mut self, source: SurfaceSource) -> Self {
+        self.surface = Some(source);
+        self
+    }
+
     pub(crate) fn build(self) -> Result<Stage, GpuError> {
         let mut stage = Stage {
             compositor: Compositor::new(),
             headless: Headless::new(Viewport::new(100, 100, 1.0))?,
             atlas: Atlas::new(),
+            status: Rc::new(RefCell::new(SurfaceStatus::Waiting)),
         };
         stage.apply(Command::Create(ROOT));
         stage.apply(Command::Root(ROOT));
         stage.layer(ROOT, LayerCommand::Frame(Rect::new(0.0, 0.0, 100.0, 100.0)));
         let mut nested = Vec::new();
-        if let Some(list) = self.child {
+        let surface = self.surface.map(|source| {
+            let id = source.id();
+            let status = stage.status.clone();
+            let registrar = stage.surfaces().registrar();
+            registrar.attach(source, move |update| *status.borrow_mut() = update);
+            registrar.place(
+                id,
+                Placement {
+                    width: self.size.width as u32,
+                    height: self.size.height as u32,
+                    scale: 1.0,
+                    visible: true,
+                },
+            );
+            id
+        });
+        let child = self.child.or_else(|| surface.map(|_| DrawList::new()));
+        if let Some(list) = child {
             stage.apply(Command::Create(CHILD));
             let frame = Rect {
                 origin: self.origin,
-                size: Size::new(20.0, 20.0),
+                size: self.size,
             };
             stage.layer(CHILD, LayerCommand::Frame(frame));
+            stage.layer(CHILD, LayerCommand::Surface(surface));
             stage.content(CHILD, vec![list], vec![]);
             nested.push(Nested {
                 layer: CHILD,
@@ -155,6 +201,7 @@ pub(crate) struct Stage {
     pub(crate) compositor: Compositor,
     pub(crate) headless: Headless,
     pub(crate) atlas: Atlas,
+    status: Rc<RefCell<SurfaceStatus>>,
 }
 
 impl Stage {
@@ -277,11 +324,31 @@ impl Stage {
     }
 
     pub(crate) fn draw(&mut self) -> RenderStats {
+        self.forward_surface_uses();
+        self.headless.surfaces().latch(Instant::now());
         self.headless.render(
             Color::TRANSPARENT,
             &self.compositor.scene(1.0),
             &mut self.atlas,
         )
+    }
+
+    pub(crate) fn surfaces(&mut self) -> &mut Surfaces {
+        self.headless.surfaces()
+    }
+
+    pub(crate) fn status(&self) -> SurfaceStatus {
+        self.status.borrow().clone()
+    }
+
+    pub(crate) fn forward_surface_uses(&mut self) {
+        let registrar = self.headless.surfaces().registrar();
+        for usage in self.compositor.take_surface_uses() {
+            match usage {
+                SurfaceUse::Bound(id) => registrar.bind(id),
+                SurfaceUse::Unbound(id) => registrar.unbind(id),
+            }
+        }
     }
 
     pub(crate) fn image(&self) -> Result<Image, GpuError> {

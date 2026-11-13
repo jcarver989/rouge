@@ -27,12 +27,13 @@ pub mod prelude {
         ImageSource, ImeEvent, Inputs, Interactions, Key, KeyEvent, Keyframes, LayoutTransition,
         Length, Mask, Menu, MenuItem, Modifiers, Motion, Painter, Palette, Path, Point,
         PointerButton, PointerEvent, Pose, Rect, ResizeEdge, Rgba, RowKey, ScrollEvent,
-        ScrollState, Scrollable, Size, SpanStyle, Spring, Style, Styled, Text, TextAlign,
-        TextStyle, Theme, Tween, Typography, UiPalette, Underline, View, VirtualListHandle,
-        WindowHandle, appearance, auto, canvas, component, div, dynamic, each, editable,
-        focus_handle, icon, image, motion, overlay, pct, px, rem, rich_text, root_font_size,
-        scroll, set_design_unit, show, switch, text, use_binding, view, virtual_list,
-        virtual_list_handle, window_focused, window_handle, window_size,
+        ScrollState, Scrollable, Size, SpanStyle, Spring, Style, Styled, Surface, SurfaceError,
+        SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle, Theme, Tween, Typography,
+        UiPalette, Underline, View, VirtualListHandle, WindowHandle, appearance, auto, canvas,
+        component, div, dynamic, each, editable, focus_handle, icon, image, motion, overlay, pct,
+        px, rem, rich_text, root_font_size, scroll, set_design_unit, show, surface, switch, text,
+        use_binding, view, virtual_list, virtual_list_handle, window_focused, window_handle,
+        window_size,
     };
     #[cfg(not(target_arch = "wasm32"))]
     pub use rouge_reactive::spawn_blocking;

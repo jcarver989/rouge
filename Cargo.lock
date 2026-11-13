@@ -3008,9 +3008,11 @@ dependencies = [
  "bytemuck",
  "image",
  "pollster",
+ "rouge-interop",
  "rouge-theme",
  "thiserror 2.0.21",
  "tokio",
+ "web-time",
  "wgpu",
 ]
 
@@ -3120,6 +3122,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "web-time",
  "wgpu",
 ]
 

@@ -12,6 +12,7 @@ mod path;
 mod prop;
 mod scroll;
 mod style;
+mod surface;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
 mod theme;
@@ -41,6 +42,7 @@ pub use scroll::{
     virtual_list_handle,
 };
 pub use style::{BoxShadow, Dirty, GroupStyles, Style, Styled, Typography};
+pub use surface::{Surface, surface};
 pub use theme::{Palette, Theme};
 pub use tree::{ElementId, FrameStats, PaintRegion};
 pub use ui::{Frame, Ui, root_font_size, window_size};
@@ -60,7 +62,8 @@ pub use rouge_macros::{component, view};
 pub use rouge_render::{
     Affine, BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Corners, Decay, Ease, Edges, Effect,
     Glass, ImageData, ImageError, Inputs, Keyframes, LayoutTransition, Mask, Point, Pose, Quad,
-    Rect, ScrollLinked, ScrollState, Size, Spring, Timing, Tween,
+    Rect, ScrollLinked, ScrollState, Size, Spring, SurfaceError, SurfaceProducer, SurfaceSource,
+    SurfaceStatus, Timing, Tween,
 };
 pub use rouge_text::{SpanStyle, TextAlign, TextStats, TextStyle, Underline, WrapIndent};
 

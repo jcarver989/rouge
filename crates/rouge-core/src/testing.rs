@@ -4,13 +4,15 @@ use crate::ui::Ui;
 use crate::view::View;
 use crate::window::{Menu, WindowCommand};
 use rouge_render::headless::{Headless, Image};
-use rouge_render::{Color, Ease, GpuError, Point, Rect, RenderStats, Size, Tween, Viewport};
+use rouge_render::{
+    Color, Ease, GpuError, Point, Rect, RenderStats, Size, Surfaces, Tween, Viewport,
+};
 use rouge_theme::UiPalette;
 use std::mem::take;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 pub use rouge_reactive::testing::{TestResult, counter, recorder};
@@ -145,19 +147,39 @@ impl TestUi {
         TestUiBuilder::default().clear(Color::WHITE).build(root)
     }
 
-    fn present(&mut self) -> Result<(RenderStats, &Headless), TestError> {
-        let scale = self.ui.scale();
-        let headless = match self.headless.take() {
-            Some(headless) => headless,
-            None => Headless::new(Viewport::new(
+    fn headless(&mut self) -> Result<&mut Headless, TestError> {
+        if self.headless.is_none() {
+            let scale = self.ui.scale();
+            let mut headless = Headless::new(Viewport::new(
                 (self.size.width * scale) as u32,
                 (self.size.height * scale) as u32,
                 scale,
-            ))?,
-        };
-        let headless = self.headless.insert(headless);
+            ))?;
+            self.ui.set_surfaces(headless.surfaces().registrar());
+            self.headless = Some(headless);
+        }
+        Ok(self
+            .headless
+            .as_mut()
+            .expect("the headless renderer exists"))
+    }
+
+    pub fn surfaces(&mut self) -> Result<&mut Surfaces, TestError> {
+        Ok(self.headless()?.surfaces())
+    }
+
+    fn present(&mut self) -> Result<(RenderStats, &Headless), TestError> {
+        self.headless()?;
+        let headless = self
+            .headless
+            .as_mut()
+            .expect("the headless renderer exists");
+        headless.surfaces().latch(Instant::now());
         let frame = self.ui.frame();
         let stats = headless.render(self.clear, &frame.scene, frame.atlas);
+        headless
+            .surfaces()
+            .presented(Instant::now(), Duration::from_secs_f64(STEP));
         Ok((stats, headless))
     }
 

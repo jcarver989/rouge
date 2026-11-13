@@ -3,7 +3,7 @@ use rouge_core::{
     Clipboard, Color, Cursor, ImeEvent, Key, KeyEvent, Modifiers, Point, PointerButton, Size, Ui,
     View, WindowCommand,
 };
-use rouge_render::{Gpu, Renderer, Viewport};
+use rouge_render::{Gpu, Renderer, Surfaces, Viewport};
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -15,6 +15,7 @@ use web_sys::{
     ClipboardEvent, CompositionEvent, Event, EventTarget, HtmlCanvasElement, HtmlTextAreaElement,
     InputEvent, KeyboardEvent, PointerEvent, ResizeObserver, WheelEvent, Window,
 };
+use web_time::Instant;
 use wgpu::{
     CurrentSurfaceTexture, Instance, Surface, SurfaceConfiguration, SurfaceTarget,
     TextureViewDescriptor,
@@ -78,6 +79,7 @@ struct Host {
     config: SurfaceConfiguration,
     gpu: Gpu,
     renderer: Renderer,
+    surfaces: Surfaces,
     ui: RefCell<Ui>,
     runtime: BrowserRuntime,
     background: Color,
@@ -112,6 +114,7 @@ impl BrowserApp {
             .get_default_config(&gpu.adapter, 1, 1)
             .ok_or(BrowserError::UnsupportedSurface)?;
         let renderer = Renderer::new(&gpu.device, &gpu.queue, config.format);
+        let surfaces = Surfaces::new(&gpu);
         let input = document
             .create_element("textarea")?
             .dyn_into::<HtmlTextAreaElement>()
@@ -139,6 +142,7 @@ impl BrowserApp {
                     root,
                 );
                 ui.set_clipboard(BrowserClipboard);
+                ui.set_surfaces(surfaces.registrar());
                 ui
             };
             ui.set_scale(window.device_pixel_ratio() as f32);
@@ -151,6 +155,7 @@ impl BrowserApp {
                 config,
                 gpu,
                 renderer,
+                surfaces,
                 ui: RefCell::new(ui),
                 runtime,
                 background,
@@ -564,6 +569,7 @@ impl Host {
                 | CurrentSurfaceTexture::Suboptimal(frame) => {
                     let view = frame.texture.create_view(&TextureViewDescriptor::default());
                     let viewport = Viewport::new(width, height, ui.scale());
+                    self.surfaces.latch(Instant::now());
                     let frame_ui = ui.frame();
                     self.renderer.render(
                         &view,
@@ -571,7 +577,9 @@ impl Host {
                         self.background,
                         &frame_ui.scene,
                         frame_ui.atlas,
+                        &self.surfaces,
                     );
+                    self.surfaces.maintain();
                     self.gpu.queue.present(frame);
                     self.frames.set(self.frames.get() + 1);
                 }

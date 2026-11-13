@@ -2,11 +2,13 @@ use crate::animation::{
     Animated, Decay, Keyframes, LayerProp, LayoutTransition, MAX_TICK, Pose, Spring, Timing,
 };
 use crate::effect::{EffectDraw, EffectInstance, Shader};
-use crate::renderer::{Group, Item, LayerDraw, device_rect};
+use crate::renderer::{Group, Item, LayerDraw, SurfaceDraw, device_rect};
 use crate::scene::DrawList;
+use crate::surface::SurfaceId;
 use crate::{Affine, Corners, Point, Rect, Size};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{DefaultHasher, Hasher};
+use std::mem::take;
 use tokio::sync::oneshot::Sender;
 
 const RUBBER_BAND: f32 = 0.25;
@@ -145,6 +147,7 @@ pub enum LayerCommand {
         animate: bool,
     },
     Rasterize(bool),
+    Surface(Option<SurfaceId>),
     Frame(Rect),
     Content(Content),
     ScrollExtent {
@@ -180,6 +183,12 @@ pub enum MotionCommand {
     },
     Stop,
     Remove,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceUse {
+    Bound(SurfaceId),
+    Unbound(SurfaceId),
 }
 
 pub enum Command {
@@ -290,6 +299,7 @@ struct Layer {
     keyframes: Option<(Keyframes, f32)>,
     effects: BTreeMap<EffectSlot, Applied>,
     rasterize: bool,
+    surface: Option<SurfaceId>,
     scroll: Option<ScrollState>,
     source: Option<u64>,
     link: Option<(u64, ScrollLinked)>,
@@ -313,6 +323,7 @@ impl Default for Layer {
             keyframes: None,
             effects: BTreeMap::new(),
             rasterize: false,
+            surface: None,
             scroll: None,
             source: None,
             link: None,
@@ -523,6 +534,8 @@ pub struct Compositor {
     animating: Vec<LayerId>,
     moving: Vec<MotionId>,
     sources: HashMap<u64, LayerId>,
+    surface_uses: Vec<SurfaceUse>,
+    surface_layers: usize,
     empty: DrawList,
 }
 
@@ -537,6 +550,14 @@ impl Compositor {
 
     pub fn layer_count(&self) -> usize {
         self.layers.len()
+    }
+
+    pub fn has_surfaces(&self) -> bool {
+        self.surface_layers > 0
+    }
+
+    pub fn take_surface_uses(&mut self) -> Vec<SurfaceUse> {
+        take(&mut self.surface_uses)
     }
 
     pub fn pose(&self, id: LayerId) -> Option<LayerPose> {
@@ -587,6 +608,8 @@ impl Compositor {
             motions,
             animating,
             sources,
+            surface_uses,
+            surface_layers,
             ..
         } = self;
         let Some(layer) = layers.get_mut(&id) else {
@@ -635,6 +658,19 @@ impl Compositor {
                 }
             }
             LayerCommand::Rasterize(rasterize) => layer.rasterize = rasterize,
+            LayerCommand::Surface(surface) => {
+                if layer.surface != surface {
+                    if let Some(old) = layer.surface.take() {
+                        surface_uses.push(SurfaceUse::Unbound(old));
+                        *surface_layers -= 1;
+                    }
+                    if let Some(new) = surface {
+                        surface_uses.push(SurfaceUse::Bound(new));
+                        *surface_layers += 1;
+                    }
+                    layer.surface = surface;
+                }
+            }
             LayerCommand::ScrollSource(key) => {
                 layer.source = Some(key);
                 sources.insert(key, id);
@@ -788,6 +824,10 @@ impl Compositor {
         }
         if self.root == Some(id) {
             self.root = None;
+        }
+        if let Some(surface) = layer.surface {
+            self.surface_uses.push(SurfaceUse::Unbound(surface));
+            self.surface_layers -= 1;
         }
         if let Some(key) = layer.source
             && self.sources.get(&key) == Some(&id)
@@ -987,6 +1027,16 @@ impl Compositor {
         this: &Parent,
         out: &mut Vec<Item<'a>>,
     ) {
+        let mut surface = layer.surface.map(|id| {
+            Item::Surface(SurfaceDraw {
+                id,
+                bounds: layer.bounds(),
+                transform: this.transform,
+                opacity: this.opacity,
+                radii: style.radii,
+                scissor: this.scissor,
+            })
+        });
         for (segment, list) in layer.lists.iter().enumerate() {
             if !list.is_empty() || style.backdrop.is_some() {
                 out.push(Item::Layer(LayerDraw {
@@ -999,10 +1049,12 @@ impl Compositor {
                     scissor: this.scissor,
                 }));
             }
+            out.extend(surface.take());
             if let Some(nested) = layer.nested.get(segment) {
                 self.emit(nested.layer, nested.clip, scale, this, out);
             }
         }
+        out.extend(surface);
         for orphan in &layer.orphans {
             self.emit(*orphan, None, scale, this, out);
         }
@@ -1018,7 +1070,8 @@ impl Compositor {
     }
 
     fn primitives(&self, layer: &Layer, limit: usize) -> usize {
-        let mut count: usize = layer.lists.iter().map(DrawList::len).sum();
+        let mut count: usize = layer.lists.iter().map(DrawList::len).sum::<usize>()
+            + usize::from(layer.surface.is_some());
         for child in self.children(layer) {
             if count >= limit {
                 break;

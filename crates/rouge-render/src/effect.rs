@@ -187,6 +187,13 @@ impl Effect for Passthrough {
     const INPUTS: Inputs = Inputs::CONTENT;
 }
 
+pub(crate) struct SurfaceSample;
+
+impl Effect for SurfaceSample {
+    const WGSL: &'static str = include_str!("shaders/surface.wgsl");
+    const INPUTS: Inputs = Inputs::CONTENT;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Blur {
     pub radius: f32,

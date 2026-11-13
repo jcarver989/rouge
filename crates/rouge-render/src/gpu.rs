@@ -7,6 +7,7 @@ use wgpu::{
 #[cfg(not(target_arch = "wasm32"))]
 use wgpu::{MapRangeError, PollError};
 
+#[derive(Clone)]
 pub struct Gpu {
     pub adapter: Adapter,
     pub device: Device,
