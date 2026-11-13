@@ -1402,6 +1402,12 @@ impl Tree {
         true
     }
 
+    pub(crate) fn set_cursor(&mut self, id: ElementId, cursor: Option<Cursor>) {
+        if let Some(element) = self.elements.get_mut(id) {
+            element.spec.cursor = cursor;
+        }
+    }
+
     pub(crate) fn set_disabled(&mut self, id: ElementId, disabled: bool) {
         self.set_interaction(id, Interaction::Disabled, disabled);
         if self
@@ -1584,6 +1590,27 @@ impl Tree {
                 }
             }
         });
+    }
+
+    pub(crate) fn text_bounds(&self, compositor: &Compositor, needle: &str) -> Option<Rect> {
+        self.visible_preorder(self.root).find_map(|id| {
+            let element = &self.elements[id];
+            let text = element.spec.text.as_ref()?;
+            let start = text.content.find(needle)?;
+            let layout = text.layout.as_ref()?;
+            let rect = layout
+                .selection_rects(layout.select(start, start + needle.len()))
+                .into_iter()
+                .next()?;
+            let origin = element.bounds.origin + text.inset;
+            let local = Rect::new(
+                origin.x + rect.x,
+                origin.y + rect.y,
+                rect.width,
+                rect.height,
+            );
+            Some(self.to_window(compositor, id, local))
+        })
     }
 
     pub(crate) fn text_hit(

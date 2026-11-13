@@ -3,9 +3,9 @@ use rouge_core::testing::{
     counter, recorder,
 };
 use rouge_core::{
-    BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Div, Keyframes, LayoutTransition, Mask,
-    Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View, div, dynamic, rich_text,
-    show, text,
+    BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Cursor, Div, Keyframes, LayoutTransition,
+    Mask, Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View, div, dynamic,
+    rich_text, show, text,
 };
 use rouge_reactive::{Runtime, Signal, signal, stored};
 use rouge_render::headless::Image;
@@ -746,6 +746,38 @@ fn range_click_and_hover_report_cluster_start_bytes_and_leave() {
     assert!(hovers.borrow().contains(&Some(2)));
     assert_eq!(hovers.borrow().last(), Some(&None));
     assert_eq!(ui.text_index_at(Point::new(150.0, 80.0)), None);
+}
+
+#[test]
+fn cursor_follows_a_reactive_prop() {
+    let _rt = Runtime::new().enter();
+    let pointer = signal(false);
+    let mut ui = TestUi::canvas(move || {
+        div()
+            .size(50.0)
+            .cursor(move || pointer.get().then_some(Cursor::Pointer))
+    });
+    ui.pointer_moved(Point::new(10.0, 10.0));
+    assert_eq!(ui.cursor(), Cursor::Default);
+    pointer.set(true);
+    assert_eq!(ui.cursor(), Cursor::Pointer);
+}
+
+#[test]
+fn click_text_clicks_the_middle_of_the_matching_text() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (clicks, click) = recorder();
+    let mut ui = TestUi::canvas(|| {
+        rich_text("one two", Vec::new())
+            .text_size(32.0)
+            .font("monospace")
+            .p(10.0)
+            .on_range_click(click)
+    });
+    ui.click_text("two")?;
+    assert_eq!(&*clicks.borrow(), &[Some(5)]);
+    assert!(matches!(ui.click_text("three"), Err(TestError::NoText(_))));
+    Ok(())
 }
 
 #[test]

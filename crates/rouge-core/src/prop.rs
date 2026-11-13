@@ -1,3 +1,4 @@
+use crate::Cursor;
 use crate::length::{Length, Radii};
 use rouge_reactive::{ReadSignal, Signal};
 use rouge_render::{Color, Corners, Effect};
@@ -41,6 +42,12 @@ impl PropFrom<f32> for Length {
 impl PropFrom<i32> for Length {
     fn prop_from(value: i32) -> Self {
         Length::design(value as f32)
+    }
+}
+
+impl PropFrom<Cursor> for Option<Cursor> {
+    fn prop_from(value: Cursor) -> Self {
+        Some(value)
     }
 }
 

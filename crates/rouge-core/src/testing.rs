@@ -24,6 +24,8 @@ pub enum TestError {
     NoElement { x: f32, y: f32 },
     #[error("no element with test id {0:?}")]
     NoTestId(String),
+    #[error("no text containing {0:?}")]
+    NoText(String),
     #[error("{0:?} never scrolled into view")]
     NotScrolledIntoView(String),
     #[error(transparent)]
@@ -259,6 +261,14 @@ impl TestUi {
         self.advance(0.0);
         let point = self.ui.bounds_of_all(name).get(index).map(Rect::center);
         let point = point.ok_or_else(|| TestError::NoTestId(format!("{name} #{index}")))?;
+        self.press_pointer(point, PointerButton::Primary);
+        Ok(())
+    }
+
+    pub fn click_text(&mut self, needle: &str) -> Result<(), TestError> {
+        self.advance(0.0);
+        let point = self.ui.text_bounds(needle).map(|bounds| bounds.center());
+        let point = point.ok_or_else(|| TestError::NoText(needle.to_owned()))?;
         self.press_pointer(point, PointerButton::Primary);
         Ok(())
     }

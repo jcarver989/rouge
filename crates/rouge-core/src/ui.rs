@@ -325,6 +325,11 @@ impl Ui {
         self.tree.text_of(name)
     }
 
+    pub fn text_bounds(&mut self, needle: &str) -> Option<Rect> {
+        self.tree();
+        self.tree.text_bounds(&self.compositor, needle)
+    }
+
     pub fn text_index_at(&mut self, position: Point) -> Option<usize> {
         self.tree();
         self.tree

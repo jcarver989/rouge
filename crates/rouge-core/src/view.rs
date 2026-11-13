@@ -443,9 +443,12 @@ impl Div {
         self
     }
 
-    pub fn cursor(mut self, cursor: Cursor) -> Self {
-        self.spec.cursor = Some(cursor);
-        self
+    pub fn cursor<U>(self, cursor: impl IntoProp<Option<Cursor>, U>) -> Self {
+        self.bind(
+            cursor,
+            |spec, cursor| spec.cursor = cursor,
+            Tree::set_cursor,
+        )
     }
 
     pub fn track_size(mut self, size: Signal<Size>) -> Self {
@@ -693,6 +696,10 @@ impl Text {
 
     pub fn tab_size(self, columns: u8) -> Self {
         self.text_style(|style| style.tab_size = columns)
+    }
+
+    pub fn cursor<U>(self, cursor: impl IntoProp<Option<Cursor>, U>) -> Self {
+        Text(self.0.cursor(cursor))
     }
 }
 
