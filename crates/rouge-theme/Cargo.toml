@@ -1,6 +1,6 @@
 [package]
 name = "rouge-theme"
-description = "Renderer-neutral colors, UI palettes, semantic control states and picker behavior for Rouge apps"
+description = "Renderer-neutral colors, UI and Markdown palettes, semantic control states and picker behavior for Rouge apps"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
