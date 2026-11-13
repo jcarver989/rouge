@@ -4,8 +4,7 @@ mod diff;
 #[path = "../examples/shared/palette.rs"]
 mod palette;
 
-use clankerdiff_core::{FileDiff, FileStatus, PatchLineKind};
-use diff::{Patch, SAMPLE, diff_view};
+use diff::{Patch, SAMPLE, Tone, diff_view};
 use rouge::core::MemoryClipboard;
 use rouge::core::testing::{TestResult, TestUi, TestUiBuilder};
 use rouge::prelude::*;
@@ -101,10 +100,10 @@ fn group_hover_reveals_comment_control_and_editor_submits_a_local_comment() -> T
     ui.click_on("diff-line-Unified(0, 1)-New-comment")?;
     assert!(ui.bounds_of("diff-comment-editor").is_some());
     ui.type_text("Keep the Unicode café label");
-    ui.press_with(Key::Enter, Modifiers::SHIFT);
+    ui.press("shift-enter");
     ui.type_text("and document the change.");
     assert!(ui.bounds_of("diff-comment-editor").is_some());
-    ui.press(Key::Enter);
+    ui.press("enter");
     assert!(ui.bounds_of("diff-comment-editor").is_none());
     assert!(ui.bounds_of("diff-comments-saved").is_some());
     ui.click_on("diff-line-Unified(0, 1)-New-comment")?;
@@ -161,12 +160,28 @@ fn rich_text_byte_hits_and_inherited_rem_typography_share_one_line() -> TestResu
 #[test]
 fn domain_files_render_in_source_order_with_positional_split_pairing() -> TestResult {
     let _rt = Runtime::new().enter();
-    let mut renamed = FileDiff::from_texts("z.rs", "let old = 1;\n", "let new = 2;\n")?;
-    renamed.old_path = Some("before.rs".try_into()?);
-    renamed.status = FileStatus::Renamed;
-    let added = FileDiff::from_texts("a.rs", "", "let café = 1;\n")?;
-    let deleted = FileDiff::from_texts("deleted.rs", "old\n", "")?;
-    let patch = Patch::from(vec![renamed, added, deleted]);
+    let patch = Patch::parse(concat!(
+        "diff --git a/before.rs b/z.rs\n",
+        "rename from before.rs\n",
+        "rename to z.rs\n",
+        "--- a/before.rs\n",
+        "+++ b/z.rs\n",
+        "@@ -1 +1 @@\n",
+        "-let old = 1;\n",
+        "+let new = 2;\n",
+        "diff --git a/a.rs b/a.rs\n",
+        "new file mode 100644\n",
+        "--- /dev/null\n",
+        "+++ b/a.rs\n",
+        "@@ -0,0 +1 @@\n",
+        "+let café = 1;\n",
+        "diff --git a/deleted.rs b/deleted.rs\n",
+        "deleted file mode 100644\n",
+        "--- a/deleted.rs\n",
+        "+++ /dev/null\n",
+        "@@ -1 +0,0 @@\n",
+        "-old\n",
+    ));
     assert_eq!(
         patch
             .files
@@ -220,9 +235,9 @@ fn compatibility_parser_preserves_plain_paths_truncated_hunks_and_domain_numberi
             .map(|line| (line.kind, line.old_line_no, line.new_line_no))
             .collect::<Vec<_>>(),
         [
-            (PatchLineKind::Context, Some(8), Some(12)),
-            (PatchLineKind::Removed, Some(9), None),
-            (PatchLineKind::Added, None, Some(13)),
+            (Tone::Context, Some(8), Some(12)),
+            (Tone::Removed, Some(9), None),
+            (Tone::Added, None, Some(13)),
         ]
     );
     assert!(hunk.lines.last().ok_or("last line")?.no_newline);

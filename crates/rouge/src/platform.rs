@@ -2,9 +2,11 @@
 pub(crate) mod native_menu;
 
 use rouge_core::{
-    Appearance, Cursor, Key, Modifiers, PointerButton, ResizeEdge, Ui, WindowCommand,
+    AnyView, Appearance, Cursor, Key, Menu, Modifiers, PointerButton, ResizeEdge, Ui, WindowCommand,
 };
 use rouge_render::{Point, Size};
+#[cfg(feature = "open-url")]
+use std::io::Error as IoError;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{MouseButton, MouseScrollDelta};
 use winit::keyboard::{ModifiersState, NamedKey};
@@ -121,6 +123,7 @@ pub(crate) fn window_commands(window: &Window, ui: &mut Ui) -> (bool, bool) {
                 WindowCommand::Zoom => window.set_maximized(!window.is_maximized()),
                 WindowCommand::Close => close = true,
                 WindowCommand::Quit => quit = true,
+                WindowCommand::Focus => window.focus_window(),
                 WindowCommand::StartDrag => {
                     let _ = window.drag_window();
                 }
@@ -147,14 +150,11 @@ pub(crate) fn window_commands(window: &Window, ui: &mut Ui) -> (bool, bool) {
 }
 
 #[cfg(feature = "open-url")]
-pub fn open_url(url: &str) -> Result<(), std::io::Error> {
+pub fn open_url(url: &str) -> Result<(), IoError> {
     open::that(url)
 }
 
-pub(crate) fn menu_root(
-    menus: Vec<rouge_core::Menu>,
-    root: rouge_core::AnyView,
-) -> rouge_core::AnyView {
+pub(crate) fn menu_root(menus: Vec<Menu>, root: AnyView) -> AnyView {
     #[cfg(target_os = "macos")]
     {
         let _ = menus;
@@ -163,6 +163,7 @@ pub(crate) fn menu_root(
     #[cfg(not(target_os = "macos"))]
     {
         use rouge_core::{Styled, View, div};
+        use rouge_widgets::menu_bar;
         if menus.is_empty() {
             return root;
         }
@@ -170,8 +171,8 @@ pub(crate) fn menu_root(
             .size_full()
             .flex()
             .col()
-            .child(rouge_widgets::menu_bar(menus))
-            .child(div().flex_1().min_h(0.0).child(root))
+            .child(menu_bar(menus))
+            .child(div().flex_1().min_h(0.0).root_host().child(root))
             .into_any()
     }
 }

@@ -69,10 +69,7 @@ fn build_menu(menu: Menu, actions: &mut HashMap<MenuId, MenuItem>) -> Result<Sub
         match &item {
             MenuItem::Separator => native.append(&PredefinedMenuItem::separator())?,
             MenuItem::Submenu(menu) => native.append(&build_menu(menu.clone(), actions)?)?,
-            MenuItem::Action {
-                title, shortcut, ..
-            }
-            | MenuItem::Callback {
+            MenuItem::Item {
                 title, shortcut, ..
             } => {
                 let action = NativeItem::new(title, true, None);
