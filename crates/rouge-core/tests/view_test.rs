@@ -940,3 +940,29 @@ fn run(ui: &mut TestUi, max_frames: usize, hz: f64) -> Result<Vec<u32>, TestErro
     }
     Ok(positions)
 }
+
+#[test]
+fn handlers_run_in_the_scope_that_registered_them() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let shown = signal(true);
+    let made = rouge_reactive::stored(Vec::new());
+    let mut ui = TestUi::new(move || {
+        let button = move || {
+            div()
+                .test_id("button")
+                .size(20.0)
+                .on_click(move |_| made.update(|made| made.push(signal(0))))
+        };
+        div().size_full().child(show(move || shown.get(), button))
+    });
+    ui.click_on("button")?;
+    let created = made.with(|made| made[0]);
+    assert!(created.is_alive());
+    shown.set(false);
+    ui.advance(0.0);
+    assert!(
+        !created.is_alive(),
+        "the signal was owned by the button's branch"
+    );
+    Ok(())
+}

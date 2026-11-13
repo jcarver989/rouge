@@ -3,7 +3,7 @@ use rouge_core::testing::{
 };
 use rouge_core::{
     Color, EditAction, Key, Point, Pose, Styled, View, div, dynamic, each, editable, focus_handle,
-    overlay, show,
+    overlay, show, switch,
 };
 use rouge_reactive::{ReadSignal, Runtime, Signal, on_cleanup, signal};
 use std::cell::RefCell;
@@ -579,4 +579,64 @@ type Log = Rc<RefCell<Vec<String>>>;
 struct Item {
     id: u32,
     width: f32,
+}
+
+#[test]
+fn an_overlay_opened_inside_another_overlay_sits_above_it() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, clicked) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let clicked = signal(Vec::new());
+        let inner = move || {
+            div()
+                .absolute()
+                .left(10.0)
+                .top(10.0)
+                .size(20.0)
+                .on_click(move |_| clicked.update(|all| all.push("inner")))
+        };
+        let outer = move || {
+            div()
+                .absolute()
+                .inset(0.0)
+                .on_click(move |_| clicked.update(|all| all.push("outer")))
+                .child(overlay(inner))
+        };
+        (div().size_full().child(overlay(outer)), clicked)
+    });
+    ui.click_at(15.0, 15.0);
+    ui.click_at(60.0, 60.0);
+    assert_eq!(clicked.get(), ["inner", "outer"]);
+}
+
+#[test]
+fn switch_rebuilds_only_when_its_key_changes_and_builds_untracked() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let tab = signal(0);
+    let read = signal(0);
+    let (builds, bump) = counter();
+    let mut ui = TestUi::new(move || {
+        let content = switch(
+            move || tab.get() % 2,
+            move |tab| {
+                bump();
+                read.get();
+                div().test_id(format!("tab-{tab}")).size(10.0)
+            },
+        );
+        div().size_full().child(content)
+    });
+    assert!(ui.bounds_of("tab-0").is_some());
+    read.set(1);
+    tab.set(2);
+    ui.advance(0.0);
+    assert_eq!(
+        builds.get(),
+        1,
+        "reads in the view and same-key writes do not rebuild"
+    );
+    tab.set(3);
+    ui.advance(0.0);
+    assert!(ui.bounds_of("tab-1").is_some());
+    assert_eq!(builds.get(), 2);
+    Ok(())
 }

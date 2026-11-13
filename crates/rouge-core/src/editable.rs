@@ -1,14 +1,16 @@
+use crate::clipboard::ClipboardMedia;
 use crate::event::{Cursor, ImeEvent, Key, KeyEvent, PointerButton};
 use crate::focus::FocusHandle;
 use crate::length::Length;
 use crate::prop::IntoProp;
+use crate::style::Dirty;
 use crate::tree::ElementId;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Text, View, send, text};
 use crate::window::EditAction;
 use crate::{Styled, styled};
 use rouge_macros::component;
-use rouge_reactive::{Signal, effect};
+use rouge_reactive::{Scope, Signal, effect, run_in};
 use rouge_render::Color;
 use rouge_text::Movement;
 use std::borrow::Cow;
@@ -73,8 +75,42 @@ impl Editable {
         self
     }
 
+    #[track_caller]
     pub fn on_submit(mut self, f: impl Fn(&str) + 'static) -> Self {
-        self.on_submit = Some(Rc::new(f));
+        let owner = Scope::current();
+        self.on_submit = Some(Rc::new(move |text| {
+            run_in(owner, || f(text));
+        }));
+        self
+    }
+
+    #[track_caller]
+    pub fn on_paste(mut self, f: impl Fn(ClipboardMedia) + 'static) -> Self {
+        let owner = Scope::current();
+        self.state.on_paste = Some(Rc::new(move |media| {
+            run_in(owner, || f(media));
+        }));
+        self
+    }
+
+    pub fn placeholder<U, V>(
+        mut self,
+        placeholder: impl IntoProp<String, U>,
+        color: impl IntoProp<Color, V>,
+    ) -> Self {
+        let text = self
+            .text
+            .text_prop(placeholder, Dirty::Paint, |text, placeholder| {
+                let color = text
+                    .placeholder
+                    .take()
+                    .map_or(Color::TRANSPARENT, |(_, color)| color);
+                text.placeholder = Some((placeholder, color));
+            });
+        self.text = text.text_prop(color, Dirty::Paint, |text, color| {
+            let placeholder = text.placeholder.take().map(|(placeholder, _)| placeholder);
+            text.placeholder = Some((placeholder.unwrap_or_default(), color));
+        });
         self
     }
 
@@ -90,6 +126,11 @@ impl Editable {
 
     pub fn track_focus(mut self, handle: FocusHandle) -> Self {
         self.text.0 = self.text.0.track_focus(handle);
+        self
+    }
+
+    pub fn on_key_down(mut self, f: impl Fn(&KeyEvent) + 'static) -> Self {
+        self.text.0 = self.text.0.on_key_down(f);
         self
     }
 
@@ -206,6 +247,9 @@ impl View for Editable {
             })
             .cursor(Cursor::Text)
             .on_key_down(move |event| {
+                if event.stopped.get() {
+                    return;
+                }
                 if event.key == Key::Enter
                     && !event.modifiers.shift
                     && (submit_on_enter || !multiline)

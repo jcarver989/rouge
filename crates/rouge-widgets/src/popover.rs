@@ -1,7 +1,7 @@
 use rouge_core::component;
 use rouge_core::{
-    AnyView, BoxShadow, BuildCx, Div, ElementId, Key, PointerEvent, Pose, Rect, Styled, Theme,
-    Tween, View, div, overlay, px, show, styled, text, use_theme, window_size,
+    AnyView, BoxShadow, BuildCx, Div, ElementId, Glass, Key, PointerEvent, Pose, Rect, Styled,
+    Theme, Tween, View, div, overlay, px, show, styled, text, use_theme, window_size,
 };
 use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -67,12 +67,15 @@ impl Placement {
 }
 
 pub(crate) fn panel(theme: Theme) -> Div {
-    div()
-        .bg(theme.surface)
-        .border(1.0)
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .shadow(BoxShadow::md())
+    let panel = div().rounded(theme.radius);
+    if theme.glass.get_untracked().is_none() {
+        return panel
+            .bg(theme.surface)
+            .border(1.0)
+            .border_color(theme.border)
+            .shadow(BoxShadow::md());
+    }
+    panel.backdrop(move || theme.glass.get().unwrap_or(Glass::frosted(0.0)))
 }
 
 pub(crate) fn popup(

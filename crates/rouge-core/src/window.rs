@@ -1,4 +1,4 @@
-use crate::event::{Chord, Key, KeyEvent, Modifiers};
+use crate::event::{Chord, IntoChord, Key, KeyEvent, Modifiers};
 use crate::tree::edit::EditOp;
 use crate::ui::Ui;
 use rouge_reactive::{ReadSignal, Signal, expect_context};
@@ -97,11 +97,31 @@ impl MenuItem {
         }
     }
 
-    pub fn shortcut(mut self, chord: Chord) -> Self {
+    #[track_caller]
+    pub fn shortcut(mut self, chord: impl IntoChord) -> Self {
         if let MenuItem::Action { shortcut, .. } | MenuItem::Callback { shortcut, .. } = &mut self {
-            *shortcut = Some(chord);
+            *shortcut = Some(chord.into_chord());
         }
         self
+    }
+
+    pub fn shortcuts(menus: &[Menu]) -> Vec<(Chord, MenuItem)> {
+        menus
+            .iter()
+            .flat_map(|menu| &menu.items)
+            .flat_map(|item| match item {
+                MenuItem::Action {
+                    shortcut: Some(chord),
+                    ..
+                }
+                | MenuItem::Callback {
+                    shortcut: Some(chord),
+                    ..
+                } => vec![(chord.clone(), item.clone())],
+                MenuItem::Submenu(menu) => MenuItem::shortcuts(std::slice::from_ref(menu)),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     pub fn dispatch(&self, ui: &mut Ui) -> bool {
@@ -167,6 +187,7 @@ pub enum WindowCommand {
     StartDrag,
     StartResize(ResizeEdge),
     Quit,
+    Focus,
     Menu(MenuItem),
 }
 
@@ -180,6 +201,7 @@ pub struct WindowHandle {
     pub(crate) commands: Signal<UnboundedSender<Sent>>,
     pub(crate) title: Signal<String>,
     pub(crate) appearance: Signal<Appearance>,
+    pub(crate) focused: Signal<bool>,
 }
 
 pub fn window_handle() -> WindowHandle {
@@ -188,6 +210,10 @@ pub fn window_handle() -> WindowHandle {
 
 pub fn appearance() -> ReadSignal<Appearance> {
     window_handle().appearance.read_only()
+}
+
+pub fn window_focused() -> ReadSignal<bool> {
+    window_handle().focused.read_only()
 }
 
 impl WindowHandle {
@@ -234,6 +260,16 @@ impl WindowHandle {
     pub fn quit(self) {
         self.send(WindowCommand::Quit);
     }
+    pub fn focused(self) -> ReadSignal<bool> {
+        self.focused.read_only()
+    }
+    pub fn focus(self) {
+        self.send(WindowCommand::Focus);
+    }
+    pub fn dispatch_action<T: Any>(self, action: T) {
+        self.dispatch_menu_item(MenuItem::action(String::new(), action));
+    }
+
     pub fn dispatch_menu_item(self, item: MenuItem) {
         self.send(WindowCommand::Menu(item));
     }

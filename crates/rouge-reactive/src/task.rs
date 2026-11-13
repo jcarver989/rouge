@@ -208,6 +208,7 @@ pub struct Task<T = ()> {
     result: Receiver<Result<T, TaskError>>,
     #[cfg(feature = "tokio-rt")]
     abort: Option<AbortHandle>,
+    cancel_on_drop: bool,
     marker: PhantomData<*const ()>,
 }
 
@@ -222,17 +223,41 @@ pub fn spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> Task<T> {
         result,
         #[cfg(feature = "tokio-rt")]
         abort: None,
+        cancel_on_drop: false,
         marker: PhantomData,
     }
 }
 
 #[cfg(feature = "tokio-rt")]
-#[must_use = "Tokio bridge tasks abort when dropped; await or retain the task"]
-pub fn spawn_on<T: Send + 'static>(
-    handle: TokioHandle,
-    future: impl Future<Output = T> + Send + 'static,
-) -> Task<T> {
-    let join = handle.spawn(future);
+pub fn set_tokio(handle: TokioHandle) {
+    with_rt(|rt| *rt.tokio.borrow_mut() = Some(handle));
+}
+
+#[cfg(feature = "tokio-rt")]
+#[track_caller]
+pub fn spawn_tokio<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+    bridge(tokio_handle().spawn(future))
+}
+
+#[cfg(feature = "tokio-rt")]
+#[track_caller]
+pub fn spawn_blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Task<T> {
+    bridge(tokio_handle().spawn_blocking(work))
+}
+
+#[cfg(feature = "tokio-rt")]
+#[track_caller]
+fn tokio_handle() -> TokioHandle {
+    with_rt(|rt| rt.tokio.borrow().clone()).unwrap_or_else(|| {
+        panic!(
+            "rouge-reactive: no Tokio runtime is set; call `set_tokio` (or `App::tokio`) \
+             before spawning Tokio work"
+        )
+    })
+}
+
+#[cfg(feature = "tokio-rt")]
+fn bridge<T: Send + 'static>(join: tokio::task::JoinHandle<T>) -> Task<T> {
     let abort = join.abort_handle();
     let guard = AbortOnDrop(abort.clone());
     let (sender, result) = channel();
@@ -246,6 +271,7 @@ pub fn spawn_on<T: Send + 'static>(
         id,
         result,
         abort: Some(abort),
+        cancel_on_drop: false,
         marker: PhantomData,
     }
 }
@@ -265,6 +291,11 @@ pub fn poll_tasks() -> bool {
 }
 
 impl<T> Task<T> {
+    pub fn cancel_on_drop(mut self) -> Self {
+        self.cancel_on_drop = true;
+        self
+    }
+
     pub fn cancel(&self) {
         #[cfg(feature = "tokio-rt")]
         if let Some(abort) = &self.abort {
@@ -290,8 +321,7 @@ impl<T> Future for Task<T> {
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        #[cfg(feature = "tokio-rt")]
-        if self.abort.is_some() {
+        if self.cancel_on_drop {
             self.cancel();
         }
     }

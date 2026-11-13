@@ -6,8 +6,9 @@ use crate::tree::ElementId;
 use crate::ui::root_font_size;
 use crate::view::{BuildCx, Div, View, div};
 use rouge_macros::component;
-use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal};
+use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal, untrack};
 use rouge_render::{Point, Rect, ScrollState, Size};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
@@ -21,6 +22,7 @@ use heights::Heights;
 type Identity<T> = Box<dyn Fn(usize) -> RowKey<T>>;
 
 const OVERSCAN: usize = 8;
+const FOLLOW_SLOP: f32 = 2.0;
 
 #[component]
 pub fn scroll() -> Div {
@@ -220,6 +222,7 @@ pub struct VirtualList<T, U = usize> {
     state: Option<Signal<ScrollState>>,
     visible: Option<Signal<Range<usize>>>,
     handle: Option<VirtualListHandle>,
+    follow: Option<Signal<bool>>,
 }
 
 #[component]
@@ -239,6 +242,7 @@ pub fn virtual_list<T: View, U>(
         state: None,
         visible: None,
         handle: None,
+        follow: None,
     }
 }
 
@@ -258,6 +262,7 @@ impl<T, U> VirtualList<T, U> {
             state: self.state,
             visible: self.visible,
             handle: self.handle,
+            follow: self.follow,
         }
     }
 
@@ -278,6 +283,11 @@ impl<T, U> VirtualList<T, U> {
 
     pub fn track_rows(mut self, visible: Signal<Range<usize>>) -> Self {
         self.visible = Some(visible);
+        self
+    }
+
+    pub fn follow_end(mut self, following: Signal<bool>) -> Self {
+        self.follow = Some(following);
         self
     }
 }
@@ -312,7 +322,10 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         let keys = self.identity.map(|identity| {
             memo(move || Rc::new(Keys::new((0..count.get()).map(identity.as_ref()).collect())))
         });
-        let handle = self.handle;
+        let follow = self.follow;
+        let handle = self
+            .handle
+            .or_else(|| follow.map(|_| virtual_list_handle()));
         let state = self
             .state
             .or_else(|| handle.map(|handle| handle.state))
@@ -340,6 +353,9 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         }
         if let Some(handle) = handle {
             attach_handle(handle, &rows, state, mounted, layout, keys);
+        }
+        if let (Some(following), Some(handle)) = (follow, handle) {
+            follow_end(handle, state, count, following);
         }
         let visible = {
             let rows = rows.clone();
@@ -466,6 +482,39 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         }
         container.scroll_state(state).child(content).build(cx)
     }
+}
+
+fn follow_end(
+    handle: VirtualListHandle,
+    state: Signal<ScrollState>,
+    count: Memo<usize>,
+    following: Signal<bool>,
+) {
+    let scroll_to_end = move || handle.scroll_to_row(usize::MAX, Align::Bottom);
+    let last = Cell::new(state.get_untracked());
+    effect(move || {
+        let current = state.get();
+        let previous = last.replace(current);
+        untrack(|| {
+            if current.content.height != previous.content.height
+                || current.viewport.height != previous.viewport.height
+            {
+                if following.get() {
+                    scroll_to_end();
+                }
+            } else if current.offset.y >= current.max_offset().y - FOLLOW_SLOP {
+                following.set_if_changed(true);
+            } else if current.offset.y < previous.offset.y - FOLLOW_SLOP {
+                following.set_if_changed(false);
+            }
+        });
+    });
+    effect(move || {
+        count.get();
+        if following.get() {
+            untrack(scroll_to_end);
+        }
+    });
 }
 
 fn attach_handle<T: Clone + Eq + Hash + 'static>(

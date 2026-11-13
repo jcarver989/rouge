@@ -84,3 +84,30 @@ fn select_notifies_only_when_the_selected_part_changes() {
     state.update(|state| state.0 = 2);
     assert_eq!((runs.get(), number.get()), (2, 2));
 }
+
+#[test]
+fn callbacks_run_untracked_in_the_scope_that_created_them() {
+    let _entered = Runtime::new().enter();
+    let scope = Scope::root();
+    let created = stored(None);
+    let callback = scope.run(|| Callback::from(move || created.set(Some(signal(1)))));
+    let read = signal(0);
+    let runs = Rc::new(Cell::new(0));
+    effect({
+        let runs = runs.clone();
+        move || {
+            runs.set(runs.get() + 1);
+            callback.call();
+            read.get_untracked();
+        }
+    });
+    let made = created.get().expect("the callback ran");
+    scope.dispose();
+    assert!(
+        !made.is_alive(),
+        "the signal belonged to the callback's scope"
+    );
+    assert!(!callback.is_alive());
+    callback.call();
+    assert_eq!(runs.get(), 1);
+}

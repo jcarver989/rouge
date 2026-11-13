@@ -6,9 +6,9 @@ use common::{
 };
 use rouge_render::headless::assert_near;
 use rouge_render::{
-    Blur, Color, ColorMatrix, Command, Decay, DrawList, EffectSlot, GpuError, Keyframes,
-    LayerCommand, LayerProp, LayoutTransition, MotionCommand, MotionId, Point, Pose, Quad, Rect,
-    Spring,
+    Blur, Color, ColorMatrix, Command, Decay, DrawList, Effect, EffectSlot, GpuError, Inputs,
+    Keyframes, LayerCommand, LayerProp, LayoutTransition, MotionCommand, MotionId, Point, Pose,
+    Quad, Rect, Spring,
 };
 use tokio::sync::oneshot::channel;
 
@@ -558,9 +558,49 @@ fn layer_origins_snap_to_device_pixels() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn a_clocked_effect_runs_on_compositor_time_until_it_is_removed() -> TestResult {
+    let mut stage = StageBuilder::default()
+        .child(square())
+        .at(40.0, 40.0)
+        .build()?;
+    stage.effect(CHILD, EffectSlot::Content(0), &Sweep, false);
+    assert!(stage.compositor.is_animating(), "a clock never settles");
+    stage.draw();
+    assert_eq!(stage.image()?.pixel(42, 50), RED, "nothing swept yet");
+
+    stage.run(0.5);
+    stage.effect(CHILD, EffectSlot::Content(0), &Sweep, false);
+    stage.draw();
+    let img = stage.image()?;
+    assert_eq!(
+        (img.pixel(42, 50), img.pixel(58, 50)),
+        (BLUE, RED),
+        "half swept, and applying it again keeps its time"
+    );
+
+    stage.effect_off(CHILD, EffectSlot::Content(0));
+    stage.run(0.1);
+    assert!(!stage.compositor.is_animating());
+    Ok(())
+}
+
 fn overlapping() -> DrawList {
     quads([
         Quad::new(Rect::new(0.0, 0.0, 40.0, 40.0), Color::RED),
         Quad::new(Rect::new(20.0, 0.0, 40.0, 40.0), Color::BLUE),
     ])
+}
+
+struct Sweep;
+
+impl Effect for Sweep {
+    const WGSL: &'static str = "
+        fn effect(in: EffectInput) -> vec4<f32> {
+            let swept = step(in.uv.x, param(0).x);
+            return mix(sample_content(in.local), vec4<f32>(0.0, 0.0, 1.0, 1.0), swept);
+        }
+    ";
+    const INPUTS: Inputs = Inputs::CONTENT;
+    const CLOCK: Option<usize> = Some(0);
 }

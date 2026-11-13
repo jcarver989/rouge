@@ -1,7 +1,7 @@
 mod common;
 
 use common::builder;
-use rouge_core::testing::TestResult;
+use rouge_core::testing::{TestResult, counter};
 use rouge_core::{
     Point, PointerButton, Rect, ResizeEdge, Styled, WindowCommand, div, window_handle,
 };
@@ -58,3 +58,17 @@ fn chrome_reserves_content_space_and_routes_controls_to_the_window() -> TestResu
     }
     Ok(())
 }
+
+#[test]
+fn with_nothing_focused_actions_reach_the_view_inside_the_chrome() {
+    let _rt = Runtime::new().enter();
+    let (closed, close) = counter();
+    let mut ui = builder().build(move || {
+        let root = div().size_full().on_action(move |_: &Close| close());
+        window_chrome(window_handle().title(), root)
+    });
+    assert!(ui.dispatch_action(Close));
+    assert_eq!(closed.get(), 1);
+}
+
+struct Close;

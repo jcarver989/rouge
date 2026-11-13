@@ -21,12 +21,12 @@ mod view;
 mod window;
 
 pub use canvas::{Canvas, Icon, Painter, TextHit, TextRun, canvas, icon};
-pub use clipboard::{Clipboard, ClipboardTarget, MemoryClipboard};
-pub use control::{Each, Show, dynamic, each, overlay, show};
+pub use clipboard::{Clipboard, ClipboardMedia, ClipboardTarget, MemoryClipboard};
+pub use control::{Each, Show, dynamic, each, overlay, show, switch};
 pub use editable::{Editable, editable};
 pub use event::{
-    Chord, ChordError, Cursor, DragEvent, DragPhase, FocusEvent, ImeEvent, Key, KeyEvent,
-    Modifiers, PointerButton, PointerEvent, ScrollEvent,
+    Chord, ChordError, Cursor, DragEvent, DragPhase, FileDropEvent, FileDropPhase, FocusEvent,
+    ImeEvent, IntoChord, Key, KeyEvent, Modifiers, PointerButton, PointerEvent, ScrollEvent,
 };
 pub use focus::{FocusHandle, focus_handle};
 pub use image::{Fit, Image, ImageLoadError, ImageSource, decode_image, image};
@@ -65,5 +65,5 @@ pub use rouge_text::{SpanStyle, TextAlign, TextStats, TextStyle, Underline};
 
 pub use window::{
     Appearance, Decorations, EditAction, Menu, MenuItem, ResizeEdge, WindowCommand, WindowHandle,
-    appearance, window_handle,
+    appearance, window_focused, window_handle,
 };

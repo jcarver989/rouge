@@ -47,6 +47,7 @@ where
     let mut chrome = div().relative().flex().col().size_full().child(bar).child(
         div()
             .test_id("window-content")
+            .root_host()
             .flex_1()
             .min_h(0.0)
             .child(children),

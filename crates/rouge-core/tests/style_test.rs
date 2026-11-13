@@ -244,3 +244,34 @@ fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_override
     assert_eq!(ui.bounds_of("inner").ok_or("inner")?.size.height, 32.0);
     Ok(())
 }
+
+#[test]
+fn invisible_elements_keep_their_space_but_paint_and_hit_nothing_until_revealed() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let clicks = signal(0);
+    let mut ui = TestUi::canvas(move || {
+        div().group("row").test_id("row").size(80.0).flex().child(
+            div()
+                .test_id("action")
+                .size(20.0)
+                .bg(Color::RED)
+                .invisible()
+                .group_hover("row", Styled::visible)
+                .on_click(move |_| clicks.update(|clicks| *clicks += 1)),
+        )
+    });
+    assert_eq!(ui.pixel(10, 10)?, rouge_core::testing::WHITE);
+    assert_eq!(
+        ui.bounds_of("action").map(|bounds| bounds.size.width),
+        Some(20.0)
+    );
+    ui.pointer_moved(rouge_core::Point::new(60.0, 60.0));
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, RED);
+    ui.click_on("action")?;
+    assert_eq!(clicks.get(), 1);
+    ui.pointer_left();
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, rouge_core::testing::WHITE);
+    Ok(())
+}

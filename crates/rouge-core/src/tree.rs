@@ -1,7 +1,8 @@
 use crate::canvas::{HitListener, PaintOp, ShapedRun, TextHit};
 use crate::clipboard::{Clipboard, MemoryClipboard};
 use crate::event::{
-    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers, PointerEvent, ScrollEvent,
+    Chord, Cursor, DragEvent, FileDropEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers,
+    PointerEvent, ScrollEvent,
 };
 use crate::image::{Fit, ImageSpec};
 use crate::keymap::Keymap;
@@ -44,7 +45,7 @@ pub(crate) type Listener = Rc<dyn Fn(&Event<'_>)>;
 pub(crate) type Listeners = Vec<(ElementId, Vec<Listener>)>;
 
 const STATES: usize = 5;
-const EVENTS: usize = 12;
+const EVENTS: usize = 13;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum On {
@@ -60,6 +61,7 @@ pub(crate) enum On {
     Ime,
     Drag,
     Scroll,
+    FileDrop,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +73,7 @@ pub(crate) enum Event<'a> {
     Ime(&'a ImeEvent),
     Drag(&'a DragEvent),
     Scroll(&'a ScrollEvent),
+    FileDrop(&'a FileDropEvent),
 }
 
 impl Event<'_> {
@@ -79,6 +82,7 @@ impl Event<'_> {
             Event::Pointer(event) => event.stopped.get(),
             Event::Key(event) => event.stopped.get(),
             Event::Scroll(event) => event.stopped.get(),
+            Event::FileDrop(event) => event.stopped.get(),
             _ => false,
         }
     }
@@ -119,6 +123,7 @@ pub(crate) struct TextData {
     pub color: Color,
     pub theme: Option<Theme>,
     pub edit: Option<EditState>,
+    pub placeholder: Option<(String, Color)>,
     layout: Option<TextLayout>,
     inset: Point,
     wrap_width: Option<f32>,
@@ -133,6 +138,7 @@ impl Default for TextData {
             color: Color::BLACK,
             theme: None,
             edit: None,
+            placeholder: None,
             layout: None,
             inset: Point::ZERO,
             wrap_width: None,
@@ -238,6 +244,7 @@ pub(crate) struct ElementSpec {
     pub disabled: bool,
     pub pass_through: bool,
     pub preserve_focus: bool,
+    pub root_host: bool,
     pub cursor: Option<Cursor>,
     pub bounds_observer: Option<Signal<Rect>>,
     pub paint_region: Option<Signal<PaintRegion>>,
@@ -289,6 +296,10 @@ impl Element {
 
     fn hidden(&self) -> bool {
         self.effective_style().layout.display == Display::None
+    }
+
+    fn unseen(&self) -> bool {
+        self.hidden() || self.effective_style().invisible
     }
 
     fn clips_children(&self) -> bool {
@@ -913,6 +924,7 @@ impl Tree {
             Dirty::Layout
         } else if new.border_color != old.border_color
             || new.shadows != old.shadows
+            || new.invisible != old.invisible
             || new.background.is_some() != old.background.is_some()
             || element.layer(Slot::Own).is_none()
         {
@@ -1183,7 +1195,7 @@ impl Tree {
         let attached = chain.first() == Some(&self.root);
         let usable = chain.iter().all(|id| {
             let element = &self.elements[*id];
-            !element.hidden() && !element.disabled()
+            !element.unseen() && !element.disabled()
         });
         attached && usable && self.elements[id].spec.focus.is_some()
     }
@@ -1196,8 +1208,17 @@ impl Tree {
         if let Some(focused) = self.focused {
             self.chain(focused)
         } else {
-            let first = self.elements[self.root].children.first();
-            [self.root].into_iter().chain(first.copied()).collect()
+            let mut path = vec![self.root];
+            let mut view = self.elements[self.root].children.first().copied();
+            while let Some(id) = view.take() {
+                path.push(id);
+                let mut children = self.elements[id].children.iter().copied();
+                if let Some(host) = children.find(|id| self.elements[*id].spec.root_host) {
+                    path.push(host);
+                    view = self.elements[host].children.first().copied();
+                }
+            }
+            path
         }
     }
 
@@ -1510,6 +1531,33 @@ impl Tree {
             pending.extend(element.children.iter().rev());
         }
         bounds
+    }
+
+    pub(crate) fn text_of(&self, name: &str) -> Option<String> {
+        let mut pending = vec![self.root];
+        while let Some(id) = pending.pop() {
+            let element = &self.elements[id];
+            if element.hidden() {
+                continue;
+            }
+            if element.spec.test_id.as_deref() == Some(name) {
+                let mut text = String::new();
+                let mut within = vec![id];
+                while let Some(id) = within.pop() {
+                    let element = &self.elements[id];
+                    if element.hidden() {
+                        continue;
+                    }
+                    if let Some(data) = &element.spec.text {
+                        text.push_str(&data.content);
+                    }
+                    within.extend(element.children.iter().rev());
+                }
+                return Some(text);
+            }
+            pending.extend(element.children.iter().rev());
+        }
+        None
     }
 
     pub(crate) fn text_click(
@@ -1848,7 +1896,7 @@ impl Tree {
         path: &mut Vec<ElementId>,
     ) -> bool {
         let element = &self.elements[id];
-        if element.hidden() {
+        if element.unseen() {
             return false;
         }
         let through = |slot: Slot, point: Point| {
@@ -2079,7 +2127,7 @@ fn paint(
     cx: &mut PaintCx<'_>,
 ) {
     let element = &elements[id];
-    if element.hidden() {
+    if element.unseen() {
         return;
     }
     let backing = target.root == (id, Slot::Own);
@@ -2344,6 +2392,15 @@ fn paint_text(
     let Some(edit) = &text.edit else {
         return paint_glyphs(layout, origin, clip, text.color, out, cx);
     };
+    if let Some((placeholder, color)) = text
+        .placeholder
+        .as_ref()
+        .filter(|_| text.content.is_empty())
+    {
+        let mut shaped = cx.text_system.layout(placeholder, &text.style);
+        shaped.break_lines(text.wrap_width);
+        paint_glyphs(&shaped, origin, clip, *color, out, cx);
+    }
     clip = clip.intersect(
         &Rect {
             origin,

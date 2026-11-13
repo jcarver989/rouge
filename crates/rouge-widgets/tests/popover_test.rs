@@ -1,8 +1,8 @@
 mod common;
 
 use common::builder;
-use rouge_core::testing::{TestResult, TestUi, counter};
-use rouge_core::{Key, Point, Rect, Styled, div, show};
+use rouge_core::testing::{TestResult, TestUi, assert_near, counter};
+use rouge_core::{Color, Glass, Key, Point, Rect, Styled, div, show, use_theme};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::{Hint, Placement, button, popover, tooltip};
 use std::thread::sleep;
@@ -91,6 +91,32 @@ fn popover_can_be_placed_on_any_side_of_its_trigger() -> TestResult {
             "{placement:?} sits a gap away from the trigger"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn a_glass_theme_lets_what_is_behind_a_popover_show_through_its_panel() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let panel = |glass: Option<Glass>| {
+        let open = signal(true);
+        let mut ui = builder().build(move || {
+            use_theme().glass.set(glass);
+            let trigger = div().w(60.0).h(20.0);
+            div()
+                .size_full()
+                .bg(Color::RED)
+                .child(popover(open, trigger, || div().size(80.0)))
+        });
+        ui.run(0.6);
+        ui.pixel(40, 60)
+    };
+
+    assert_near(panel(None)?, [255, 255, 255, 255], "a solid surface");
+    assert_near(
+        panel(Some(Glass::frosted(0.0)))?,
+        [255, 0, 0, 255],
+        "clear glass over the page",
+    );
     Ok(())
 }
 

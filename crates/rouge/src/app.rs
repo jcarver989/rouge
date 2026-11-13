@@ -4,13 +4,15 @@ use crate::platform::{
 };
 use crate::profile::{Profile, present_mode, trace};
 use arboard::Clipboard as SystemClipboard;
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 use pollster::block_on;
 use rouge_core::{
-    AnyView, Appearance, Clipboard, Cursor, Decorations, ImeEvent, Key, KeyEvent, Menu, Modifiers,
-    Ui, View, appearance, window_handle,
+    AnyView, Appearance, Clipboard, ClipboardMedia, Cursor, Decorations, FileDropPhase, ImeEvent,
+    Key, KeyEvent, Menu, Modifiers, Ui, View, appearance, window_handle,
 };
 use rouge_reactive::{ReadSignal, Runtime};
-use rouge_render::{Color, Gpu, GpuError, Point, Renderer, Size, Viewport};
+use rouge_render::{Color, Gpu, GpuError, Point, Rect, Renderer, Size, Viewport};
 use rouge_widgets::window_chrome;
 use std::collections::HashMap;
 use std::env::var;
@@ -118,6 +120,8 @@ pub struct App {
     windows: Vec<(WindowOptions, RootFn)>,
     menus: Vec<Menu>,
     fonts: Vec<Vec<u8>>,
+    #[cfg(feature = "tokio-rt")]
+    tokio: Option<tokio::runtime::Handle>,
 }
 
 impl App {
@@ -138,6 +142,12 @@ impl App {
 
     pub fn fonts(mut self, fonts: impl IntoIterator<Item = Vec<u8>>) -> Self {
         self.fonts.extend(fonts);
+        self
+    }
+
+    #[cfg(feature = "tokio-rt")]
+    pub fn tokio(mut self, handle: tokio::runtime::Handle) -> Self {
+        self.tokio = Some(handle);
         self
     }
 
@@ -164,6 +174,10 @@ impl App {
             let _ = proxy.send_event(());
         });
         let _entered = runtime.enter();
+        #[cfg(feature = "tokio-rt")]
+        if let Some(handle) = self.tokio {
+            rouge_reactive::set_tokio(handle);
+        }
         event_loop.set_control_flow(ControlFlow::Wait);
         let mut runner = Runner {
             #[cfg(target_os = "macos")]
@@ -209,6 +223,7 @@ struct WindowState {
     modifiers: Modifiers,
     cursor: Cursor,
     ime: bool,
+    ime_area: Option<Rect>,
     profile: Option<Profile>,
 }
 
@@ -223,6 +238,28 @@ impl Clipboard for SystemClipboardAdapter {
         if let Some(clipboard) = &mut self.0 {
             let _ = clipboard.set_text(text);
         }
+    }
+
+    fn read_media(&mut self) -> Option<ClipboardMedia> {
+        let clipboard = self.0.as_mut()?;
+        if let Some(files) = clipboard
+            .get()
+            .file_list()
+            .ok()
+            .filter(|files| !files.is_empty())
+        {
+            return Some(ClipboardMedia::Files(files));
+        }
+        let image = clipboard.get_image().ok()?;
+        let (width, height) = (
+            u32::try_from(image.width).ok()?,
+            u32::try_from(image.height).ok()?,
+        );
+        let mut png = Vec::new();
+        PngEncoder::new(&mut png)
+            .write_image(&image.bytes, width, height, ExtendedColorType::Rgba8)
+            .ok()?;
+        Some(ClipboardMedia::Png(png))
     }
 }
 
@@ -276,6 +313,7 @@ impl WindowState {
 
         let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
         let chrome = options.decorations == Decorations::Client || !window.is_decorated();
+        let shortcuts = menus.clone();
         let mut ui = Ui::with_fonts(
             logical_size(physical, scale),
             fonts.iter().cloned(),
@@ -293,6 +331,7 @@ impl WindowState {
         ui.set_appearance(platform_appearance(window.theme()));
         ui.set_scale(scale);
         ui.set_clipboard(SystemClipboardAdapter(SystemClipboard::new().ok()));
+        ui.bind_menus(&shortcuts);
         let environment = format!(
             "{:?}\n{:?} {}x{} at scale {scale}",
             gpu.adapter.get_info(),
@@ -315,6 +354,7 @@ impl WindowState {
             modifiers: Modifiers::NONE,
             cursor: Cursor::Default,
             ime: false,
+            ime_area: None,
             profile,
         })
     }
@@ -345,7 +385,12 @@ impl WindowState {
             self.ime = ime;
             self.window.set_ime_allowed(ime);
         }
-        if let Some(area) = self.ui.text_cursor_area().filter(|_| ime) {
+        let area = self.ui.text_cursor_area().filter(|_| ime);
+        if area == self.ime_area {
+            return;
+        }
+        self.ime_area = area;
+        if let Some(area) = area {
             let position = LogicalPosition::new(area.origin.x, area.origin.y);
             self.window.set_ime_cursor_area(
                 position,
@@ -505,6 +550,16 @@ impl ApplicationHandler for Runner {
             }
             WindowEvent::ThemeChanged(theme) => {
                 state.ui.set_appearance(platform_appearance(Some(theme)));
+            }
+            WindowEvent::Focused(focused) => state.ui.set_focused(focused),
+            WindowEvent::HoveredFile(path) => {
+                state.ui.file_drop(FileDropPhase::Hover, vec![path]);
+            }
+            WindowEvent::HoveredFileCancelled => {
+                state.ui.file_drop(FileDropPhase::Leave, Vec::new());
+            }
+            WindowEvent::DroppedFile(path) => {
+                state.ui.file_drop(FileDropPhase::Drop, vec![path]);
             }
             WindowEvent::Resized(size) => state.resize(size),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {

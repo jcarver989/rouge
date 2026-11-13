@@ -1,4 +1,4 @@
-use rouge_render::Color;
+use rouge_render::{Color, Glass};
 
 #[macro_export]
 macro_rules! theme {
@@ -63,6 +63,7 @@ theme! {
     radius: f32,
     text_size: f32,
     spacing: f32,
+    glass: Option<Glass>,
     }
 }
 
@@ -84,6 +85,7 @@ impl Palette {
             radius: 8.0,
             text_size: 14.0,
             spacing: 8.0,
+            glass: None,
         }
     }
 

@@ -112,3 +112,60 @@ fn drag_on_uses_the_public_drag_gesture() -> TestResult {
     assert_eq!(moved.get(), Point::new(85.0, 65.0));
     Ok(())
 }
+
+#[test]
+fn input_helpers_target_elements_by_test_id() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (saved, secondary, scrolled, dropped, second) = (
+        signal(0),
+        signal(0),
+        signal(0.0),
+        signal(Vec::new()),
+        signal(false),
+    );
+    let menus = vec![rouge_core::Menu::new(
+        "File",
+        vec![rouge_core::MenuItem::action("Save", Save).shortcut("cmd-s")],
+    )];
+    let mut ui = TestUiBuilder::default()
+        .size(100.0, 100.0)
+        .menus(menus)
+        .build(move || {
+            let item = |index: usize| {
+                div().test_id("item").size(10.0).on_click(move |_| {
+                    if index == 1 {
+                        second.set(true);
+                    }
+                })
+            };
+            div()
+                .size_full()
+                .on_action(move |_: &Save| saved.update(|saved| *saved += 1))
+                .child(
+                    div()
+                        .test_id("target")
+                        .size(40.0)
+                        .on_pointer_down(move |event| {
+                            if event.button == rouge_core::PointerButton::Secondary {
+                                secondary.update(|count| *count += 1);
+                            }
+                        })
+                        .on_scroll(move |event| scrolled.set(event.delta.y))
+                        .on_file_drop(move |event| dropped.set(event.paths.clone())),
+                )
+                .child(item(0))
+                .child(item(1))
+        });
+    ui.press_keys("cmd-s cmd-s");
+    ui.right_click_on("target")?;
+    ui.scroll_on("target", Point::new(0.0, -5.0))?;
+    ui.drop_files_on("target", vec!["/tmp/a".into()])?;
+    ui.click_nth("item", 1)?;
+    assert_eq!((saved.get(), secondary.get(), scrolled.get()), (2, 1, -5.0));
+    assert_eq!(dropped.get(), [std::path::PathBuf::from("/tmp/a")]);
+    assert!(second.get());
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct Save;

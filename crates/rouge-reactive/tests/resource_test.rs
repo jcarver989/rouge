@@ -124,3 +124,32 @@ fn next_reply(replies: &Replies) -> impl Future<Output = Option<&'static str>> +
     let reply = replies.borrow_mut().pop_front();
     async move { reply?.await.ok() }
 }
+
+#[test]
+fn refetching_while_loading_runs_one_more_fetch_after_the_current_one() -> TestResult {
+    let _driver = Driver::new();
+    let (gates, replies) = gates(2);
+    let [first, second] = gates.try_into().map_err(|_| "expected two gates")?;
+    let (fetches, bump) = counter();
+    let r = resource(
+        || (),
+        move |()| {
+            bump();
+            next_reply(&replies)
+        },
+    );
+    r.refetch();
+    r.refetch();
+    assert_eq!(fetches.get(), 1, "the running fetch is not cancelled");
+    first.send("first")?;
+    poll_tasks();
+    assert_eq!((fetches.get(), r.loading()), (2, true));
+    assert_eq!(r.with(|value| value.copied().flatten()), Some("first"));
+    second.send("second")?;
+    poll_tasks();
+    assert_eq!(
+        (fetches.get(), r.loading(), r.get()),
+        (2, false, Some(Some("second")))
+    );
+    Ok(())
+}

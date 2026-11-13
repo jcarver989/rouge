@@ -105,6 +105,7 @@ pub struct Style {
     pub border_color: Color,
     pub corner_radii: Radii,
     pub shadows: Vec<BoxShadow>,
+    pub invisible: bool,
 }
 
 impl Default for Style {
@@ -126,6 +127,7 @@ impl Default for Style {
             border_color: Color::BLACK,
             corner_radii: Radii::default(),
             shadows: Vec::new(),
+            invisible: false,
         }
     }
 }
@@ -138,6 +140,7 @@ impl Style {
             && self.border_color == other.border_color
             && self.corner_radii == other.corner_radii
             && self.shadows == other.shadows
+            && self.invisible == other.invisible
     }
 
     pub(crate) fn resolved_layout(&self, root: f32) -> Layout {
@@ -342,6 +345,8 @@ pub trait Styled: Sized {
         absolute |s| s.layout.position = Position::Absolute;
         relative |s| s.layout.position = Position::Relative;
         overflow_hidden |s| s.layout.overflow = Axes { x: Overflow::Hidden, y: Overflow::Hidden };
+        invisible |s| s.invisible = true;
+        visible |s| s.invisible = false;
         w_full |s| LayoutLength::Width.set(s, Length::Fraction(1.0));
         h_full |s| LayoutLength::Height.set(s, Length::Fraction(1.0));
         size_full |s| {

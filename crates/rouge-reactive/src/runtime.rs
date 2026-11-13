@@ -50,6 +50,8 @@ pub(crate) struct Graph {
     flushing: Cell<bool>,
     pub(crate) executor: Executor,
     stats: Cell<ReactiveStats>,
+    #[cfg(feature = "tokio-rt")]
+    pub(crate) tokio: RefCell<Option<tokio::runtime::Handle>>,
 }
 
 thread_local! {

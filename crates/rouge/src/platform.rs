@@ -121,6 +121,7 @@ pub(crate) fn window_commands(window: &Window, ui: &mut Ui) -> (bool, bool) {
                 WindowCommand::Zoom => window.set_maximized(!window.is_maximized()),
                 WindowCommand::Close => close = true,
                 WindowCommand::Quit => quit = true,
+                WindowCommand::Focus => window.focus_window(),
                 WindowCommand::StartDrag => {
                     let _ = window.drag_window();
                 }
@@ -171,7 +172,7 @@ pub(crate) fn menu_root(
             .flex()
             .col()
             .child(rouge_widgets::menu_bar(menus))
-            .child(div().flex_1().min_h(0.0).child(root))
+            .child(div().flex_1().min_h(0.0).root_host().child(root))
             .into_any()
     }
 }

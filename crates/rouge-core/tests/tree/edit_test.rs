@@ -174,6 +174,23 @@ fn composition_enter_does_not_submit_and_host_blur_cancels_preedit() {
     assert!(!ui.accepts_text());
 }
 
+#[test]
+fn an_empty_preedit_outside_a_composition_leaves_the_selected_text_alone() {
+    let _rt = Runtime::new().enter();
+    let value = signal("keep me".to_owned());
+    let selection = signal(0..0);
+    let mut ui = TestUiBuilder::default()
+        .build(|| editable(value).selection(selection).w_full().autofocus());
+    ui.press_with(Key::character("a"), Modifiers::COMMAND);
+    for _ in 0..3 {
+        ui.ime(ImeEvent::Preedit {
+            text: String::new(),
+            cursor: None,
+        });
+        assert_eq!((value.get().as_str(), selection.get()), ("keep me", 0..7));
+    }
+}
+
 fn field(value: Signal<String>) -> TestUi {
     TestUiBuilder::default()
         .build(move || div().size_full().p(10.0).child(editable(value).w_full()))

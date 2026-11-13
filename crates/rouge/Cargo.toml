@@ -21,6 +21,7 @@ pollster.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 arboard.workspace = true
+image.workspace = true
 rouge-widgets.workspace = true
 tracing.workspace = true
 tracing-chrome = "0.7"

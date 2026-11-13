@@ -5,7 +5,7 @@ use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, View, div, send};
 use rouge_macros::component;
-use rouge_reactive::{Signal, effect, signal};
+use rouge_reactive::{Scope, Signal, effect, run_in, signal};
 use rouge_render::{Color, ImageData, ImageQuad, Point, Quad, Rect, Size};
 use rouge_text::{TextLayout, TextStyle};
 use std::rc::Rc;
@@ -197,12 +197,18 @@ impl Canvas {
     }
 
     pub fn on_text_hover(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
-        self.div.spec.text_hover = Some(Rc::new(f));
+        let owner = Scope::current();
+        self.div.spec.text_hover = Some(Rc::new(move |hit, modifiers| {
+            run_in(owner, || f(hit, modifiers));
+        }));
         self
     }
 
     pub fn on_text_click(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
-        self.div.spec.text_click = Some(Rc::new(f));
+        let owner = Scope::current();
+        self.div.spec.text_click = Some(Rc::new(move |hit, modifiers| {
+            run_in(owner, || f(hit, modifiers));
+        }));
         self
     }
 

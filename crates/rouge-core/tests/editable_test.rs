@@ -208,3 +208,76 @@ fn field(value: Signal<String>) -> TestUi {
     TestUiBuilder::default()
         .build(move || div().size_full().p(10.0).child(editable(value).w_full()))
 }
+
+#[test]
+fn a_key_handler_that_stops_a_key_keeps_the_editor_from_handling_it() {
+    let _rt = Runtime::new().enter();
+    let value = signal("ab".to_owned());
+    let intercepted = signal(0);
+    let mut ui = TestUiBuilder::default().size(200.0, 40.0).build(move || {
+        editable(value)
+            .multiline()
+            .w(180.0)
+            .on_key_down(move |event| {
+                if event.key == Key::ArrowUp {
+                    intercepted.update(|count| *count += 1);
+                    event.stop_propagation();
+                }
+            })
+    });
+    ui.click(Point::new(15.0, 10.0));
+    assert!(ui.press(Key::ArrowUp));
+    ui.type_text("c");
+    assert_eq!(intercepted.get(), 1);
+    assert!(
+        value.get().contains('c'),
+        "other keys still edit: {}",
+        value.get()
+    );
+}
+
+#[test]
+fn pasting_media_goes_to_the_paste_handler_instead_of_the_text() {
+    let _rt = Runtime::new().enter();
+    let value = signal(String::new());
+    let pasted = signal(None);
+    let clipboard = MemoryClipboard::new();
+    let mut ui = TestUi::new(move || {
+        let field = editable(value)
+            .test_id("field")
+            .w(150.0)
+            .on_paste(move |media| pasted.set(Some(media)));
+        div().size_full().child(field)
+    });
+    ui.set_clipboard(clipboard.clone());
+    let _ = ui.click_on("field");
+    clipboard.set_text("plain");
+    ui.press_keys("cmd-v");
+    assert_eq!((value.get().as_str(), pasted.get()), ("plain", None));
+    let media = rouge_core::ClipboardMedia::Files(vec!["/tmp/a.png".into()]);
+    clipboard.set_media(Some("a.png".to_owned()), media.clone());
+    ui.press_keys("cmd-v");
+    assert_eq!((value.get().as_str(), pasted.get()), ("plain", Some(media)));
+}
+
+#[test]
+fn a_placeholder_paints_only_while_the_editor_is_empty() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let value = signal(String::new());
+    let mut ui = TestUiBuilder::default().clear(Color::WHITE).build(move || {
+        let field = editable(value)
+            .w(150.0)
+            .text_size(20.0)
+            .color(Color::BLUE)
+            .placeholder("Type here", Color::RED);
+        div().size_full().child(field)
+    });
+    let red = |image: &rouge_render::headless::Image| {
+        (0..150).any(|x| (0..30).any(|y| image.pixel(x, y)[0] > 200 && image.pixel(x, y)[2] < 80))
+    };
+    assert!(red(&ui.render()?), "the placeholder shows while empty");
+    value.set("typed".to_owned());
+    ui.advance(0.0);
+    assert!(!red(&ui.render()?), "typing hides the placeholder");
+    Ok(())
+}

@@ -18,6 +18,22 @@ pub fn dynamic<T: View>(children: impl Fn() -> T + 'static) -> impl View {
     )
 }
 
+#[component]
+pub fn switch<T, U>(on: impl Fn() -> T + 'static, children: impl Fn(T) -> U + 'static) -> impl View
+where
+    T: Clone + PartialEq + 'static,
+    U: View,
+{
+    let on = memo(on);
+    Dynamic(
+        Box::new(move || {
+            let value = on.get();
+            Some(untrack(|| children(value).into_any()))
+        }),
+        Presence::default(),
+    )
+}
+
 struct Dynamic(Box<dyn Fn() -> Option<AnyView>>, Presence);
 
 impl View for Dynamic {
@@ -56,11 +72,13 @@ struct Overlay(Box<dyn FnOnce() -> AnyView>);
 impl View for Overlay {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
         let anchor = cx.tree.create_anchor();
-        let element = (self.0)().build(cx);
         let root = cx.tree.overlay_root();
-        cx.tree.append_child(root, element);
+        let slot = cx.tree.create_anchor();
+        cx.tree.append_child(root, slot);
+        let element = (self.0)().build(cx);
+        cx.tree.set_followers(slot, vec![element]);
         let patches = cx.patches.clone();
-        on_cleanup(move || send(&patches, move |cx| cx.tree.remove(element, None)));
+        on_cleanup(move || send(&patches, move |cx| cx.tree.remove(slot, None)));
         anchor
     }
 }
