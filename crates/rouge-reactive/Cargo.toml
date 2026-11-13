@@ -24,3 +24,4 @@ web-time.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+rouge-reactive = { path = ".", features = ["tokio-rt"] }

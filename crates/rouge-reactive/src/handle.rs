@@ -1,12 +1,27 @@
 use crate::runtime::{NodeId, try_with_rt, with_rt};
+use std::hash::{Hash, Hasher};
 #[cfg(debug_assertions)]
 use std::panic::Location;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Handle {
     pub(crate) id: NodeId,
     #[cfg(debug_assertions)]
     created_at: &'static Location<'static>,
+}
+
+impl PartialEq for Handle {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Handle {}
+
+impl Hash for Handle {
+    fn hash<T: Hasher>(&self, state: &mut T) {
+        self.id.hash(state);
+    }
 }
 
 impl Handle {

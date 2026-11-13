@@ -1,3 +1,4 @@
+use crate::scope::{Scope, run_in};
 use crate::signal::{Signal, signal};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::hash::{Hash, Hasher};
@@ -113,6 +114,10 @@ impl<T: 'static> Callback<T> {
         self.0.is_some()
     }
 
+    pub fn is_alive(&self) -> bool {
+        self.0.is_some_and(|handler| handler.is_alive())
+    }
+
     fn invoke(&self, args: T) {
         let handler = self.0.and_then(|handler| handler.try_with(Rc::clone));
         if let Some(handler) = handler {
@@ -136,13 +141,19 @@ impl<T: 'static> Callback<(T,)> {
 impl<T: Fn() + 'static> From<T> for Callback {
     #[track_caller]
     fn from(f: T) -> Self {
-        Callback(Some(stored(Rc::new(move |()| f()))))
+        let owner = Scope::current();
+        Callback(Some(stored(Rc::new(move |()| {
+            run_in(owner, &f);
+        }))))
     }
 }
 
 impl<T: 'static, U: Fn(T) + 'static> From<U> for Callback<(T,)> {
     #[track_caller]
     fn from(f: U) -> Self {
-        Callback(Some(stored(Rc::new(move |(value,)| f(value)))))
+        let owner = Scope::current();
+        Callback(Some(stored(Rc::new(move |(value,)| {
+            run_in(owner, || f(value));
+        }))))
     }
 }

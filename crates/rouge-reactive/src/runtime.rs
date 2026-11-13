@@ -7,6 +7,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::take;
 use std::rc::Rc;
+#[cfg(feature = "tokio-rt")]
+use tokio::runtime::Handle;
 
 new_key_type! {
     pub(crate) struct NodeId;
@@ -50,6 +52,8 @@ pub(crate) struct Graph {
     flushing: Cell<bool>,
     pub(crate) executor: Executor,
     stats: Cell<ReactiveStats>,
+    #[cfg(feature = "tokio-rt")]
+    pub(crate) tokio: RefCell<Option<Handle>>,
 }
 
 thread_local! {

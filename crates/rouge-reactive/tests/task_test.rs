@@ -1,9 +1,12 @@
 use rouge_reactive::testing::{Driver, TestResult, recorder};
-use rouge_reactive::{Runtime, Scope, Task, effect, on_cleanup, poll_tasks, signal, spawn};
+use rouge_reactive::{
+    Runtime, Scope, Task, TaskError, effect, on_cleanup, poll_tasks, signal, spawn, spawn_blocking,
+};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::thread;
 use tokio::sync::oneshot::channel;
+use tokio::sync::oneshot::error::RecvError;
 
 #[test]
 fn spawned_task_runs_on_poll_and_reruns_effects() {
@@ -32,7 +35,7 @@ fn task_resumes_across_awaits() -> TestResult {
         s.set(1);
         let value = rx.await?;
         s.set(value);
-        Ok::<_, tokio::sync::oneshot::error::RecvError>(value + 1)
+        Ok::<_, RecvError>(value + 1)
     });
     assert!(poll_tasks());
     assert_eq!(s.get(), 1);
@@ -186,5 +189,27 @@ fn waker_hook_fires_when_a_task_is_woken_from_another_thread() -> TestResult {
     driver.wait_for_wake()?;
     assert!(poll_tasks());
     assert_eq!(s.get(), 7);
+    Ok(())
+}
+
+#[test]
+fn blocking_work_runs_off_the_ui_thread_and_returns_to_it() -> TestResult {
+    let driver = Driver::new();
+    let ui_thread = thread::current().id();
+    let worker = signal(None);
+    let task = spawn_blocking(|| thread::current().id());
+    spawn(async move { worker.set(Some(task.await)) });
+    driver.run_until(|| worker.with(Option::is_some))?;
+    assert!(worker.with(|worker| matches!(worker, Some(Ok(id)) if *id != ui_thread)));
+    Ok(())
+}
+
+#[test]
+fn a_panicking_blocking_task_reports_the_panic() -> TestResult {
+    let driver = Driver::new();
+    let failed = signal(false);
+    let task = spawn_blocking(|| panic!("worker failed"));
+    spawn(async move { failed.set(matches!(task.await, Err(TaskError::Panicked))) });
+    driver.run_until(|| failed.get())?;
     Ok(())
 }

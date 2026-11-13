@@ -20,6 +20,13 @@ impl Scope {
     }
 
     #[track_caller]
+    pub fn current() -> Option<Scope> {
+        with_rt(Graph::current_owner).map(|id| Scope {
+            handle: Handle::new(id),
+        })
+    }
+
+    #[track_caller]
     pub fn child(&self) -> Scope {
         Scope::create(Some(self.handle.id))
     }
@@ -39,6 +46,11 @@ impl Scope {
         with_rt(|rt| rt.with_owner(Some(self.handle.id), f))
     }
 
+    pub fn try_run<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        self.is_alive()
+            .then(|| with_rt(|rt| rt.with_owner(Some(self.handle.id), f)))
+    }
+
     pub fn dispose(&self) {
         self.handle.dispose();
     }
@@ -52,6 +64,13 @@ impl Default for Scope {
     #[track_caller]
     fn default() -> Self {
         Scope::new()
+    }
+}
+
+pub fn run_in<T>(owner: Option<Scope>, f: impl FnOnce() -> T) -> Option<T> {
+    match owner {
+        Some(owner) => owner.try_run(f),
+        None => Some(untrack(f)),
     }
 }
 

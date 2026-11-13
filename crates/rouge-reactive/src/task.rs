@@ -8,13 +8,17 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot::{Receiver, channel};
 #[cfg(feature = "tokio-rt")]
-use tokio::task::AbortHandle;
+use tokio::task::JoinError;
+#[cfg(feature = "tokio-rt")]
+use tokio::task::{AbortHandle, JoinHandle};
 
 new_key_type! {
     struct TaskId;
@@ -198,9 +202,11 @@ impl Graph {
 pub enum TaskError {
     #[error("task was cancelled before completing")]
     Cancelled,
+    #[error("task panicked before completing")]
+    Panicked,
     #[cfg(feature = "tokio-rt")]
     #[error("Tokio task failed: {0}")]
-    Tokio(#[from] tokio::task::JoinError),
+    Tokio(#[from] JoinError),
 }
 
 pub struct Task<T = ()> {
@@ -208,46 +214,75 @@ pub struct Task<T = ()> {
     result: Receiver<Result<T, TaskError>>,
     #[cfg(feature = "tokio-rt")]
     abort: Option<AbortHandle>,
+    cancel_on_drop: bool,
     marker: PhantomData<*const ()>,
 }
 
 pub fn spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> Task<T> {
+    local(async move { Ok(future.await) })
+}
+
+fn local<T: 'static>(future: impl Future<Output = Result<T, TaskError>> + 'static) -> Task<T> {
     let (sender, result) = channel();
     Task {
         id: with_rt(|rt| {
             rt.spawn(Box::pin(async move {
-                let _ = sender.send(Ok(future.await));
+                let _ = sender.send(future.await);
             }))
         }),
         result,
         #[cfg(feature = "tokio-rt")]
         abort: None,
+        cancel_on_drop: false,
         marker: PhantomData,
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn_blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Task<T> {
+    #[cfg(feature = "tokio-rt")]
+    if let Some(tokio) = tokio() {
+        return bridge(tokio.spawn_blocking(work));
+    }
+    let (sender, result) = channel();
+    thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    local(async move { result.await.map_err(|_| TaskError::Panicked) })
+}
+
 #[cfg(feature = "tokio-rt")]
-#[must_use = "Tokio bridge tasks abort when dropped; await or retain the task"]
-pub fn spawn_on<T: Send + 'static>(
-    handle: TokioHandle,
-    future: impl Future<Output = T> + Send + 'static,
-) -> Task<T> {
-    let join = handle.spawn(future);
+pub fn set_tokio(handle: TokioHandle) {
+    with_rt(|rt| *rt.tokio.borrow_mut() = Some(handle));
+}
+
+#[cfg(feature = "tokio-rt")]
+#[track_caller]
+pub fn spawn_tokio<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+    let tokio = tokio().unwrap_or_else(|| {
+        panic!(
+            "rouge-reactive: no Tokio runtime is set; call `set_tokio` (or `App::tokio`) \
+             before spawning Tokio work"
+        )
+    });
+    bridge(tokio.spawn(future))
+}
+
+#[cfg(feature = "tokio-rt")]
+fn tokio() -> Option<TokioHandle> {
+    with_rt(|rt| rt.tokio.borrow().clone())
+}
+
+#[cfg(feature = "tokio-rt")]
+fn bridge<T: Send + 'static>(join: JoinHandle<T>) -> Task<T> {
     let abort = join.abort_handle();
     let guard = AbortOnDrop(abort.clone());
-    let (sender, result) = channel();
-    let id = with_rt(|rt| {
-        rt.spawn(Box::pin(async move {
-            let _guard = guard;
-            let _ = sender.send(join.await.map_err(TaskError::from));
-        }))
+    let mut task = local(async move {
+        let _guard = guard;
+        Ok(join.await?)
     });
-    Task {
-        id,
-        result,
-        abort: Some(abort),
-        marker: PhantomData,
-    }
+    task.abort = Some(abort);
+    task
 }
 
 #[cfg(feature = "tokio-rt")]
@@ -265,6 +300,11 @@ pub fn poll_tasks() -> bool {
 }
 
 impl<T> Task<T> {
+    pub fn cancel_on_drop(mut self) -> Self {
+        self.cancel_on_drop = true;
+        self
+    }
+
     pub fn cancel(&self) {
         #[cfg(feature = "tokio-rt")]
         if let Some(abort) = &self.abort {
@@ -290,8 +330,7 @@ impl<T> Future for Task<T> {
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        #[cfg(feature = "tokio-rt")]
-        if self.abort.is_some() {
+        if self.cancel_on_drop {
             self.cancel();
         }
     }

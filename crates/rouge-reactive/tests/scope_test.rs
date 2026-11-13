@@ -1,7 +1,7 @@
 use rouge_reactive::testing::{counter, in_root, recorder};
 use rouge_reactive::{
-    Runtime, Scope, batch, effect, expect_context, memo, on_cleanup, provide_context, signal,
-    untrack, use_context,
+    Runtime, Scope, batch, effect, expect_context, memo, on_cleanup, provide_context, run_in,
+    signal, untrack, use_context,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -125,4 +125,19 @@ fn context_lookup_walks_owners_and_shadows() {
         });
         assert_eq!(use_context::<u32>(), Some(1));
     });
+}
+
+#[test]
+fn current_scope_runs_later_work_as_its_owner_until_disposed() -> Result<(), &'static str> {
+    let _entered = Runtime::new().enter();
+    let scope = Scope::root();
+    let current = scope.run(Scope::current).ok_or("a scope is current")?;
+    assert_eq!(current, scope);
+    let value = run_in(Some(current), || signal(1)).ok_or("the scope is alive")?;
+    scope.dispose();
+    assert!(!value.is_alive());
+    assert_eq!(scope.try_run(|| 1), None);
+    assert_eq!(run_in(Some(scope), || 1), None);
+    assert_eq!(run_in(None, || 1), Some(1));
+    Ok(())
 }
