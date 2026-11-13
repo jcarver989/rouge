@@ -44,7 +44,7 @@ The performance contract: a signal change costs work proportional to what actual
 
 wgpu on macOS runs on Metal underneath. What we avoid is writing or maintaining any Metal-specific code: all shaders are WGSL and all GPU calls go through wgpu.
 
-There is one deliberate exception: importing externally produced GPU memory (an IOSurface on macOS, a DMA-BUF on Linux) as a wgpu texture for surfaces. That code is a few hundred lines per OS, lives in a single module of `rouge-render`, creates textures only, and never issues draw calls.
+There is one deliberate exception: importing externally produced GPU memory (an IOSurface on macOS, a DMA-BUF on Linux) as a wgpu texture for surfaces. That code is a few hundred lines per OS, lives in the `rouge-interop` crate, creates and imports textures only, and never issues draw calls.
 
 ## 3. Decisions at a glance
 
@@ -60,7 +60,7 @@ There is one deliberate exception: importing externally produced GPU memory (an 
 | Animation | Compositor-driven by default; signal-driven fallback for layout properties |
 | Effects | Built-in set plus an `Effect` trait for custom WGSL |
 | Text | Parley (layout, shaping, fallback) with swash/skrifa rasterization |
-| Foreign content | Surfaces: externally produced GPU textures composited as layers, shared zero-copy, never read back |
+| Foreign content | Surfaces: a buffer queue from producers to an app-wide registry; frames composited as layers, shared zero-copy, never read back |
 | Web view | Servo, rendering straight into a shared GPU buffer, in an optional crate |
 | Platform | winit behind an internal `Platform` trait, plus small per-OS shims |
 | Perf target | 120Hz, modern GPUs, no software fallback |
@@ -76,7 +76,8 @@ There is one deliberate exception: importing externally produced GPU memory (an 
 | `rouge-reactive` | Signals, memos, effects, scopes, batching. No UI dependencies; usable standalone. |
 | `rouge-core` | Element tree, styles, taffy integration, events, focus, view builders, control flow. |
 | `rouge-text` | Parley integration, glyph rasterization, text measurement, editing primitives. |
-| `rouge-render` | wgpu device management, primitive pipelines, atlases, layer compositor, effects, animation engine. |
+| `rouge-render` | wgpu device management, primitive pipelines, atlases, layer compositor, effects, animation engine, surface registry and protocol. |
+| `rouge-interop` | Shared GPU memory for surfaces: IOSurface and DMA-BUF allocation and zero-copy import into wgpu. The only crate that allows `unsafe`. |
 | `rouge-platform` | `Platform` trait, winit implementation, clipboard, cursor, IME, frame scheduling. |
 | `rouge-widgets` | The component set: bundled fonts, rem-based tokens, typography, icons, buttons, inputs, menus, pickers, modals, panels. Built only on the public API. |
 | `rouge-devtools` | Inspector overlay, frame HUD, signal graph view, hot reload support. |
@@ -315,7 +316,7 @@ All primitives are instanced quads with analytic (SDF) coverage in the fragment 
 | Path | Tessellated with lyon into a mesh; cached per path + scale. MSAA or coverage-based AA for edges |
 | Underline / strikethrough | Including wavy |
 | Layer | A texture or sub-layer drawn with transform, opacity, and optional effect |
-| Surface | An external texture sampled in place with rounded-rect clipping; shares the sampled-quad pipeline with Image |
+| Surface | An external texture sampled in place by a surface shader on the effect prelude: layer transform, rounded-rect clipping, region and row-origin mapping |
 
 ### 8.2 Draw lists
 
@@ -340,6 +341,7 @@ All primitives are instanced quads with analytic (SDF) coverage in the fragment 
 - Frames are produced only when a dirty flag is set or an animation is active.
 - Presentation is vsynced (`Fifo`), driven by the platform's redraw / frame callback. The animation clock samples the predicted presentation time, not wall-clock at tick time.
 - Variable refresh displays run at up to 120Hz during animation and input, and drop to zero frames when idle.
+- Surface producers do not run their own timers: they ask for frames and the compositor answers after each composite with the next presentation time (section 9.6).
 
 ## 9. Compositor, layers, and effects
 
@@ -423,78 +425,171 @@ The UI side never touches the compositor's state directly. Each frame it emits a
 
 In v1 both sides run on the UI thread. Keeping the boundary as a data-only commit means the compositor can move to a dedicated render thread later (keeping animations smooth while the UI thread is busy) without changing the public API.
 
+Surface frames do not cross this boundary. A commit only binds a layer to a `SurfaceId`; frames go from producers to the surface registry (section 9.6), which moves to the render thread with the compositor.
+
 ### 9.6 Surfaces
 
 A **surface** is a layer whose content is a GPU texture produced outside Rouge's painter: a web view, a video decoder, a 3D viewport, a camera feed. It is the single way foreign pixels enter the scene. The web view (section 15) is its first consumer and is not special-cased anywhere in the compositor.
 
-**The rule.** The frame path never moves surface pixels through CPU memory. There is no readback (`glReadPixels`, `read_to_image`) and no `queue.write_texture` per frame, and there is no software fallback that does either. A producer that cannot share GPU memory with the compositor's device fails when it attaches with a typed `SurfaceError`, and the element mounts its fallback view. A 1600x1200 web view at 2x is 30.7 MB per frame; copying that out and back at 120Hz is 7.4 GB/s of memory traffic for no visual result, which is why this is a rule and not a tuning choice.
+**The rule.** The frame path never moves surface pixels through CPU memory. Rouge never reads a surface back (`glReadPixels`, `read_to_image`) and never writes surface pixels with `queue.write_texture`, and there is no software fallback that does either. A producer that cannot share GPU memory with the compositor's device gets a typed `SurfaceError` when it allocates or registers buffers, and the element mounts its fallback view. A 1600x1200 web view at 2x is 30.7 MB per frame; copying that out and back at 120Hz is 7.4 GB/s of memory traffic for no visual result, which is why this is a rule and not a tuning choice. A producer that renders on the CPU, such as a software video decoder, writes into a shared buffer itself (a locked IOSurface, for example). That is its rendering, not a copy made by Rouge.
 
 **Because a surface is an ordinary layer**, everything in sections 9.1 to 9.5 and section 10 applies without new code paths: transforms, opacity, rounded clipping, scroll containers, enter/exit, layout transitions, glass and backdrop blur over it, overlays above it, and hit testing through animated transforms.
 
-#### Element and producer API
+#### Shape
+
+Surfaces are a buffer queue between a producer and an app-wide registry. This is the shape every OS compositor converged on: Wayland (`linux-dmabuf`, frame callbacks, `presentation-time`, explicit sync), Core Animation (IOSurface-backed layer contents), Android (`BufferQueue` into SurfaceFlinger) and Chromium (viz surfaces and shared images). Three parties take part:
+
+| Party | Type | Thread | Role |
+|---|---|---|---|
+| Producer | `SurfaceProducer` | Its own (an actor) | Owns its rendering; registers buffer sets, submits frames, reacts to events |
+| Registry | `Surfaces` | UI thread (the render thread once there is one) | One per app, next to the `Gpu`. Holds imported buffer sets, frame queues, each surface's current frame, release bookkeeping and frame requests |
+| Element | `surface(source)` | UI thread | A layout leaf that owns a layer. Reports its placement (size, scale, visibility) and binds its layer to the surface's `SurfaceId` |
+
+```
+ producer thread                          UI thread
+ SurfaceProducer ── register / submit ──▶ Surfaces ◀── place / detach ─── surface element (tree)
+       ▲                                     │      ◀── bind / unbind ─── compositor layer
+       └── Attached, Configure, FrameRequest,│
+           Released, Presented, Discarded ───┘
+                                             ▼  latch at composite
+                                   renderer samples each SurfaceId's current frame
+```
+
+Frames go straight from the producer to the registry. They never travel in a UI commit (section 9.5), so a busy UI thread cannot delay a video, and a surface frame costs no effect, layout, paint or commit: the compositor redraws from retained buffers and samples whatever frame the registry latched. Layers refer to surfaces by `SurfaceId` (`LayerCommand::Surface`), so a surface can be bound in more than one window, and moving one between windows is a rebind.
+
+#### Element API
 
 ```rust
+let (producer, source) = surface_channel(SurfaceOptions::default());
+spawn(move || run_producer(producer));
+
 surface(source)
     .w_full()
     .h(px(400.))
     .rounded(12.)
+    .status(status)
     .fallback(|error| text(error.to_string()))
 ```
 
+- `surface` is a taffy leaf that always owns a layer. Layout decides its size; it has no intrinsic size.
+- Its **placement** is its physical pixel size, the scale factor and visibility. The tree reports a changed placement to the registry after each update. A surface is not visible when it or an ancestor is hidden or invisible, when ancestors clip it away entirely (a scroll container scrolled past it) or it lies outside the window, when its window is occluded (`Ui::set_visible`), or once it is removed.
+- `.status(signal)` receives `SurfaceStatus::{Waiting, Live, Failed(SurfaceError)}`; `.fallback(view)` is mounted while the status is `Failed`.
+- The element is an ordinary element for events, focus and hit testing.
+
+#### Producer protocol
+
+The protocol is data only, over channels in both directions:
+
 ```rust
-pub trait SurfaceSource: 'static {
-    fn attach(&mut self, cx: SurfaceCx) -> Result<(), SurfaceError>;
-    fn configure(&mut self, config: SurfaceConfig);
-    fn detach(&mut self);
+pub fn surface_channel(options: SurfaceOptions) -> (SurfaceProducer, SurfaceSource);
+
+impl SurfaceProducer {
+    pub fn register(&mut self, buffers: &[SharedBuffer]) -> BufferSetId;
+    pub fn unregister(&mut self, set: BufferSetId);
+    pub fn submit(&mut self, frame: Frame) -> FrameId;
+    pub fn request_frame(&self);
+    pub fn fail(&self, error: SurfaceError);
+    pub fn fence(&self) -> (FenceSignal, Fence);
+    pub async fn recv(&mut self) -> Option<SurfaceEvent>; // also try_recv, blocking_recv
+}
+
+pub enum SurfaceEvent {
+    Attached(Box<SurfaceCx>),
+    Configure(SurfaceConfig),
+    FrameRequest { target: Instant },
+    Released(BufferRef),
+    Presented { frame: FrameId, at: Instant },
+    Discarded(FrameId),
+    Detached,
 }
 ```
 
-- `surface` is a taffy leaf that always owns a layer. Layout decides its size; it has no intrinsic size.
-- `SurfaceCx` carries the app's wgpu `Device` and `Queue`, the adapter's identity (so a producer can check it is on the same GPU), the import functions below, and a `SurfacePresenter`.
-- `SurfaceConfig` is the physical pixel size, the scale factor, and visibility. Rouge sends it when layout, scale, or visibility changes. Visibility is false when the layer is fully clipped, its window is occluded, or it is only alive for an exit animation.
-- `SurfacePresenter` is `Send`. `present(SurfaceFrame)` posts the frame to the UI thread over a channel and wakes the event loop. Producers are actors: they own their resources, run on whatever thread suits them, and talk to Rouge only through `configure` and the presenter. Nothing is shared behind a lock.
-- `SurfaceFrame` is data only: a `wgpu::Texture` handle, the valid rectangle inside it, the row origin (`TopLeft` or `BottomLeft`), the alpha mode (`Opaque` or `Premultiplied`), and a release token.
+- `SurfaceProducer` is `Send`. The `SurfaceSource` goes to the element, which hands it to the registry when it mounts. Producers own their resources, run on whatever thread suits them and talk to Rouge only through this protocol. Nothing is shared behind a lock.
+- `Attached` carries a `SurfaceCx`: the app's wgpu `Device` and `Queue`, the adapter's identity (so a producer can check it is on the compositor's GPU), and buffer allocation and import.
+- `Configure` carries a `SurfaceConfig`: a sequence number, the physical size, the scale and visibility. It is sent only when the placement changes. Frames echo the sequence number they were rendered for, so both sides know exactly when a resize has caught up.
+- Frames name a buffer, `BufferRef { set, index }`, not a texture. The registry imports a buffer set once, when it is registered. A GL, VideoToolbox or VA-API producer never touches wgpu, so it is not tied to Rouge's wgpu version. Because the protocol is only IDs, handles and metadata, it can run across processes (IOSurface mach ports, DMA-BUF file descriptors over a socket) without an API change, which is what a sandboxed web view or CEF needs.
 
-#### Compositing
+Each frame carries its metadata:
 
-- A presented frame becomes `LayerCommand::Surface(SurfaceFrame)` in the next commit. It is a `COMPOSITE` change: no effect runs, no layout, no paint, and no draw list is rebuilt.
-- The renderer samples the texture in place with the sampled-quad pipeline, clipped by the layer's rounded-rect SDF. Bind groups are cached per texture, so a steady-state present allocates nothing.
-- Row origin is handled by flipping UVs in the vertex stage. GL producers are bottom-left; there is no flip pass.
-- `Opaque` frames draw without blending.
-- Surface pixels are sRGB-encoded, matching the gamma-space scene target (section 8.4), so no conversion pass is needed.
-- A surface layer is never rasterized into a cache texture: it already is one. A surface inside a rasterized ancestor, or behind a backdrop effect, invalidates that cache on every present; devtools reports this.
-- During a resize the compositor stretches the last frame to the new bounds until a frame at the new size arrives, so a live resize never shows a blank rectangle.
-- When a surface is removed with an exit animation, the layer keeps its last frame. The producer is already detached.
+| Field | Meaning |
+|---|---|
+| `buffer` | Which registered buffer holds the frame |
+| `region` | The valid rectangle in buffer pixels; the whole buffer by default |
+| `origin` | `TopLeft` or `BottomLeft` row order |
+| `alpha` | `Premultiplied`, or `Opaque` to ignore alpha |
+| `color` | Colour space and transfer function; `Srgb` is the only value so far, and the enum is non-exhaustive so BT.709, BT.2020, PQ and HLG join it with video |
+| `damage` | The rectangle that changed since the producer's previous frame |
+| `acquire` | `Ready`, or a `Fence` the registry waits for before showing the frame |
+| `present_at` | When a timed frame should appear |
+| `config` | The `SurfaceConfig` sequence number the frame was rendered for |
 
-#### Buffer ownership and synchronization
+#### Buffers
 
-- The producer owns a small swap chain (three buffers by default) of shared GPU buffers. Each buffer is imported into wgpu **once**, when the chain is allocated or resized, not per frame.
-- A presented buffer is read-only for the producer until its release token comes back. The compositor returns the token over a channel after the frame has been replaced and the last GPU submission that sampled it has completed (`Queue::on_submitted_work_done`). This matters because wgpu cannot see a foreign API writing into a texture it is still sampling.
-- A producer publishes a frame only after its own rendering into the buffer is complete on the GPU: it creates a fence after its last draw call and presents when the fence signals. It never calls `glFinish`, and the compositor never waits on a producer. A late producer frame is shown one compositor frame later; it cannot stall a compositor frame.
-- At most one frame per surface is pending. A newer present replaces an unconsumed older one, whose token is returned immediately.
-
-#### Importing shared memory
-
-Both import paths are verified to exist in wgpu 30.0.1, the version the workspace pins.
+- `SurfaceCx::allocate(&BufferDesc::new(width, height).format(f).count(n).sharing(s))` returns `n` `SharedBuffer`s, each a wgpu texture plus, for native sharing, the OS object behind it. Swap-chain allocation lives in Rouge once instead of in every producer.
+- `Sharing::Device` allocates plain textures on Rouge's device, for producers that render with wgpu (3D viewports, custom GPU content). It works on every platform, including the browser host.
+- `Sharing::Native` allocates memory a foreign API can render into: an IOSurface on macOS, a DMA-BUF on Linux. `SharedBuffer::io_surface()` gives a GL or Metal producer the object to bind.
+- Producers that must allocate their own buffers, such as video decoders with their own pools, import them through the same code: `SurfaceCx::import_io_surface` (and `import_dmabuf` on Linux).
+- Buffers are BGRA8 or RGBA8 with sRGB-encoded bytes in a non-sRGB format, matching the gamma-space scene target (section 8.4), so no conversion pass is needed. sRGB-typed formats are rejected with `SurfaceError::Format`, because sampling them would decode to linear light. Multi-planar YUV (NV12, P010) becomes new sampling variants with the same protocol.
+- On Linux, `SurfaceCx` advertises the DRM format and modifier pairs the device can import, and native allocation picks among them; producers that allocate their own DMA-BUFs pick from the same list.
+- All allocation and import code lives in `rouge-interop`, the only crate that allows `unsafe`. It creates and imports textures only and never issues draw calls.
 
 | OS | Shared object | Import |
 |---|---|---|
-| macOS | IOSurface | `newTextureWithDescriptor:iosurface:plane:` on the `MTLDevice` taken from `Device::as_hal`, wrapped with `wgpu_hal::metal::Device::texture_from_raw` and `Device::create_texture_from_hal` |
-| Linux | DMA-BUF | `wgpu_hal::vulkan::Device::texture_from_dmabuf_fd` under `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`VK_EXT_external_memory_dma_buf`, `VK_EXT_image_drm_format_modifier`), then `create_texture_from_hal` |
+| macOS | IOSurface | `newTextureWithDescriptor:iosurface:plane:` on the `MTLDevice` taken from `Device::as_hal`, wrapped with `wgpu::hal::metal::Device::texture_from_raw` and `Device::create_texture_from_hal` |
+| Linux | DMA-BUF | `wgpu::hal::vulkan::Device::texture_from_dmabuf_fd` under `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`VK_EXT_external_memory_dma_buf`, `VK_EXT_image_drm_format_modifier`), then `create_texture_from_hal` |
 
-- `SurfaceCx::import_io_surface` and `SurfaceCx::import_dmabuf` wrap these. They are the only OS-specific GPU code in the workspace.
 - DMA-BUF is chosen on Linux over opaque-fd sharing (`VK_KHR_external_memory_fd` plus `GL_EXT_memory_object_fd`) for three reasons: it is a plain wgpu feature flag where opaque fds need hal-level device creation; it is what VA-API video decoders and Wayland already speak, so the same path serves video; and it is not tied to both sides using the same driver build. Opaque fd is the named contingency if the S0 spike finds DMA-BUF export unusable on a required driver.
-- `Gpu::new` requests the DMA-BUF feature when the adapter offers it. When it is absent, `import_dmabuf` returns `SurfaceError::Unsupported`.
-- A producer on a different GPU from the compositor (dual-GPU laptops) gets `SurfaceError::AdapterMismatch`. Cross-GPU sharing is out of scope.
+- `Gpu::new` requests the DMA-BUF feature when the adapter offers it. When it is absent, native allocation and `import_dmabuf` return `SurfaceError::Unsupported`.
+- A producer on a different GPU from the compositor (dual-GPU laptops) reports `SurfaceError::AdapterMismatch` through `fail`. Cross-GPU sharing is out of scope.
+
+#### Queues and pacing
+
+- **Mailbox** (the default, for web views and 3D): when the registry latches, the newest ready frame wins. Older frames go straight back to the producer as `Released` and `Discarded`; they were never sampled.
+- **Timed** (`SurfaceOptions::default().queue(QueueMode::Timed)`, for video): frames carry `present_at`. The latch shows the latest ready frame due by the predicted presentation time, discards earlier ones and keeps later ones queued. `Surfaces::next_deadline` returns the next due time so the event loop wakes for it.
+- **The compositor is the clock.** A producer calls `request_frame` instead of running its own timer. After the next composite that includes the surface, the registry answers with `FrameRequest { target }`, the predicted presentation time of the following frame. Only visible surfaces get answers, and a pending request on a visible surface asks the host for a frame, so producers animate at display rate, pause when hidden or occluded, and a static producer costs nothing.
+- `Presented { frame, at }` reports when each latched frame reached the screen, which video needs for A/V sync. `Discarded` reports frames that never did.
+
+#### Synchronization and release
+
+- A frame's `acquire` says when its pixels are complete. `Ready` means the work is ordered before Rouge's next submission: it was submitted on the `SurfaceCx` queue, or the producer already waited for its own GPU. `Fence` holds a frame back until the producer calls `FenceSignal::signal`, typically from a thread waiting on its GL sync object or Metal shared event; signalling wakes the event loop. The compositor never waits on a producer: a late frame is shown one compositor frame later and cannot stall one. When wgpu exposes waits on external semaphores, a native fence (an `MTLSharedEvent` value, a `sync_file`, a timeline semaphore) is waited for on the GPU; the field and the protocol stay the same.
+- When a frame is replaced, its buffer is retired. `Released` is sent once all GPU work submitted so far has completed (`Queue::on_submitted_work_done`), because wgpu cannot see a foreign API writing into a texture it is still sampling. A buffer is read-only for the producer from `submit` until `Released`.
+- `Surfaces::maintain` registers those callbacks and polls the device while any are outstanding, and `next_deadline` keeps waking the loop for a few milliseconds until they fire, so an idle event loop never strands a producer's buffer. With three buffers a producer never waits on the compositor.
+
+#### Compositing
+
+- The renderer samples the texture in place with a dedicated surface shader built on the effect prelude (section 9.4): the layer's transform and opacity, the layer's rounded-rect SDF for coverage, and a UV mapping from the frame's region and origin computed when it is drawn. Row origin is handled by that mapping. GL producers are bottom-left; there is no flip pass.
+- Bind groups are cached per buffer and dropped when the buffer's set is gone, so a steady-state present allocates no GPU objects.
+- The surface draws above the element's own background and border.
+- `Opaque` frames ignore alpha.
+- A surface layer is never rasterized into a cache texture: it already is one. Every cache that contains a surface (a rasterized ancestor, a content effect, a processed backdrop behind glass) includes the current frame of each surface it contains in its signature, so a new frame invalidates exactly those caches and no others. Devtools reports this.
+- During a resize the compositor stretches the last frame to the new bounds until a frame at the new size arrives, so a live resize never shows a blank rectangle.
+- When a surface element is removed, the producer gets `Detached` and its pending frames are discarded. A layer leaving with an exit animation keeps showing the last frame; the registry keeps the surface while any layer binds it, then drops it and releases the buffer.
 
 #### One device per app
 
-Imported textures belong to one wgpu device, and a producer must be able to outlive a window. The app therefore owns a single `Gpu` shared by all windows. Today each window creates its own (section 21); M7 changes that, which is also what multi-window needs (section 17).
+Imported textures belong to one wgpu device, and a producer must be able to outlive a window. The app therefore owns a single `Gpu` and a single `Surfaces` registry shared by all windows. Every window's compositor binds surfaces by ID, and because all windows submit to one queue, a release covers every window that sampled the buffer.
+
+#### Host contract
+
+A host drives the registry around each composite and from its idle wakeup:
+
+1. `latch(target)` picks up registrations, placements and frames. `target` is the predicted presentation time.
+2. `Renderer::render(..., &surfaces)` draws.
+3. After presenting: `presented(at, interval)` sends `Presented` and answers frame requests, then `maintain()` schedules releases.
+4. When idle: `latch(now)`. If it reports a change, or `needs_frame()` is true, the host redraws every window whose `Ui::has_surfaces()` is true, and `next_deadline()` sets the wakeup.
+
+`Ui::set_surfaces(registrar)` connects a window's tree to the registry, and `Ui::set_visible` reports occlusion.
+
+#### Input regions
+
+A producer that consumes input asynchronously (a web page) can attach input regions to its frames: rectangles that consume wheel events and cursor zones. Rouge's dispatch then decides scroll chaining and the cursor synchronously from the current frame's regions instead of waiting a frame for the producer's answer. Chromium's non-fast-scrollable regions exist for the same reason. The frame metadata reserves room for regions; they are built with the web view (section 15.5).
 
 #### Testing
 
-- A reusable `TestSurface` source in the crate's test utilities renders a known pattern into a real wgpu texture and presents it. Pixel tests cover clipping, origin flip, alpha modes, opacity, transforms, glass over a surface, resize stretch, and exit snapshots through the headless renderer.
-- `RenderStats` gains a count of surface bytes written through the queue. It must stay zero; tests and the benchmark assert it.
+- `rouge_render::testing::TestSurface` is a real producer on Rouge's device. It allocates through `SurfaceCx`, renders known patterns with a GPU pass, and exposes `pump`, `present`, `present_flipped`, `fence`, `request_frame` and `fail`. Its builder sets the queue mode, buffer count, sharing, format and a fixed size.
+- `TestUi::surfaces()` and the renderer's `Stage` test builder (`.surface(source)`) attach surfaces to a headless registry.
+- Pixel tests cover clipping, origin flip, alpha modes, regions, opacity, transforms, content effects and glass over a surface, the mailbox, timed frames, fences, releases, frame requests, resize stretch, exit and fallback views, and IOSurface rendering and import on macOS.
+- Tests assert that a new surface frame uploads no instance or image bytes and runs no layout, paint or effect.
 
 ## 10. Animation
 
@@ -600,7 +695,7 @@ An optional crate that embeds [Servo](https://servo.org) as a surface source (se
 | Servo, blit its framebuffer into a shared texture (Slint's Linux path) | Rejected as the design; kept as a contingency. It is a GPU copy, not a CPU one, but it is avoidable: a custom `RenderingContext` can make Servo draw into the shared buffer directly. |
 | **Servo with a custom `RenderingContext` that renders into the shared buffer** | **Chosen.** |
 | System web view as a child window (wry) | Rejected. Cannot be composited; child views on Linux are X11-only. |
-| CEF offscreen rendering with shared textures | Not now. A viable second `SurfaceSource` if open-web compatibility becomes a requirement; costs a ~200 MB bundle and a multi-process runtime. |
+| CEF offscreen rendering with shared textures | Not now. A viable second surface producer if open-web compatibility becomes a requirement; costs a ~200 MB bundle and a multi-process runtime. |
 | Wait for a wgpu backend in WebRender ([servo#37149](https://github.com/servo/servo/issues/37149)) | Not a plan. No merged status as of November 2026. If it lands, Servo could render on Rouge's device and `rouge-webview` would shrink; the surface API would not change. |
 
 ### 15.3 Rendering path
@@ -609,30 +704,30 @@ Servo paints with WebRender over OpenGL, in a GL context managed by surfman. Its
 
 `rouge-webview` implements that trait as `SharedRenderingContext`:
 
-1. It owns the surface swap chain: three shared buffers (IOSurface on macOS, DMA-BUF on Linux), each attached to a GL framebuffer and each imported once into wgpu through `SurfaceCx`.
-2. `prepare_for_rendering` binds the framebuffer of the current back buffer. WebRender draws the page straight into shared memory.
-3. `present` flushes, creates a fence, rotates the chain, and hands the finished buffer to the `SurfacePresenter` once the fence signals.
-4. `resize` reallocates the chain at the new physical size.
+1. It owns the web view's `SurfaceProducer` and a chain of three buffers allocated with `SurfaceCx::allocate(... .sharing(Sharing::Native))` (IOSurfaces on macOS, DMA-BUFs on Linux), each attached to a GL framebuffer and registered once as a buffer set.
+2. `prepare_for_rendering` binds the framebuffer of a free buffer. WebRender draws the page straight into shared memory.
+3. `present` flushes, creates a GL fence, and submits the buffer with a `Fence` whose `FenceSignal` fires when the GL fence does. The buffer stays read-only until `Released`.
+4. `Configure` reallocates the chain at the new physical size and registers it as a new buffer set; frames carry the configuration they were rendered for.
 5. `read_to_image` is implemented with a readback because the trait requires it. Servo uses it for screenshots only; it is never on the frame path.
 
 One `SharedRenderingContext` per web view, because Servo sizes a web view to its rendering context.
 
-End to end, a page repaint is: WebRender draws into buffer N, the fence signals, a `SurfaceFrame` is posted, one compositor frame samples buffer N. No copy on either the CPU or the GPU.
+End to end, a page repaint is: WebRender draws into buffer N, the fence signals, the registry latches the frame, and one compositor frame samples buffer N. No copy on either the CPU or the GPU.
 
 ### 15.4 Threading and frame pacing
 
-- One `Servo` instance per process, owned by a dedicated **web thread**, together with every `WebView` and `SharedRenderingContext`. Servo's handles are `!Send`, so they stay on the thread that created them. The web thread is an actor: commands in over a channel, frames out through `SurfacePresenter`, state out through `signal.sender()` (section 5.5).
+- One `Servo` instance per process, owned by a dedicated **web thread**, together with every `WebView` and `SharedRenderingContext`. Servo's handles are `!Send`, so they stay on the thread that created them. The web thread is an actor: commands in over a channel, frames out through each web view's `SurfaceProducer`, state out through `signal.sender()` (section 5.5).
 - Servo's layout and script already run on Servo's own threads. What remains on the embedder thread is `spin_event_loop` and `WebView::paint` (WebRender's GL submission). Keeping those off the UI thread means a slow page cannot drop a Rouge animation frame.
 - Servo's `EventLoopWaker` wakes the web thread. `WebViewDelegate::notify_new_frame_ready` triggers `WebView::paint` then `present`.
-- Page animations (`notify_animating_changed`) are paced by Rouge's vsync through Servo's `RefreshDriver` hook, not a free-running timer, so pages animate at display rate and stop when the window is occluded.
-- Idle is still idle: a static page produces no Servo frames, so no surface presents and no Rouge frames. A hidden web view (`SurfaceConfig` not visible) is hidden in Servo and stops painting.
+- Page animations (`notify_animating_changed`) are paced by the compositor: while a page animates, the web thread calls `request_frame`, and each `FrameRequest` ticks Servo's `RefreshDriver` hook with the request's target time. Pages animate at display rate with timestamps that match presentation, and stop when the surface is hidden or the window is occluded, because hidden surfaces get no frame requests.
+- Idle is still idle: a static page produces no Servo frames, so no surface frames and no Rouge frames. A hidden web view (`SurfaceConfig` not visible) is hidden in Servo and stops painting.
 
 If the S0 spike shows Servo cannot run off the main thread on a target OS, the fallback is to run the same actor on the UI thread behind the same channels. The public API does not change; the cost is that page paint time counts against the UI frame budget.
 
 ### 15.5 Input, focus, and cursor
 
 - The web view element receives events through normal dispatch (section 13). Hit testing already maps through animated transforms, so events arrive in surface-local coordinates.
-- Pointer, wheel, keyboard, and IME composition events are forwarded with `WebView::notify_input_event`. Servo reports whether the page consumed each one (`notify_input_event_handled`); unconsumed wheel and key events continue bubbling in Rouge, which gives scroll chaining and app-level shortcuts.
+- Pointer, wheel, keyboard, and IME composition events are forwarded with `WebView::notify_input_event`. Servo answers whether the page consumed each one (`notify_input_event_handled`), but only after the event has crossed to the web thread and back. Wheel events therefore use the input regions attached to the current frame (section 9.6): the web thread publishes the page's scrollable and wheel-handling areas with each frame, and Rouge decides synchronously whether a wheel event stays in the page or chains to Rouge scroll containers. Keys go to the page first; `notify_input_event_handled` releases unconsumed keys to Rouge's bindings. How much of Servo's scroll tree the embedding API exposes for regions is to be confirmed in M8; the fallback is one region covering the whole page while it has any scrollable overflow.
 - Focus maps to `WebView::set_focused`. Tab traversal enters and leaves the page through the focus tree.
 - `notify_cursor_changed` sets the platform cursor while the pointer is over the element.
 - Scale factor changes go to `set_hidpi_scale_factor`.
@@ -697,12 +792,12 @@ Devtools are compiled out unless the `devtools` feature is enabled.
 ## 17. Designed for, shipped later
 
 - **Accessibility**: AccessKit tree generated from element roles and labels, updated incrementally from the same dirty flags. Parley provides the text hooks.
-- **Multi-window and native chrome**: `App` owns a set of windows, each with its own root scope, element tree, and compositor sharing one wgpu device and one atlas set. v1 ships a single window per app plus transparent/custom titlebar support where winit provides it.
-- **Render thread**: enabled by the commit boundary (section 9.5).
-- **Partial present / damage rects**: v1 redraws the full frame from retained buffers when anything changed.
+- **Multi-window and native chrome**: `App` owns a set of windows, each with its own root scope, element tree, and compositor sharing one wgpu device, one surface registry, and one atlas set. v1 ships a single window per app plus transparent/custom titlebar support where winit provides it.
+- **Render thread**: enabled by the commit boundary (section 9.5). The surface registry moves with the compositor, so video keeps playing while the UI thread is busy.
+- **Partial present / damage rects**: v1 redraws the full frame from retained buffers when anything changed. Surface frames already carry damage rectangles for it, and for keeping backdrop caches valid when a surface changes outside the glass above it.
 - **Windows and web**: wgpu and winit both support them; the work is in text, IME, and platform shims.
 - **Surfaces and web view**: designed in sections 9.6 and 15, scheduled as M7 and M8 after v0.1. The S0 spike runs earlier because its findings constrain device creation.
-- **More surface sources**: video (VA-API and VideoToolbox already produce DMA-BUFs and IOSurfaces), user-rendered wgpu content, and CEF if open-web compatibility is needed. All use the M7 API unchanged.
+- **More surface sources**: video (VA-API and VideoToolbox already produce DMA-BUFs and IOSurfaces; it adds YUV sampling and colour spaces behind the existing frame metadata and uses timed queues), user-rendered wgpu content (device sharing, available everywhere), and CEF if open-web compatibility is needed (the same protocol carried across processes). All use the M7 protocol unchanged.
 
 ## 18. Performance plan
 
@@ -751,8 +846,8 @@ Devtools are compiled out unless the `devtools` feature is enabled.
 | **M5: Widgets** | `rouge-widgets` v1 set, text editing with IME, focus traversal, keymap/actions, images, paths, `canvas`, async (`spawn`, `resource`) | A non-trivial sample app (e.g. a chat client or settings app) built only on public API |
 | **M6: Devtools and hardening** | Inspector, HUD, signal graph, warnings, hot-reload spike, docs, Linux X11/Wayland pass, benchmark suite in CI | All budget rows met on both OSes; v0.1 release |
 | **S0: Surface interop spike** | Time-boxed to two weeks, throwaway code, runs alongside M5. Servo with a custom `RenderingContext` drawing into an IOSurface (macOS) and a DMA-BUF (Linux), imported into wgpu and drawn by the existing renderer through a temporary hook. Resolves every "unproven" row in section 15.8. | Written go/no-go per OS with: zero CPU pixel copies confirmed by instrumentation; Servo paint times for three reference pages at 2x; the sync scheme validated for tearing and stale frames; driver matrix (Apple silicon, Intel/AMD Mesa, NVIDIA); threading answer. A no-go on DMA-BUF switches Linux to the opaque-fd contingency before M7 starts. |
-| **M7: Surfaces** | App-wide `Gpu` shared by windows; sampled-quad pipeline (shared with M5 images); `surface` element; `SurfaceSource`, `SurfaceCx`, `SurfacePresenter`; `LayerCommand::Surface`; swap-chain release tokens; IOSurface and DMA-BUF import; `TestSurface`; devtools reporting. Depends on M5 images and M6's Linux pass. | Surface budget rows met on both OSes; pixel tests for clip, flip, alpha, transforms, glass over a surface, resize and exit; `RenderStats` surface upload bytes is zero in every test and benchmark; idle is zero frames. |
-| **M8: Web view** | `rouge-webview`: `SharedRenderingContext`, web-thread actor, vsync-driven refresh, input/IME/focus/cursor forwarding, `webview` handle with signals, navigation policy, resource loading, script evaluation and messaging. Depends on M7 and M5 input. | Web view budget rows met on both OSes; a sample app with a web view under a glass toolbar, inside a scroll container, with a popover above it; text entry with IME in a page form; scroll chaining out of the page; pinned Servo version builds in its own CI job. |
+| **M7: Surfaces** | App-wide `Gpu` and `Surfaces` registry shared by windows; the producer protocol (`surface_channel`, `SurfaceProducer`, `SurfaceEvent`, `Frame` metadata, buffer sets); mailbox and timed queues; frame requests and presentation feedback; fences and GPU-gated release; `surface` element with placement, status and fallback; `LayerCommand::Surface`; surface shader; frame-aware cache signatures; `rouge-interop` with IOSurface and DMA-BUF allocation and import; `TestSurface`; devtools reporting. Depends on M5 and M6's Linux pass. | Surface budget rows met on both OSes; pixel tests for clip, flip, alpha, regions, transforms, effects and glass over a surface, resize and exit; protocol tests for queues, fences, releases, frame requests and detach; a new surface frame uploads no instance or image bytes and runs no layout, paint or effect; idle is zero frames. |
+| **M8: Web view** | `rouge-webview`: `SharedRenderingContext`, web-thread actor, refresh paced by frame requests, input regions, input/IME/focus/cursor forwarding, `webview` handle with signals, navigation policy, resource loading, script evaluation and messaging. Depends on M7 and M5 input. | Web view budget rows met on both OSes; a sample app with a web view under a glass toolbar, inside a scroll container, with a popover above it; text entry with IME in a page form; scroll chaining out of the page; pinned Servo version builds in its own CI job. |
 | **Post-v1** | AccessKit, multi-window, native menus/dialogs, render thread, damage rects, editor-grade text widget, further surface sources (video, CEF) | |
 
 M0 has no dependencies and M1's renderer work is independent of it until reactive props land, so the two can proceed in parallel.
@@ -774,18 +869,20 @@ M7 and M8 ship after v0.1. S0 is deliberately early: it is cheap, it depends onl
 | **UI-thread compositor**: a blocked UI thread stalls animations. | Async and background helpers keep work off the UI thread; the commit boundary keeps the render-thread option open. |
 | **Hot reload feasibility** with closures and generic views. | Time-boxed spike in M6; not a v1 commitment. |
 | **GL-to-Vulkan sharing on Linux** varies by driver (DMA-BUF export, modifiers, NVIDIA). | S0 tests a driver matrix before M7 is committed. Opaque-fd sharing is the contingency; a GPU blit into a shared image is the last resort. A CPU copy is not on the list: unsupported configurations get `SurfaceError` and the fallback view. |
-| **Cross-API synchronization**: wgpu cannot see GL writing to a buffer it samples. | Producer-owned swap chain, fence-gated present, release tokens returned after GPU completion (section 9.6). Validated in S0 with a tearing test. |
+| **Cross-API synchronization**: wgpu cannot see GL writing to a buffer it samples. | Buffers are read-only for the producer from submit until `Released`, frames wait for their `Fence`, and releases are sent only after Rouge's GPU work completes (section 9.6). Validated in S0 with a tearing test. |
+| **External GPU waits**: wgpu has no public API to wait on a foreign semaphore or shared event. | Fences are signalled on the CPU by the producer, which costs up to one frame of latency but never stalls a compositor frame. The `acquire` field is typed so a native fence can be waited on the GPU later without a protocol change. |
+| **Idle release delivery**: `on_submitted_work_done` callbacks fire only while the device is polled. | `Surfaces::maintain` polls while releases are outstanding and `next_deadline` keeps the loop waking every few milliseconds until they arrive. |
 | **Servo API churn**: 0.x releases roughly monthly with breaking changes. | Exact version pin, upgrades gated on the M8 suite, all Servo types confined to `rouge-webview`. |
-| **Servo web compatibility** is well short of WebKit and Chromium. | Scope is author-controlled content (section 15.1). `SurfaceSource` leaves room for a CEF source without API change. |
+| **Servo web compatibility** is well short of WebKit and Chromium. | Scope is author-controlled content (section 15.1). The surface protocol leaves room for a CEF producer without API change. |
 | **Servo paint cost** is unmeasured and could exceed a 120Hz frame on heavy pages. | Servo runs on its own thread, so it cannot stall Rouge frames; the page itself may update below display rate. S0 measures it and sets the M8 budget. |
 | **Servo off the main thread** may not work on every OS. | S0 answers it. Fallback is the same actor on the UI thread (section 15.4). |
 | **Servo build weight** (compile time, native toolchain, binary size). | Optional crate with its own CI job; never a dependency of the core crates. |
-| **Dual-GPU machines**: Servo's GL context and the wgpu adapter may land on different GPUs. | Adapter identity is checked at attach; mismatch is a typed error. Forcing a matching GPU on Linux is an S0 question. |
+| **Dual-GPU machines**: Servo's GL context and the wgpu adapter may land on different GPUs. | `Attached` carries the adapter's identity; a producer on another GPU reports `SurfaceError::AdapterMismatch`. Forcing a matching GPU on Linux is an S0 question. |
 | **Name**: "Rouge" is a placeholder. | Check crates.io availability before publishing. |
 
 ## 21. Implementation status
 
-Milestones M0 to M5 are implemented, and the S0 spike has been run on macOS. Everything listed as done is covered by tests, including pixel-level tests that render on a real GPU. Development and all windowed runs have been on macOS (Apple silicon); see "Linux" below for what has been run there.
+Milestones M0 to M5 are implemented, M7 is implemented for macOS native sharing and for device sharing on every platform, and the S0 spike has been run on macOS. Everything listed as done is covered by tests, including pixel-level tests that render on a real GPU. Development and all windowed runs have been on macOS (Apple silicon); see "Linux" below for what has been run there.
 
 ### API gap closure: window shell and menus (item 7)
 
@@ -840,10 +937,11 @@ Milestones M0 to M5 are implemented, and the S0 spike has been run on macOS. Eve
 | Renderer (`rouge-render`) | wgpu pipelines for quads (rounded, bordered), shadows, glyphs and sampled images (`ImageQuad`: RGBA or alpha-mask `ImageData`, source rect, tint, rounded-rect clip; textures uploaded once, cached per image and evicted when idle or over budget; a draw list is drawn as one call per run of same-texture primitives); glyph atlas; retained per-list GPU buffers; one effect pipeline per `Effect` type, built from a shared WGSL prelude; region-limited dual-Kawase blur at reduced resolution; backdrop snapshots that are batched and cached; headless rendering with PNG export. |
 | Effects (`rouge-render`) | The `Effect` trait for custom WGSL, and the built-ins written against it: `Blur`, `ColorMatrix`, `Mask` (linear, radial, shape), `BlendMode` (twelve modes), `BackdropBlur`, `Glass`. |
 | Compositor (`rouge-render`) | Retained layer tree driven only by data-only `Commit`s; per-layer transform, opacity, fill color, corner radii, scroll offset and clip; content effect chains, mask, blend mode and backdrop effect per layer, with animatable parameters; direct replay and rasterized (cached texture) layers chosen automatically; the animation engine (springs, tweens with cubic-bezier easing, decay, keyframes, motion values, layout transitions with optional size, enter/exit); scroll momentum and rubber-banding; scene generation for the renderer. |
+| Surfaces (`rouge-render`, `rouge-interop`, `rouge-core`) | The app-wide `Surfaces` registry and producer protocol, the `surface` element, the surface shader, IOSurface allocation and import, and `TestSurface`. See "M7: surfaces" below. |
 | Text (`rouge-text`) | Parley layout (wrapping with break-word fallback for overlong tokens, hanging `WrapIndent` that follows a line's leading whitespace, alignment, weights, families, composable byte-range spans; layouts cached per content, style and width), swash rasterization with subpixel positioning. Editing primitives over Parley's cursor and selection: carets and selections from byte indices or points, movement by character, word, line and document, selection rectangles and caret geometry. |
 | Core (`rouge-core`) | Retained element tree, taffy layout with text measurement, `Styled` builder API with reactive props, dirty classes, `div`, `text` and `rich_text`, hover/active variants, pointer down/move/up and scroll-wheel events with bubbling, pointer capture, a drag gesture with velocity, a `window_size` signal, `show` / `each` / `dynamic` with `.enter()` / `.exit()`, layers with segmented paint order and layer-relative draw lists, transitions, `motion`, `.animate(Keyframes)`, `.layout_transition()`, `scroll` and `virtual_list`, `.effect()` / `.backdrop()` / `.mask()` / `.blend()`. M5 additions: keyboard events with bubbling, a focus tree (tab order, `tab_index`, focus scopes, autofocus with restore, `FocusHandle`), `.focus()` / `.focus_visible()` / `.disabled()` variants and `.enabled()`, typed actions bound to key chords along the focus path, IME events, cursors, hover enter/leave, pointer events with element-local coordinates, modifiers and click count, `.pass_through()`, `.track_bounds()`, `overlay`, a `Theme` of signals in context, `editable` (single- and multi-line text editing with selection, clipboard, IME composition), `image` (decoded off the UI thread, four fit modes), `Path`, `canvas` with a `Painter`, and `icon`. |
 | Widgets (`rouge-widgets`) | Built only on the public API: the single component set described in section 14, with its fonts, icons, tokens and typography. Each reads the theme and implements `Styled`, so style methods override its defaults. |
-| App (`rouge`) | winit event loop, surface management, vsynced redraw only when dirty or animating, trackpad scroll phases, keyboard and modifier mapping, IME enablement and cursor area, cursor icons, the system clipboard (arboard), event-loop wake-ups for async work, examples (`counter`, `glass`, `effects`, `motion`, `diff`, `settings`, `snapshot`, `bench_layers`, `bench_scroll`, `bench_glass`). `settings` is the M5 sample app: tabs, forms, theme switching, a popover, a modal, a context menu, a key binding and an async resource, all through `rouge::prelude`. |
+| App (`rouge`) | winit event loop, one GPU and surface registry shared by all windows with surface latching and frame-request pacing, window surface management, vsynced redraw only when dirty or animating, trackpad scroll phases, keyboard and modifier mapping, IME enablement and cursor area, cursor icons, the system clipboard (arboard), event-loop wake-ups for async work, examples (`counter`, `glass`, `effects`, `motion`, `diff`, `settings`, `snapshot`, `bench_layers`, `bench_scroll`, `bench_glass`, `surface`). `settings` is the M5 sample app: tabs, forms, theme switching, a popover, a modal, a context menu, a key binding and an async resource, all through `rouge::prelude`. |
 
 ### Measured
 
@@ -867,8 +965,7 @@ Release mode, 800x600 at 2x scale on an Apple silicon laptop. CPU time unless st
 - **Flush timing**: see section 5.3, which was updated to match.
 - **Prop conversions** use a dedicated `PropFrom` trait plus the marker parameter. A blanket `Into` bound made bare float literals ambiguous for `f32` props. Effects use their own `IntoEffect` conversion for the same reason.
 - **No `rouge-platform` crate yet** (M5 added keyboard, IME, cursor and clipboard to the same place): winit is used directly from `rouge`. The `Ui` type is the platform-independent boundary and is what tests drive.
-- **One `Gpu` per window**: each window creates its own wgpu instance and device. Surfaces need a single app-wide device (section 9.6); M7 makes that change.
-- **Commit boundary**: `Commit`, `Compositor` and the animation types live in `rouge-render`. The element tree only ever pushes commands. Two things read back across the boundary, both on the UI thread: hit testing asks the compositor for a layer's current pose, and once per frame `Ui` copies motion values and scroll state out for `Motion::get` and `scroll_state`.
+- **Commit boundary**: `Commit`, `Compositor` and the animation types live in `rouge-render`. The element tree only ever pushes commands. Two things read back across the boundary, both on the UI thread: hit testing asks the compositor for a layer's current pose, and once per frame `Ui` copies motion values and scroll state out for `Motion::get` and `scroll_state`. The compositor also reports which surfaces its layers bind and unbind, which `Ui` forwards to the surface registry.
 - **Compositor-animatable properties** are translate, scale (uniform), rotate, opacity, scroll offset, the background color and corner radii of an element that owns a layer, and effect parameters. Clip is not. Background and radius are layer properties read by the shader, so animating them uploads no instance data; they also work in `Pose`, so keyframes and enter/exit can use them. An element's border and text are still painted.
 - **`Motion` is `f32` only** (not `Motion<T>`). `animate_to` and `decay` return an `Animation` that can be ignored or awaited; awaiting it yields `true` on arrival and `false` when interrupted. `get` returns the value as of the last frame.
 - **Timing** is springs, tweens (four cubic easings or `Ease::cubic_bezier`), and `Decay` for motion values.
@@ -909,13 +1006,38 @@ Release mode, 800x600 at 2x scale on an Apple silicon laptop. CPU time unless st
 - **Slider and tabs** are laid out by signals, so dragging a slider relayouts its own subtree each frame.
 - **taffy keeps a stale list of out-of-flow children** on a node that loses its last child while holding an absolutely positioned one. The overlay root keeps a hidden placeholder child for that reason.
 
+### M7: surfaces
+
+Built as designed in section 9.6, for macOS native sharing and for device sharing on every platform:
+
+- `Surfaces`, the producer protocol (`surface_channel`, `SurfaceProducer`, `SurfaceSource`, `SurfaceEvent`, `Frame`, buffer sets), mailbox and timed queues, CPU-signalled fences, GPU-gated releases, frame requests, presentation and discard feedback, configuration sequence numbers, and detach that keeps an exiting layer's last frame.
+- `surface(source)` with placement, `.status(signal)` and `.fallback(view)`; `LayerCommand::Surface` and the compositor's bind/unbind reports; `Ui::set_surfaces`, `Ui::set_visible` and `Ui::has_surfaces`.
+- The surface shader, bind groups cached per buffer, and cache signatures that include each contained surface's current frame, so content effects and backdrops over a surface refresh on every new frame and on nothing else.
+- `rouge-interop` with `IoSurface` (allocation, CPU writes for software producers, global ID) and `import_io_surface`. `SurfaceCx::allocate` with `Sharing::Native` allocates IOSurfaces on macOS.
+- One `Gpu` (which is `Clone`) and one `Surfaces` per app, shared by all windows, in the native host. The browser host owns a registry for device-shared producers.
+- `rouge_render::testing::TestSurface`, `TestUi::surfaces()`, the `Stage` test builder's `.surface(source)`, and `headless::headless_gpu` and `Headless::with_gpu`.
+- `cargo run -p rouge --example surface` animates a wgpu-rendered plasma in IOSurfaces under a glass panel, paced by frame requests.
+
+Measured on an Apple M4 Pro, 1440x960 at scale 2, with the example's surface filling the window under glass: 239 frames at 8.34 ms p50, 8.73 ms p99 frame interval (one startup frame over 16.7 ms), and 3 layouts and 3 paints over the whole run, all at startup.
+
+#### M7: differences from this document
+
+- **Linux native sharing is not built.** `Sharing::Native` returns `SurfaceError::Unsupported` off macOS, there is no `import_dmabuf`, `Gpu::new` does not request `VULKAN_EXTERNAL_MEMORY_DMA_BUF`, and `SurfaceCx` does not advertise DRM modifiers. This waits on S0's Linux verdict. Device sharing works everywhere; the surface tests have run on macOS only.
+- **Fences are CPU-signalled only.** There is no native fence variant of `Acquire`.
+- **Damage and input regions** are not used: `Frame::damage` is carried but ignored, and input regions are not built (they arrive with M8).
+- **Colour**: `ColorSpace::Srgb` is the only colour space, buffers are BGRA8 or RGBA8, and IOSurfaces are BGRA8.
+- **Adapter checks** are the producer's: `Attached` carries the adapter's `AdapterInfo`, and the registry does not compare adapters itself.
+- **Devtools reporting** is not built, because devtools are not (see M6). `Surfaces::stats()` reports surfaces, frames submitted, latched and discarded, and buffers released; `RenderStats::surfaces` counts surface draws.
+- **Browser host**: wgpu handles are not `Send` on `wasm32`, so releases are sent at `maintain` without waiting for GPU completion. This is safe there because the only producers are device-shared and ordered by Rouge's queue.
+- **Hosts** latch timed frames against the current time plus half the monitor's refresh interval. `Presented` is sent for each latched frame after the next present of any window.
+
 ### S0 spike
 
 Run on macOS (Apple M4 Pro); the code and the full findings are in `spikes/s0-surface-interop/` (`FINDINGS.md`). It is throwaway and not part of the workspace.
 
 - **macOS: go.** An IOSurface was imported into wgpu 30.0.1 with no copy, a GL producer and then Servo 0.8.0 (through a custom `RenderingContext`) drew straight into it, a fence-gated three-buffer swap chain showed no stale or torn frame in 2,300 fully checked frames at 3200x2400, UV flipping handled the bottom-left origin, and Servo ran on a non-main thread. `WebView::paint` took 0.7 to 1.9 ms at p50 on three synthetic pages at 2x, with 2 to 6 ms of GPU time behind the fence.
-- **Linux: no verdict.** Nothing in S0 was run there: no DMA-BUF export or import, no driver matrix, no EGL GPU selection. The opaque-fd decision is still open and M7 on Linux should not start before it.
-- Corrections to sections 9.6 and 15 that M7 and M8 need (the `objc2-metal` feature required for the IOSurface import, the exact `texture_from_raw` and `create_texture_from_hal` signatures, Servo needing both `gleam` and `glow` contexts, `LoadStatus::Complete` not meaning the new page is what paints next) are listed in the findings.
+- **Linux: no verdict.** Nothing in S0 was run there: no DMA-BUF export or import, no driver matrix, no EGL GPU selection. The opaque-fd decision is still open, and M7's Linux native sharing waits on it.
+- The IOSurface import in `rouge-interop` uses the details S0 found (the `objc2-metal` `objc2-io-surface` feature, the exact `texture_from_raw` and `create_texture_from_hal` signatures). Corrections to section 15 that M8 needs (Servo needing both `gleam` and `glow` contexts, `LoadStatus::Complete` not meaning the new page is what paints next) are listed in the findings.
 - On this machine `glFlush` alone, without a fence, also produced no stale frames, so the fence is shown to be sufficient but not shown to be necessary.
 
 ### Linux
@@ -962,6 +1084,6 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 - Compositor leftovers: clip animation, non-uniform scale, `Motion<T>` beyond `f32`, effect parameters in keyframes and bound to motions, backdrop effects inside rasterized layers, hit-test pass-through for overlays.
 - M5 leftovers: SVG documents, password masking in text editing, popover collision handling, image mips, a thread pool behind `spawn_blocking`. Typing, IME and clipboard have been exercised through `Ui` in tests but not by hand in a window.
 - M6: HUD, inspector, invalidation flashing, layer view, signal graph, warnings, GPU timing, hot reload, benchmark suite in CI. Frame counters and tracing are done (see above).
-- S0 on Linux, M7, M8: surfaces and the web view. The sampled-quad pipeline M7 needs now exists (images), but there is no `surface` element and no `rouge-webview` crate.
+- S0 on Linux and M7's Linux native sharing (see "M7: differences from this document"). M8: there is no `rouge-webview` crate.
 - Text gaps: color glyphs (emoji), atlas eviction.
 - Linux beyond what is listed above.
