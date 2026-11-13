@@ -5,12 +5,43 @@ use crate::styled;
 use crate::tree::ElementId;
 use crate::view::{BuildCx, Div, View, div, send};
 use rouge_macros::component;
-use rouge_reactive::{Signal, effect, signal};
+use rouge_reactive::{Scope, Signal, effect, run_in, signal, untrack};
 use rouge_render::{Color, ImageData, ImageQuad, Point, Quad, Rect, Size};
-use rouge_text::{TextLayout, TextStyle};
+use rouge_text::{TextLayout, TextStyle, TextSystem};
 use std::rc::Rc;
 
 pub(crate) type HitListener = Rc<dyn Fn(Option<TextHit>, Modifiers)>;
+type MeasureFn = Rc<dyn Fn(&mut Measure<'_>, f32) -> f32>;
+
+#[derive(Clone)]
+pub(crate) struct CanvasMeasure {
+    measure: MeasureFn,
+    pub(crate) last: Option<Size>,
+}
+
+impl CanvasMeasure {
+    pub(crate) fn height(&self, system: &mut TextSystem, width: f32) -> f32 {
+        (self.measure)(&mut Measure { system }, width).max(0.0)
+    }
+}
+
+pub struct Measure<'a> {
+    system: &'a mut TextSystem,
+}
+
+impl Measure<'_> {
+    pub fn text(&mut self, run: &TextRun) -> Rect {
+        let mut layout = self.system.layout(&run.content, &run.style);
+        layout.break_lines(run.wrap);
+        let (width, height) = layout.size();
+        let x = if run.right_aligned {
+            run.origin.x - width
+        } else {
+            run.origin.x
+        };
+        Rect::new(x, run.origin.y, width, height)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextHit {
@@ -25,6 +56,8 @@ pub struct TextRun {
     pub origin: Point,
     pub color: Color,
     pub clip: Option<Rect>,
+    pub wrap: Option<f32>,
+    pub continuation: Option<Continuation>,
     pub tag: Option<u32>,
     pub name: Option<String>,
     pub right_aligned: bool,
@@ -38,6 +71,8 @@ impl TextRun {
             origin,
             color,
             clip: None,
+            wrap: None,
+            continuation: None,
             tag: None,
             name: None,
             right_aligned: false,
@@ -54,6 +89,21 @@ impl TextRun {
         self
     }
 
+    pub fn wrap(mut self, max_width: f32) -> Self {
+        self.style.wrap = true;
+        self.wrap = Some(max_width.max(0.0));
+        self
+    }
+
+    pub fn continuation(mut self, mark: impl Into<String>, x: f32, color: Color) -> Self {
+        self.continuation = Some(Continuation {
+            mark: mark.into(),
+            x,
+            color,
+        });
+        self
+    }
+
     pub fn tag(mut self, tag: u32) -> Self {
         self.tag = Some(tag);
         self
@@ -65,12 +115,49 @@ impl TextRun {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Continuation {
+    pub mark: String,
+    pub x: f32,
+    pub color: Color,
+}
+
 pub(crate) struct ShapedRun {
     pub(crate) run: TextRun,
     pub(crate) layout: Option<Box<TextLayout>>,
 }
 
 impl ShapedRun {
+    pub(crate) fn continuation_marks(&self) -> Vec<TextRun> {
+        let (Some(continuation), Some(layout)) = (&self.run.continuation, &self.layout) else {
+            return Vec::new();
+        };
+        let style = TextStyle {
+            spans: Vec::new(),
+            wrap: false,
+            ..self.run.style.clone()
+        };
+        layout
+            .line_tops()
+            .into_iter()
+            .skip(1)
+            .map(|top| {
+                let origin = Point::new(continuation.x, self.run.origin.y + top);
+                let mark = TextRun::new(
+                    continuation.mark.clone(),
+                    origin,
+                    &style,
+                    continuation.color,
+                )
+                .right_aligned();
+                match &self.run.name {
+                    Some(name) => mark.name(format!("{name}:continuation")),
+                    None => mark,
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn bounds(&self) -> Rect {
         let (width, height) = self
             .layout
@@ -197,12 +284,29 @@ impl Canvas {
     }
 
     pub fn on_text_hover(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
-        self.div.spec.text_hover = Some(Rc::new(f));
+        let owner = Scope::current();
+        self.div.spec.text_hover = Some(Rc::new(move |hit, modifiers| {
+            run_in(owner, || f(hit, modifiers));
+        }));
         self
     }
 
     pub fn on_text_click(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
-        self.div.spec.text_click = Some(Rc::new(f));
+        let owner = Scope::current();
+        self.div.spec.text_click = Some(Rc::new(move |hit, modifiers| {
+            run_in(owner, || f(hit, modifiers));
+        }));
+        self
+    }
+
+    pub fn measure(mut self, measure: impl Fn(&mut Measure<'_>, f32) -> f32 + 'static) -> Self {
+        let owner = Scope::current();
+        self.div.spec.canvas_measure = Some(CanvasMeasure {
+            measure: Rc::new(move |cx, width| {
+                run_in(owner, || untrack(|| measure(cx, width))).unwrap_or(0.0)
+            }),
+            last: None,
+        });
         self
     }
 

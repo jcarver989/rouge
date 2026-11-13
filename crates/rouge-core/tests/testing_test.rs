@@ -1,8 +1,9 @@
 use rouge_core::testing::{
     BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
 };
-use rouge_core::{Color, Key, Point, Rect, Styled, div};
+use rouge_core::{Color, Menu, MenuItem, Point, PointerButton, Rect, Styled, div, dynamic};
 use rouge_reactive::{Runtime, signal};
+use std::path::PathBuf;
 
 #[test]
 fn the_builder_sets_the_window_size_scale_and_clear_color() -> TestResult {
@@ -35,7 +36,7 @@ fn build_with_hands_back_what_the_root_closure_made() -> TestResult {
     ui.click(Point::new(10.0, 10.0));
     ui.click_at(20.0, 20.0);
     assert_eq!(clicks.get_untracked(), 2);
-    assert!(!ui.press(Key::Enter), "nothing handles the key");
+    assert!(!ui.press("enter"), "nothing handles the key");
     assert!(matches!(
         TestUi::new(div).bounds(500.0, 500.0),
         Err(TestError::NoElement { .. })
@@ -67,7 +68,7 @@ fn test_ids_follow_dynamic_replacements_and_keep_paint_order() -> TestResult {
     let clicks = signal(0);
     let mut ui = TestUi::new(|| {
         div()
-            .child(rouge_core::dynamic(move || {
+            .child(dynamic(move || {
                 let width = if wide.get() { 80.0 } else { 40.0 };
                 div()
                     .test_id("row")
@@ -112,3 +113,60 @@ fn drag_on_uses_the_public_drag_gesture() -> TestResult {
     assert_eq!(moved.get(), Point::new(85.0, 65.0));
     Ok(())
 }
+
+#[test]
+fn input_helpers_target_elements_by_test_id() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (saved, secondary, scrolled, dropped, second) = (
+        signal(0),
+        signal(0),
+        signal(0.0),
+        signal(Vec::new()),
+        signal(false),
+    );
+    let menus = vec![Menu::new(
+        "File",
+        vec![MenuItem::action("Save", Save).shortcut("cmd-s")],
+    )];
+    let mut ui = TestUiBuilder::default()
+        .size(100.0, 100.0)
+        .menus(menus)
+        .build(move || {
+            let item = |index: usize| {
+                div().test_id("item").size(10.0).on_click(move |_| {
+                    if index == 1 {
+                        second.set(true);
+                    }
+                })
+            };
+            div()
+                .size_full()
+                .on_action(move |_: &Save| saved.update(|saved| *saved += 1))
+                .child(
+                    div()
+                        .test_id("target")
+                        .size(40.0)
+                        .on_pointer_down(move |event| {
+                            if event.button == PointerButton::Secondary {
+                                secondary.update(|count| *count += 1);
+                            }
+                        })
+                        .on_scroll(move |event| scrolled.set(event.delta.y))
+                        .on_file_drop(move |event| dropped.set(event.paths.clone())),
+                )
+                .child(item(0))
+                .child(item(1))
+        });
+    ui.press("cmd-s cmd-s");
+    ui.right_click_on("target")?;
+    ui.scroll_on("target", Point::new(0.0, -5.0))?;
+    ui.drop_files_on("target", vec!["/tmp/a".into()])?;
+    ui.click_nth("item", 1)?;
+    assert_eq!((saved.get(), secondary.get(), scrolled.get()), (2, 1, -5.0));
+    assert_eq!(dropped.get(), [PathBuf::from("/tmp/a")]);
+    assert!(second.get());
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct Save;

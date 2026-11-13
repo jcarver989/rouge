@@ -2,8 +2,8 @@ use rouge_core::testing::{
     BLUE, LINEAR, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
 };
 use rouge_core::{
-    Color, EditAction, Key, Point, Pose, Styled, View, div, dynamic, each, editable, focus_handle,
-    overlay, show,
+    Color, EditAction, Point, Pose, Styled, View, div, dynamic, each, editable, focus_handle,
+    overlay, show, switch,
 };
 use rouge_reactive::{ReadSignal, Runtime, Signal, on_cleanup, signal};
 use std::cell::RefCell;
@@ -62,8 +62,8 @@ fn nested_dynamic_replacement_restores_handles_but_genuine_unmount_does_not() ->
         (div().size_full().child(outer), focus)
     });
     ui.click_on("nested")?;
-    ui.press(Key::End);
-    ui.press(Key::ArrowLeft);
+    ui.press("end");
+    ui.press("left");
     version.set(1);
     version.set(2);
     ui.advance(0.0);
@@ -100,8 +100,8 @@ fn dynamic_replacement_reuses_focus_identity_editor_selection_and_history() -> T
         (div().size_full().child(branch), focus)
     });
     ui.click_on("editor")?;
-    ui.press(Key::End);
-    ui.press(Key::ArrowLeft);
+    ui.press("end");
+    ui.press("left");
     ui.type_text("!");
     assert_eq!(value.get(), "hell!o");
     let caret = ui.text_cursor_area().ok_or("caret")?;
@@ -533,6 +533,66 @@ fn overlays_mount_in_the_window_overlay_root_above_everything_and_leave_with_the
     );
     ui.click(Point::new(120.0, 20.0));
     assert_eq!((over.get(), under.get()), (1, 2));
+    Ok(())
+}
+
+#[test]
+fn an_overlay_opened_inside_another_overlay_sits_above_it() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, clicked) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+        let clicked = signal(Vec::new());
+        let inner = move || {
+            div()
+                .absolute()
+                .left(10.0)
+                .top(10.0)
+                .size(20.0)
+                .on_click(move |_| clicked.update(|all| all.push("inner")))
+        };
+        let outer = move || {
+            div()
+                .absolute()
+                .inset(0.0)
+                .on_click(move |_| clicked.update(|all| all.push("outer")))
+                .child(overlay(inner))
+        };
+        (div().size_full().child(overlay(outer)), clicked)
+    });
+    ui.click_at(15.0, 15.0);
+    ui.click_at(60.0, 60.0);
+    assert_eq!(clicked.get(), ["inner", "outer"]);
+}
+
+#[test]
+fn switch_rebuilds_only_when_its_key_changes_and_builds_untracked() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let tab = signal(0);
+    let read = signal(0);
+    let (builds, bump) = counter();
+    let mut ui = TestUi::new(move || {
+        let content = switch(
+            move || tab.get() % 2,
+            move |tab| {
+                bump();
+                read.get();
+                div().test_id(format!("tab-{tab}")).size(10.0)
+            },
+        );
+        div().size_full().child(content)
+    });
+    assert!(ui.bounds_of("tab-0").is_some());
+    read.set(1);
+    tab.set(2);
+    ui.advance(0.0);
+    assert_eq!(
+        builds.get(),
+        1,
+        "reads in the view and same-key writes do not rebuild"
+    );
+    tab.set(3);
+    ui.advance(0.0);
+    assert!(ui.bounds_of("tab-1").is_some());
+    assert_eq!(builds.get(), 2);
     Ok(())
 }
 

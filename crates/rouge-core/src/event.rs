@@ -1,5 +1,6 @@
 use rouge_render::Point;
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -208,6 +209,23 @@ impl Chord {
     }
 }
 
+pub trait IntoChord {
+    fn into_chord(self) -> Chord;
+}
+
+impl IntoChord for Chord {
+    fn into_chord(self) -> Chord {
+        self
+    }
+}
+
+impl IntoChord for &str {
+    #[track_caller]
+    fn into_chord(self) -> Chord {
+        Chord::parse(self).unwrap_or_else(|error| panic!("rouge: `{self}` is not a chord: {error}"))
+    }
+}
+
 impl FromStr for Chord {
     type Err = ChordError;
 
@@ -333,6 +351,36 @@ impl ScrollEvent {
         ScrollEvent {
             position,
             delta,
+            stopped: Cell::new(false),
+        }
+    }
+
+    pub fn stop_propagation(&self) {
+        self.stopped.set(true);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FileDropPhase {
+    Hover,
+    Leave,
+    Drop,
+}
+
+#[derive(Debug)]
+pub struct FileDropEvent {
+    pub phase: FileDropPhase,
+    pub position: Option<Point>,
+    pub paths: Vec<PathBuf>,
+    pub(crate) stopped: Cell<bool>,
+}
+
+impl FileDropEvent {
+    pub(crate) fn new(phase: FileDropPhase, position: Option<Point>, paths: Vec<PathBuf>) -> Self {
+        FileDropEvent {
+            phase,
+            position,
+            paths,
             stopped: Cell::new(false),
         }
     }

@@ -1,17 +1,13 @@
-use crate::event::{Chord, Key, KeyEvent, Modifiers};
+use crate::event::{Chord, IntoChord, Key, KeyEvent, Modifiers};
+use crate::path::Path;
 use crate::tree::edit::EditOp;
 use crate::ui::Ui;
 use rouge_reactive::{ReadSignal, Signal, expect_context};
+pub use rouge_theme::Appearance;
 use std::any::Any;
 use std::rc::Rc;
+use std::slice::from_ref;
 use tokio::sync::mpsc::UnboundedSender;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Appearance {
-    #[default]
-    Light,
-    Dark,
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Decorations {
@@ -48,6 +44,27 @@ impl Menu {
         Menu::new("Edit", items)
     }
 
+    pub fn app(name: &str, mut items: Vec<MenuItem>) -> Self {
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        items.push(
+            MenuItem::callback(format!("Quit {name}"), || window_handle().quit())
+                .shortcut(Chord::new(Key::character("q"), Modifiers::COMMAND)),
+        );
+        Menu::new(name, items)
+    }
+
+    pub fn window() -> Self {
+        Menu::new(
+            "Window",
+            vec![
+                MenuItem::callback("Minimize", || window_handle().minimize()),
+                MenuItem::callback("Zoom", || window_handle().zoom()),
+            ],
+        )
+    }
+
     pub fn new(title: impl Into<String>, items: Vec<MenuItem>) -> Self {
         Menu {
             title: title.into(),
@@ -57,16 +74,20 @@ impl Menu {
 }
 
 #[derive(Clone)]
+pub enum MenuAction {
+    Typed(Rc<dyn Any>),
+    Callback(Rc<dyn Fn()>),
+}
+
+#[derive(Clone)]
 pub enum MenuItem {
-    Action {
+    Item {
         title: String,
-        action: Rc<dyn Any>,
+        action: MenuAction,
         shortcut: Option<Chord>,
-    },
-    Callback {
-        title: String,
-        on_select: Rc<dyn Fn()>,
-        shortcut: Option<Chord>,
+        id: Option<String>,
+        icon: Option<Path>,
+        destructive: bool,
     },
     Separator,
     Submenu(Menu),
@@ -74,40 +95,89 @@ pub enum MenuItem {
 
 impl MenuItem {
     pub fn action<T: Any>(title: impl Into<String>, action: T) -> Self {
-        MenuItem::Action {
-            title: title.into(),
-            action: Rc::new(action),
-            shortcut: None,
-        }
+        MenuItem::new(title, MenuAction::Typed(Rc::new(action)))
     }
 
     pub fn callback(title: impl Into<String>, on_select: impl Fn() + 'static) -> Self {
-        MenuItem::Callback {
+        MenuItem::new(title, MenuAction::Callback(Rc::new(on_select)))
+    }
+
+    fn new(title: impl Into<String>, action: MenuAction) -> Self {
+        MenuItem::Item {
             title: title.into(),
-            on_select: Rc::new(on_select),
+            action,
             shortcut: None,
+            id: None,
+            icon: None,
+            destructive: false,
         }
     }
 
     pub fn activate(&self) {
         match self {
-            MenuItem::Callback { on_select, .. } => on_select(),
-            MenuItem::Action { .. } => window_handle().dispatch_menu_item(self.clone()),
+            MenuItem::Item {
+                action: MenuAction::Callback(on_select),
+                ..
+            } => on_select(),
+            MenuItem::Item { .. } => window_handle().dispatch_menu_item(self.clone()),
             MenuItem::Separator | MenuItem::Submenu(_) => {}
         }
     }
 
-    pub fn shortcut(mut self, chord: Chord) -> Self {
-        if let MenuItem::Action { shortcut, .. } | MenuItem::Callback { shortcut, .. } = &mut self {
-            *shortcut = Some(chord);
+    #[track_caller]
+    pub fn shortcut(mut self, chord: impl IntoChord) -> Self {
+        if let MenuItem::Item { shortcut, .. } = &mut self {
+            *shortcut = Some(chord.into_chord());
         }
         self
     }
 
+    pub fn id(mut self, value: impl Into<String>) -> Self {
+        if let MenuItem::Item { id, .. } = &mut self {
+            *id = Some(value.into());
+        }
+        self
+    }
+
+    pub fn icon(mut self, value: impl Into<Path>) -> Self {
+        if let MenuItem::Item { icon, .. } = &mut self {
+            *icon = Some(value.into());
+        }
+        self
+    }
+
+    pub fn destructive(mut self) -> Self {
+        if let MenuItem::Item { destructive, .. } = &mut self {
+            *destructive = true;
+        }
+        self
+    }
+
+    pub fn shortcuts(menus: &[Menu]) -> Vec<(Chord, MenuItem)> {
+        menus
+            .iter()
+            .flat_map(|menu| &menu.items)
+            .flat_map(|item| match item {
+                MenuItem::Item {
+                    shortcut: Some(chord),
+                    ..
+                } => vec![(chord.clone(), item.clone())],
+                MenuItem::Submenu(menu) => MenuItem::shortcuts(from_ref(menu)),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
     pub fn dispatch(&self, ui: &mut Ui) -> bool {
         match self {
-            MenuItem::Action { action, .. } => ui.dispatch_action_ref(&**action),
-            MenuItem::Callback { on_select, .. } => {
+            MenuItem::Item {
+                action: MenuAction::Typed(action),
+                ..
+            } => ui.dispatch_action_ref(&**action),
+            MenuItem::Item {
+                action: MenuAction::Callback(on_select),
+                ..
+            } => {
                 ui.invoke(|| on_select());
                 true
             }
@@ -167,6 +237,7 @@ pub enum WindowCommand {
     StartDrag,
     StartResize(ResizeEdge),
     Quit,
+    Focus,
     Menu(MenuItem),
 }
 
@@ -180,6 +251,7 @@ pub struct WindowHandle {
     pub(crate) commands: Signal<UnboundedSender<Sent>>,
     pub(crate) title: Signal<String>,
     pub(crate) appearance: Signal<Appearance>,
+    pub(crate) focused: Signal<bool>,
 }
 
 pub fn window_handle() -> WindowHandle {
@@ -188,6 +260,10 @@ pub fn window_handle() -> WindowHandle {
 
 pub fn appearance() -> ReadSignal<Appearance> {
     window_handle().appearance.read_only()
+}
+
+pub fn window_focused() -> ReadSignal<bool> {
+    window_handle().focused.read_only()
 }
 
 impl WindowHandle {
@@ -234,6 +310,15 @@ impl WindowHandle {
     pub fn quit(self) {
         self.send(WindowCommand::Quit);
     }
+
+    pub fn focus(self) {
+        self.send(WindowCommand::Focus);
+    }
+
+    pub fn dispatch_action<T: Any>(self, action: T) {
+        self.dispatch_menu_item(MenuItem::action(String::new(), action));
+    }
+
     pub fn dispatch_menu_item(self, item: MenuItem) {
         self.send(WindowCommand::Menu(item));
     }

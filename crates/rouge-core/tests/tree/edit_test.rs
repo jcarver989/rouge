@@ -1,5 +1,5 @@
 use rouge_core::testing::{TestResult, TestUi, TestUiBuilder};
-use rouge_core::{ImeEvent, Key, KeyEvent, Modifiers, Point, PointerButton, Styled, div, editable};
+use rouge_core::{ImeEvent, Key, KeyEvent, Point, PointerButton, Styled, div, editable};
 use rouge_reactive::{Runtime, Signal, signal};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -13,13 +13,13 @@ fn typing_inserts_at_the_caret_and_updates_the_signal() {
     assert_eq!(value.get(), "", "keys go nowhere without focus");
     ui.click(Point::new(20.0, 15.0));
     ui.type_text("helo");
-    ui.press(Key::ArrowLeft);
+    ui.press("left");
     ui.type_text("l");
     assert_eq!(value.get(), "hello");
-    ui.press(Key::Backspace);
-    ui.press(Key::Delete);
+    ui.press("backspace");
+    ui.press("delete");
     assert_eq!(value.get(), "hel");
-    ui.press(Key::Enter);
+    ui.press("enter");
     assert_eq!(
         value.get(),
         "hel",
@@ -33,22 +33,21 @@ fn selection_keys_replace_delete_and_move_by_word() {
     let value = signal("one two three".to_owned());
     let mut ui = field(value);
     ui.click(Point::new(20.0, 15.0));
-    ui.press_with(Key::character("a"), Modifiers::COMMAND);
+    ui.press("cmd-a");
     ui.type_text("x");
     assert_eq!(value.get(), "x", "typing replaces the selection");
 
     value.set("one two three".into());
     ui.advance(0.0);
-    ui.press(Key::End);
-    let word = if cfg!(target_os = "macos") {
-        Modifiers::ALT
+    ui.press("end");
+    ui.press(if cfg!(target_os = "macos") {
+        "alt-backspace"
     } else {
-        Modifiers::CTRL
-    };
-    ui.press_with(Key::Backspace, word);
+        "ctrl-backspace"
+    });
     assert_eq!(value.get(), "one two ");
-    ui.press_with(Key::Home, Modifiers::SHIFT);
-    ui.press(Key::Backspace);
+    ui.press("shift-home");
+    ui.press("backspace");
     assert_eq!(value.get(), "");
 }
 
@@ -87,7 +86,7 @@ fn ime_composition_is_replaced_until_committed() -> TestResult {
     let mut ui = field(value);
     ui.click(Point::new(20.0, 15.0));
     assert!(ui.accepts_text());
-    ui.press(Key::End);
+    ui.press("end");
     ui.ime(ImeEvent::Preedit {
         text: "ni".into(),
         cursor: Some((2, 2)),
@@ -130,15 +129,15 @@ fn multiline_takes_newlines_and_moves_between_lines() {
     });
     ui.click(Point::new(20.0, 10.0));
     ui.type_text("ab");
-    ui.press(Key::Enter);
+    ui.press("enter");
     ui.type_text("cd");
     assert_eq!(value.get(), "ab\ncd");
-    ui.press(Key::ArrowUp);
+    ui.press("up");
     ui.type_text("!");
     assert_eq!(value.get(), "ab!\ncd");
     ui.advance(0.0);
     ui.key_down(KeyEvent::new(Key::Tab));
-    ui.press(Key::Enter);
+    ui.press("enter");
     assert_eq!(
         *submitted.borrow(),
         ["go"],
@@ -160,10 +159,10 @@ fn composition_enter_does_not_submit_and_host_blur_cancels_preedit() {
         text: "に".into(),
         cursor: None,
     });
-    ui.press(Key::Enter);
+    ui.press("enter");
     assert!(submitted.borrow().is_empty());
     ui.ime(ImeEvent::Commit("日本".into()));
-    ui.press(Key::Enter);
+    ui.press("enter");
     assert_eq!(&*submitted.borrow(), &["日本"]);
     ui.ime(ImeEvent::Preedit {
         text: "語".into(),
@@ -172,6 +171,23 @@ fn composition_enter_does_not_submit_and_host_blur_cancels_preedit() {
     ui.clear_focus();
     assert_eq!(value.get(), "日本");
     assert!(!ui.accepts_text());
+}
+
+#[test]
+fn an_empty_preedit_outside_a_composition_leaves_the_selected_text_alone() {
+    let _rt = Runtime::new().enter();
+    let value = signal("keep me".to_owned());
+    let selection = signal(0..0);
+    let mut ui = TestUiBuilder::default()
+        .build(|| editable(value).selection(selection).w_full().autofocus());
+    ui.press("cmd-a");
+    for _ in 0..3 {
+        ui.ime(ImeEvent::Preedit {
+            text: String::new(),
+            cursor: None,
+        });
+        assert_eq!((value.get().as_str(), selection.get()), ("keep me", 0..7));
+    }
 }
 
 fn field(value: Signal<String>) -> TestUi {

@@ -10,6 +10,7 @@ rust-version.workspace = true
 rouge-macros.workspace = true
 rouge-reactive.workspace = true
 rouge-render.workspace = true
+rouge-theme.workspace = true
 tracing.workspace = true
 rouge-text.workspace = true
 taffy.workspace = true

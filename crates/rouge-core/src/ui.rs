@@ -1,25 +1,27 @@
 use crate::clipboard::{Clipboard, ClipboardTarget};
 use crate::event::{
-    Chord, Cursor, DragEvent, DragPhase, ImeEvent, Key, KeyEvent, Modifiers, PointerButton,
-    PointerEvent, ScrollEvent,
+    Chord, Cursor, DragEvent, DragPhase, FileDropEvent, FileDropPhase, ImeEvent, IntoChord, Key,
+    KeyEvent, Modifiers, PointerButton, PointerEvent, ScrollEvent,
 };
 use crate::keymap::Keymap;
 use crate::motion::UiContext;
 use crate::style::Dirty;
-use crate::theme::{Palette, provide_theme};
+use crate::theme::Theme;
 use crate::tree::edit::EditOp;
 use crate::tree::{ActionHandler, ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
 use crate::view::{BuildCx, Patch, Patches, View, send};
-use crate::window::{Appearance, Sent, WindowCommand, WindowHandle};
+use crate::window::{Appearance, Menu, MenuItem, Sent, WindowCommand, WindowHandle};
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, effect, expect_context, poll_tasks, provide_context, signal,
     stats,
 };
 use rouge_render::{Atlas, Compositor, Item, LayerCommand, LayerId, Point, Rect, Size};
 use rouge_text::TextSystem;
+use rouge_theme::UiPalette;
 use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -90,6 +92,7 @@ pub struct Ui {
     started: Instant,
     clock: Option<f64>,
     last_tick: Option<f64>,
+    shortcuts: Vec<(Chord, MenuItem)>,
 }
 
 pub struct Frame<'a> {
@@ -120,6 +123,7 @@ impl Ui {
                 commands: signal(commands),
                 title: signal(String::new()),
                 appearance: signal(Appearance::Light),
+                focused: signal(true),
             };
             provide_context(window_handle);
             let size = signal(size);
@@ -135,7 +139,7 @@ impl Ui {
             let keymap = Keymap(signal(Vec::new()));
             provide_context(keymap);
             tree.observe_keymap(keymap);
-            provide_theme(Palette::default());
+            Theme::provide(UiPalette::light());
             let mut cx = BuildCx {
                 tree: &mut tree,
                 patches: &patches,
@@ -166,24 +170,29 @@ impl Ui {
             started: Instant::now(),
             clock: None,
             last_tick: None,
+            shortcuts: Vec::new(),
         }
     }
 
     fn tree(&mut self) -> &mut Tree {
         poll_tasks();
         self.scope.run(|| {
-            batch(|| {
-                while let Ok(patch) = self.pending.try_recv() {
-                    let text = &mut self.text_system;
-                    patch(&mut BuildCx {
-                        tree: &mut self.tree,
-                        patches: &self.patches,
-                        text,
-                    });
-                    self.tree.stats.patches += 1;
-                }
-                self.tree.settle_focus();
-            });
+            let mut drain = || {
+                batch(|| {
+                    while let Ok(patch) = self.pending.try_recv() {
+                        let text = &mut self.text_system;
+                        patch(&mut BuildCx {
+                            tree: &mut self.tree,
+                            patches: &self.patches,
+                            text,
+                        });
+                        self.tree.stats.patches += 1;
+                    }
+                    self.tree.settle_focus();
+                });
+                !self.pending.is_empty()
+            };
+            while drain() {}
         });
         self.tree.publish_bindings();
         if let Some(commit) = self.tree.take_commit() {
@@ -194,6 +203,10 @@ impl Ui {
 
     pub fn set_appearance(&mut self, appearance: Appearance) {
         self.window_handle.appearance.set_if_changed(appearance);
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        self.window_handle.focused.set_if_changed(focused);
     }
 
     pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
@@ -305,6 +318,11 @@ impl Ui {
     pub fn bounds_of_all(&mut self, name: &str) -> Vec<Rect> {
         self.tree();
         self.tree.bounds_of_all(&self.compositor, name)
+    }
+
+    pub fn text_of(&mut self, name: &str) -> Option<String> {
+        self.tree();
+        self.tree.text_of(name)
     }
 
     pub fn text_index_at(&mut self, position: Point) -> Option<usize> {
@@ -459,6 +477,14 @@ impl Ui {
         if let Some((action, handlers)) = self.tree.binding(&path, &event) {
             return self.invoke_action(&*action, &handlers);
         }
+        let shortcut = self
+            .shortcuts
+            .iter()
+            .find(|(chord, _)| chord.matches(&event))
+            .map(|(_, item)| item.clone());
+        if let Some(item) = shortcut {
+            return item.dispatch(self);
+        }
         let Modifiers {
             shift,
             ctrl,
@@ -466,6 +492,29 @@ impl Ui {
             meta,
         } = event.modifiers;
         event.key == Key::Tab && !(ctrl || alt || meta) && self.tree().focus_next(shift)
+    }
+
+    pub fn bind_menus(&mut self, menus: &[Menu]) {
+        self.shortcuts = MenuItem::shortcuts(menus);
+    }
+
+    #[track_caller]
+    pub fn press_chord(&mut self, chord: impl IntoChord) -> bool {
+        let Chord { key, modifiers } = chord.into_chord();
+        let typed = match &key {
+            Key::Character(text) if modifiers.shift => Some(text.to_uppercase()),
+            Key::Character(text) => Some(text.clone()),
+            Key::Space => Some(" ".to_owned()),
+            _ => None,
+        };
+        let mut down = KeyEvent::new(key.clone()).with_modifiers(modifiers);
+        if let Some(typed) = typed.filter(|_| !(modifiers.ctrl || modifiers.alt || modifiers.meta))
+        {
+            down = down.with_text(typed);
+        }
+        let handled = self.key_down(down);
+        self.key_up(KeyEvent::new(key).with_modifiers(modifiers));
+        handled
     }
 
     pub fn key_up(&mut self, event: KeyEvent) -> bool {
@@ -554,6 +603,21 @@ impl Ui {
         self.tree.release_capture();
         self.tree.release();
         self.pointer_left();
+    }
+
+    pub fn file_drop(&mut self, phase: FileDropPhase, paths: Vec<PathBuf>) -> bool {
+        let position = self.pointer;
+        let tree = self.tree();
+        let path = match position {
+            Some(_) => tree.hover_path().to_vec(),
+            None => tree.focus_path(),
+        };
+        let listeners = tree.listeners(&path, On::FileDrop);
+        let event = FileDropEvent::new(phase, position, paths);
+        self.scope
+            .run(|| emit(&listeners, Event::FileDrop(&event), |_| {}));
+        self.tree();
+        event.stopped.get()
     }
 
     pub fn scroll(&mut self, delta: Point) -> bool {

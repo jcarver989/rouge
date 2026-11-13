@@ -1,7 +1,7 @@
 use crate::canvas::TextHit;
 use crate::event::{
-    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, Key, KeyEvent, Modifiers, PointerEvent,
-    ScrollEvent,
+    Cursor, DragEvent, FileDropEvent, FocusEvent, ImeEvent, IntoChord, Key, KeyEvent, Modifiers,
+    PointerEvent, ScrollEvent,
 };
 use crate::focus::FocusHandle;
 use crate::length::Length;
@@ -10,15 +10,15 @@ use crate::prop::{IntoEffect, IntoProp, Prop};
 use crate::scroll::{Scrollable, scroll_key};
 use crate::style::{Dirty, Style, Styled};
 use crate::styled;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use crate::tree::{ElementId, ElementSpec, Event, Interaction, On, TextData, Tree};
 use rouge_macros::component;
-use rouge_reactive::{Signal, effect};
+use rouge_reactive::{Scope, Signal, effect, run_in};
 use rouge_render::{
     BlendMode, Color, Effect, EffectInstance, EffectSlot, Keyframes, LayerCommand, LayerProp,
     LayoutTransition, Mask, Rect, ScrollLinked, ScrollState, Size, Timing,
 };
-use rouge_text::{SpanStyle, TextAlign, TextStyle, TextSystem};
+use rouge_text::{SpanStyle, TextAlign, TextStyle, TextSystem, WrapIndent};
 use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::ops::Range;
@@ -150,10 +150,12 @@ macro_rules! variants {
 
 macro_rules! listeners {
     ($($name:ident: $on:ident($event:ident: $arg:ty);)*) => {$(
+        #[track_caller]
         pub fn $name(mut self, f: impl Fn($arg) + 'static) -> Self {
+            let owner = Scope::current();
             let listener = move |event: &Event<'_>| {
                 if let Event::$event(event) = *event {
-                    f(event);
+                    run_in(owner, || f(event));
                 }
             };
             self.spec.listeners[On::$on as usize].push(Rc::new(listener));
@@ -173,6 +175,11 @@ macro_rules! layer_props {
 impl Div {
     pub fn preserve_focus(mut self) -> Self {
         self.spec.preserve_focus = true;
+        self
+    }
+
+    pub fn root_host(mut self) -> Self {
+        self.spec.root_host = true;
         self
     }
 
@@ -336,6 +343,7 @@ impl Div {
         on_ime: Ime(Ime: &ImeEvent);
         on_drag: Drag(Drag: &DragEvent);
         on_scroll: Scroll(Scroll: &ScrollEvent);
+        on_file_drop: FileDrop(FileDrop: &FileDropEvent);
     }
 
     layer_props! {
@@ -455,15 +463,20 @@ impl Div {
         self
     }
 
-    pub fn bind_key<T: Any>(mut self, chord: Chord, action: T) -> Self {
-        self.spec.bindings.push((chord, Rc::new(action)));
+    #[track_caller]
+    pub fn bind_key<T: Any>(mut self, chord: impl IntoChord, action: T) -> Self {
+        self.spec
+            .bindings
+            .push((chord.into_chord(), Rc::new(action)));
         self
     }
 
+    #[track_caller]
     pub fn on_action<T: Any>(mut self, f: impl Fn(&T) + 'static) -> Self {
+        let owner = Scope::current();
         let handler = move |action: &dyn Any| {
             if let Some(action) = action.downcast_ref::<T>() {
-                f(action);
+                run_in(owner, || f(action));
             }
         };
         self.spec
@@ -545,12 +558,11 @@ impl Styled for Div {
 impl View for Div {
     fn build(mut self, cx: &mut BuildCx<'_>) -> ElementId {
         if let Some(text) = &mut self.spec.text {
-            let theme = use_theme();
+            let theme = Theme::current();
             text.theme = Some(theme);
             self = self.bind_prop(
                 Prop::Dynamic(Box::new(move || {
                     theme.text.get();
-                    theme.text_size.get();
                 })),
                 |_, ()| {},
                 |tree, id, ()| tree.refresh_text_subtree(id),
@@ -611,8 +623,9 @@ impl Text {
         mut self,
         f: impl Fn(Option<usize>, Modifiers) + 'static,
     ) -> Self {
+        let owner = Scope::current();
         self.0.spec.text_hover = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
-            f(hit.map(|hit| hit.index), modifiers);
+            run_in(owner, || f(hit.map(|hit| hit.index), modifiers));
         }));
         self
     }
@@ -625,13 +638,14 @@ impl Text {
         mut self,
         f: impl Fn(Option<usize>, Modifiers) + 'static,
     ) -> Self {
+        let owner = Scope::current();
         self.0.spec.text_click = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
-            f(hit.map(|hit| hit.index), modifiers);
+            run_in(owner, || f(hit.map(|hit| hit.index), modifiers));
         }));
         self
     }
 
-    fn text_prop<T: 'static, U>(
+    pub(crate) fn text_prop<T: 'static, U>(
         self,
         value: impl IntoProp<T, U>,
         dirty: Dirty,
@@ -671,6 +685,10 @@ impl Text {
 
     pub fn no_wrap(self) -> Self {
         self.text_style(|style| style.wrap = false)
+    }
+
+    pub fn wrap_indent(self, indent: WrapIndent) -> Self {
+        self.text_style(|style| style.wrap_indent = indent)
     }
 
     pub fn tab_size(self, columns: u8) -> Self {

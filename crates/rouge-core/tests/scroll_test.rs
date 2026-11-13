@@ -1073,6 +1073,41 @@ fn scrolling_within_mounted_rows_does_no_layout_paint_or_building() {
     assert!(quiet > 30, "{quiet} quiet frames");
 }
 
+#[test]
+fn a_following_list_sticks_to_its_end_until_scrolled_up_and_resumes_at_the_bottom() {
+    let _rt = Runtime::new().enter();
+    let (count, following) = (signal(20_usize), signal(true));
+    let mut ui = TestUiBuilder::default().size(100.0, 100.0).build(move || {
+        virtual_list(
+            move || count.get(),
+            20.0,
+            |index| div().test_id(format!("row-{index}")).h(20.0),
+        )
+        .follow_end(following)
+        .size_full()
+    });
+    let bottom = |ui: &mut TestUi, index: usize| {
+        ui.advance(0.0);
+        ui.bounds_of(&format!("row-{index}"))
+            .map(|bounds| bounds.max().y)
+    };
+    assert_eq!(bottom(&mut ui, 19), Some(100.0));
+    count.set(25);
+    assert_eq!(bottom(&mut ui, 24), Some(100.0), "new rows stay in view");
+    ui.pointer_moved(Point::new(50.0, 50.0));
+    ui.scroll(Point::new(0.0, 60.0));
+    ui.advance(0.0);
+    assert!(!following.get(), "scrolling up stops following");
+    count.set(30);
+    assert_ne!(
+        bottom(&mut ui, 29),
+        Some(100.0),
+        "and new rows no longer pull the list"
+    );
+    following.set(true);
+    assert_eq!(bottom(&mut ui, 29), Some(100.0));
+}
+
 fn scroller(state: Signal<ScrollState>) -> TestUi {
     TestUi::canvas(move || {
         let container = scroll().w(100.0).h(100.0).scroll_state(state);

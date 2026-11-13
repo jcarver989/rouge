@@ -1,4 +1,8 @@
-use rouge_core::{Chord, ChordError, Key, KeyEvent, Modifiers};
+use rouge_core::testing::TestUiBuilder;
+use rouge_core::{
+    Chord, ChordError, FileDropEvent, FileDropPhase, Key, KeyEvent, Modifiers, Point, Styled, div,
+};
+use rouge_reactive::{Runtime, signal};
 
 #[test]
 fn chords_parse_modifiers_named_keys_and_characters() -> Result<(), ChordError> {
@@ -47,4 +51,36 @@ fn chords_match_events_by_key_and_modifiers() -> Result<(), ChordError> {
     assert!(tab.matches(&KeyEvent::new(Key::Tab).with_modifiers(Modifiers::SHIFT)));
     assert_eq!(Key::character(" "), Key::Space);
     Ok(())
+}
+
+#[test]
+fn dropped_files_reach_the_element_under_the_pointer_or_else_the_focus_path() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, dropped) = TestUiBuilder::default().size(200.0, 100.0).build_with(|| {
+        let dropped = signal(Vec::new());
+        let target = div()
+            .size(100.0)
+            .focusable()
+            .on_file_drop(move |event: &FileDropEvent| {
+                dropped.update(|all| all.push((event.phase, event.paths.clone())));
+                event.stop_propagation();
+            });
+        (div().size_full().child(target), dropped)
+    });
+    ui.click(Point::new(50.0, 50.0));
+    ui.pointer_left();
+    assert!(ui.file_drop(FileDropPhase::Hover, vec!["unknown.png".into()]));
+    ui.pointer_moved(Point::new(150.0, 50.0));
+    assert!(!ui.file_drop(FileDropPhase::Drop, vec!["outside.png".into()]));
+    ui.pointer_moved(Point::new(50.0, 50.0));
+    assert!(ui.file_drop(FileDropPhase::Drop, vec!["photo.png".into()]));
+    assert!(ui.file_drop(FileDropPhase::Leave, Vec::new()));
+    assert_eq!(
+        dropped.get(),
+        vec![
+            (FileDropPhase::Hover, vec!["unknown.png".into()]),
+            (FileDropPhase::Drop, vec!["photo.png".into()]),
+            (FileDropPhase::Leave, Vec::new()),
+        ]
+    );
 }

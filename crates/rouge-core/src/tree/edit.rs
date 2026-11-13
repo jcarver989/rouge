@@ -1,5 +1,5 @@
 use super::{ElementId, TextData, Tree};
-use crate::clipboard::{Clipboard, ClipboardTarget};
+use crate::clipboard::{Clipboard, ClipboardMedia, ClipboardTarget};
 use crate::style::Dirty;
 use rouge_reactive::{Signal, batch};
 use rouge_render::{Color, Compositor, Point, Rect, Size};
@@ -10,6 +10,7 @@ use std::rc::Rc;
 pub(crate) const CARET_WIDTH: f32 = 1.5;
 
 pub(crate) type TextHandler = Rc<dyn Fn(&str)>;
+pub(crate) type MediaHandler = Rc<dyn Fn(ClipboardMedia)>;
 
 pub(crate) enum EditOp {
     Insert(String),
@@ -60,6 +61,7 @@ pub(crate) struct EditState {
     pub selection_color: Color,
     pub caret_color: Option<Color>,
     pub on_change: Option<TextHandler>,
+    pub on_paste: Option<MediaHandler>,
     pub(super) selection: TextSelection,
     pub(super) stale: bool,
     pub(super) compose: Option<Range<usize>>,
@@ -82,6 +84,7 @@ impl Default for EditState {
             selection_color: Color::new(0.2, 0.45, 1.0, 0.35),
             caret_color: None,
             on_change: None,
+            on_paste: None,
             selection: TextSelection::default(),
             stale: true,
             compose: None,
@@ -265,7 +268,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
             replace = Some((range, sanitize(text, edit.multiline)));
         }
         EditOp::Erase(movement) => replace = Some((erase(movement), String::new())),
-        EditOp::Compose { text, cursor: _ } if text.is_empty() && edit.composition.is_some() => {
+        EditOp::Compose { text, cursor: _ } if text.is_empty() => {
             if let Some(snapshot) = edit.composition.take() {
                 *content = snapshot.content;
                 *layout = None;
@@ -373,6 +376,13 @@ impl Tree {
         else {
             return;
         };
+        let on_paste = text.edit.as_ref().and_then(|edit| edit.on_paste.clone());
+        if let (EditOp::Paste, Some(on_paste)) = (&op, on_paste)
+            && let Some(media) = self.clipboard.read_media()
+        {
+            batch(|| on_paste(media));
+            return;
+        }
         if let EditOp::Select(range) = &op {
             let layout = ensure(
                 &mut text.layout,

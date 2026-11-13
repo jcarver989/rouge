@@ -1,8 +1,8 @@
 use rouge_core::testing::{BLUE, GREEN, RED, TestResult, TestUiBuilder, WHITE, assert_near};
 use rouge_core::{
-    Color, Path, Point, Rect, Styled, TextHit, TextRun, TextStyle, canvas, div, icon,
+    Canvas, Color, Path, Point, Rect, Styled, TextHit, TextRun, TextStyle, canvas, div, icon,
 };
-use rouge_reactive::{Runtime, signal};
+use rouge_reactive::{Runtime, Signal, signal};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -204,4 +204,144 @@ fn right_aligned_runs_end_at_their_origin() -> TestResult {
     assert!((number.max().x - 100.0).abs() < 0.01, "{number:?}");
     assert!(number.origin.x < 100.0);
     Ok(())
+}
+
+#[test]
+fn measured_canvas_sizes_to_its_wrapped_text_and_rewraps_on_resize() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let width = signal(400.0_f32);
+    let content = signal(PARAGRAPH.to_owned());
+    let clicked = Rc::new(RefCell::new(Vec::new()));
+    let pressed = clicked.clone();
+    let mut ui = TestUiBuilder::default().size(500.0, 600.0).build(move || {
+        div().flex().col().w(move || width.get()).child(
+            wrapped(content, signal(Color::BLACK))
+                .on_text_click(move |hit, _| pressed.borrow_mut().push(hit))
+                .element(|canvas| canvas.test_id("wrapped"))
+                .w_full(),
+        )
+    });
+    ui.advance(0.0);
+    let wide = ui.bounds_of("wrapped").ok_or("canvas")?;
+    let body = ui.bounds_of("body").ok_or("named run")?;
+    assert!(body.size.height > LINE * 1.5, "the text wraps: {body:?}");
+    assert!(
+        (wide.size.height - body.size.height - PADDING).abs() <= 1.0,
+        "{wide:?} {body:?}"
+    );
+
+    width.set(200.0);
+    ui.advance(0.0);
+    let narrow = ui.bounds_of("wrapped").ok_or("canvas")?;
+    let body = ui.bounds_of("body").ok_or("named run")?;
+    assert!(
+        narrow.size.height > wide.size.height,
+        "{wide:?} -> {narrow:?}"
+    );
+    assert!(
+        (narrow.size.height - body.size.height - PADDING).abs() <= 1.0,
+        "{narrow:?} {body:?}"
+    );
+    assert!(body.size.width <= 200.0);
+
+    ui.click(Point::new(2.0, body.max().y - LINE / 2.0));
+    let hit = clicked
+        .borrow()
+        .last()
+        .copied()
+        .flatten()
+        .ok_or("no hit on the last line")?;
+    assert!(hit.index > PARAGRAPH.len() / 2, "{hit:?}");
+    Ok(())
+}
+
+#[test]
+fn measured_canvas_relayouts_only_when_its_height_changes() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let content = signal("short".to_owned());
+    let color = signal(Color::BLACK);
+    let mut ui = TestUiBuilder::default().size(300.0, 600.0).build(move || {
+        div().w(300.0).child(
+            wrapped(content, color)
+                .element(|canvas| canvas.test_id("wrapped"))
+                .w_full(),
+        )
+    });
+    ui.advance(0.0);
+    let single = ui.bounds_of("wrapped").ok_or("canvas")?;
+
+    let (layouts, _) = ui.passes();
+    color.set(Color::RED);
+    ui.advance(0.0);
+    content.set("tiny".to_owned());
+    ui.advance(0.0);
+    assert_eq!(ui.passes().0, layouts, "same-height redraws need no layout");
+
+    content.set(PARAGRAPH.to_owned());
+    ui.advance(0.0);
+    let grown = ui.bounds_of("wrapped").ok_or("canvas")?;
+    assert!(ui.passes().0 > layouts);
+    assert!(
+        grown.size.height > single.size.height * 2.0,
+        "{single:?} -> {grown:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn wrapped_runs_mark_each_continuation_line_at_the_given_edge() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().size(300.0, 400.0).build(|| {
+        canvas(|painter| {
+            let width = painter.size().width;
+            painter.run(
+                TextRun::new(
+                    PARAGRAPH,
+                    Point::new(40.0, 0.0),
+                    &TextStyle::default(),
+                    Color::BLACK,
+                )
+                .wrap(width - 40.0)
+                .continuation("+", 30.0, Color::RED)
+                .name("body"),
+            );
+        })
+        .w(240.0)
+        .h(300.0)
+    });
+    ui.advance(0.0);
+    let body = ui.bounds_of("body").ok_or("named run")?;
+    let lines = (body.size.height / LINE).round() as usize;
+    let marks = ui.bounds_of_all("body:continuation");
+    assert!(lines > 2, "{body:?}");
+    assert_eq!(marks.len(), lines - 1);
+    for (index, mark) in marks.iter().enumerate() {
+        assert!((mark.max().x - 30.0).abs() < 0.5, "{mark:?}");
+        assert!(
+            (mark.origin.y - LINE * (index + 1) as f32).abs() < 1.0,
+            "{mark:?}"
+        );
+    }
+    Ok(())
+}
+
+const PARAGRAPH: &str = "Measured canvases wrap their text runs to the width they are given \
+    and report the wrapped height to layout, so rows can grow to fit long lines.";
+const LINE: f32 = 14.0 * 1.4;
+const PADDING: f32 = 4.0;
+
+fn wrapped(content: Signal<String>, color: Signal<Color>) -> Canvas {
+    let run = move |width: f32| {
+        TextRun::new(
+            content.get(),
+            Point::new(0.0, PADDING / 2.0),
+            &TextStyle::default(),
+            color.get(),
+        )
+        .wrap(width)
+        .tag(1)
+        .name("body")
+    };
+    canvas(move |painter| painter.run(run(painter.size().width)))
+        .measure(move |measure, width| measure.text(&run(width)).max().y + PADDING / 2.0)
 }

@@ -1,7 +1,8 @@
-use crate::canvas::{HitListener, PaintOp, ShapedRun, TextHit};
+use crate::canvas::{CanvasMeasure, HitListener, PaintOp, ShapedRun, TextHit};
 use crate::clipboard::{Clipboard, MemoryClipboard};
 use crate::event::{
-    Chord, Cursor, DragEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers, PointerEvent, ScrollEvent,
+    Chord, Cursor, DragEvent, FileDropEvent, FocusEvent, ImeEvent, KeyEvent, Modifiers,
+    PointerEvent, ScrollEvent,
 };
 use crate::image::{Fit, ImageSpec};
 use crate::keymap::Keymap;
@@ -20,6 +21,7 @@ use rouge_text::{GlyphKey, TextLayout, TextRect, TextStats, TextStyle, TextSyste
 use slotmap::{SlotMap, new_key_type};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::iter::from_fn;
 use std::mem::{replace, take};
 use std::ops::Sub;
 use std::rc::Rc;
@@ -44,7 +46,7 @@ pub(crate) type Listener = Rc<dyn Fn(&Event<'_>)>;
 pub(crate) type Listeners = Vec<(ElementId, Vec<Listener>)>;
 
 const STATES: usize = 5;
-const EVENTS: usize = 12;
+const EVENTS: usize = 13;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum On {
@@ -60,6 +62,7 @@ pub(crate) enum On {
     Ime,
     Drag,
     Scroll,
+    FileDrop,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +74,7 @@ pub(crate) enum Event<'a> {
     Ime(&'a ImeEvent),
     Drag(&'a DragEvent),
     Scroll(&'a ScrollEvent),
+    FileDrop(&'a FileDropEvent),
 }
 
 impl Event<'_> {
@@ -79,6 +83,7 @@ impl Event<'_> {
             Event::Pointer(event) => event.stopped.get(),
             Event::Key(event) => event.stopped.get(),
             Event::Scroll(event) => event.stopped.get(),
+            Event::FileDrop(event) => event.stopped.get(),
             _ => false,
         }
     }
@@ -119,6 +124,8 @@ pub(crate) struct TextData {
     pub color: Color,
     pub theme: Option<Theme>,
     pub edit: Option<EditState>,
+    pub placeholder: String,
+    pub placeholder_color: Color,
     layout: Option<TextLayout>,
     inset: Point,
     wrap_width: Option<f32>,
@@ -133,6 +140,8 @@ impl Default for TextData {
             color: Color::BLACK,
             theme: None,
             edit: None,
+            placeholder: String::new(),
+            placeholder_color: Color::TRANSPARENT,
             layout: None,
             inset: Point::ZERO,
             wrap_width: None,
@@ -238,12 +247,14 @@ pub(crate) struct ElementSpec {
     pub disabled: bool,
     pub pass_through: bool,
     pub preserve_focus: bool,
+    pub root_host: bool,
     pub cursor: Option<Cursor>,
     pub bounds_observer: Option<Signal<Rect>>,
     pub paint_region: Option<Signal<PaintRegion>>,
     pub size_observer: Option<Signal<Size>>,
     pub image: Option<ImageSpec>,
     pub canvas: Option<Vec<PaintOp>>,
+    pub canvas_measure: Option<CanvasMeasure>,
 }
 
 struct Element {
@@ -289,6 +300,10 @@ impl Element {
 
     fn hidden(&self) -> bool {
         self.effective_style().layout.display == Display::None
+    }
+
+    fn unseen(&self) -> bool {
+        self.hidden() || self.effective_style().invisible
     }
 
     fn clips_children(&self) -> bool {
@@ -657,7 +672,7 @@ impl Tree {
             .taffy
             .new_leaf(spec.style.resolved_layout(self.root_font_size))
             .expect("taffy node");
-        let is_text = spec.text.is_some() || spec.image.is_some();
+        let is_text = spec.text.is_some() || spec.image.is_some() || spec.canvas_measure.is_some();
         let own = spec
             .layer
             .take()
@@ -802,23 +817,39 @@ impl Tree {
             return;
         };
         let mut overflow = 0.0_f32;
+        let mut marks = Vec::new();
         for op in &mut ops {
             if let PaintOp::Text(shaped) = op {
-                let mut layout = system.layout(&shaped.run.content, &shaped.run.style);
-                layout.break_lines(None);
-                if shaped.run.right_aligned {
-                    shaped.run.origin.x -= layout.size().0;
-                    shaped.run.right_aligned = false;
-                }
-                shaped.layout = Some(Box::new(layout));
+                shape_run(shaped, system);
                 overflow = overflow.max(shaped.overflow());
+                marks.extend(shaped.continuation_marks());
             }
         }
+        ops.extend(marks.into_iter().map(|run| {
+            let mut shaped = ShapedRun { run, layout: None };
+            shape_run(&mut shaped, system);
+            PaintOp::Text(shaped)
+        }));
         if let Some(observer) = element.spec.overflow_observer.filter(|o| o.is_alive()) {
             observer.set_if_changed(overflow);
         }
         element.spec.canvas = Some(ops);
-        self.mark_element(id, Dirty::Paint);
+        let laid_out = element.bounds.size.width;
+        let resized = element.spec.canvas_measure.as_mut().is_some_and(|measure| {
+            let Some(last) = measure
+                .last
+                .or((laid_out > 0.0).then(|| Size::new(laid_out, f32::NAN)))
+            else {
+                return false;
+            };
+            let height = measure.height(system, last.width);
+            measure.last = Some(Size::new(last.width, height));
+            height != last.height
+        });
+        if resized {
+            self.taffy.mark_dirty(element.taffy).expect("taffy dirty");
+        }
+        self.mark_element(id, if resized { Dirty::Layout } else { Dirty::Paint });
     }
 
     pub(crate) fn set_text_content(&mut self, id: ElementId, content: String) {
@@ -848,13 +879,9 @@ impl Tree {
         if let Some(text) = &element.spec.text {
             let default = TextStyle::default();
             let mut style = text.style.clone();
-            style.size = properties.text_size.map_or_else(
-                || {
-                    text.theme
-                        .map_or(default.size, |theme| theme.text_size.get_untracked())
-                },
-                |size| size.resolve(self.root_font_size),
-            );
+            style.size = properties
+                .text_size
+                .map_or(default.size, |size| size.resolve(self.root_font_size));
             style.family = properties
                 .text_font
                 .clone()
@@ -913,6 +940,7 @@ impl Tree {
             Dirty::Layout
         } else if new.border_color != old.border_color
             || new.shadows != old.shadows
+            || new.invisible != old.invisible
             || new.background.is_some() != old.background.is_some()
             || element.layer(Slot::Own).is_none()
         {
@@ -1183,7 +1211,7 @@ impl Tree {
         let attached = chain.first() == Some(&self.root);
         let usable = chain.iter().all(|id| {
             let element = &self.elements[*id];
-            !element.hidden() && !element.disabled()
+            !element.unseen() && !element.disabled()
         });
         attached && usable && self.elements[id].spec.focus.is_some()
     }
@@ -1196,8 +1224,17 @@ impl Tree {
         if let Some(focused) = self.focused {
             self.chain(focused)
         } else {
-            let first = self.elements[self.root].children.first();
-            [self.root].into_iter().chain(first.copied()).collect()
+            let mut path = vec![self.root];
+            let mut view = self.elements[self.root].children.first().copied();
+            while let Some(id) = view.take() {
+                path.push(id);
+                let mut children = self.elements[id].children.iter().copied();
+                if let Some(host) = children.find(|id| self.elements[*id].spec.root_host) {
+                    path.push(host);
+                    view = self.elements[host].children.first().copied();
+                }
+            }
+            path
         }
     }
 
@@ -1488,13 +1525,9 @@ impl Tree {
     }
 
     pub(crate) fn bounds_of_all(&self, compositor: &Compositor, name: &str) -> Vec<Rect> {
-        let mut pending = vec![self.root];
         let mut bounds = Vec::new();
-        while let Some(id) = pending.pop() {
+        for id in self.visible_preorder(self.root) {
             let element = &self.elements[id];
-            if element.hidden() {
-                continue;
-            }
             if element.spec.test_id.as_deref() == Some(name) {
                 bounds.push(self.window_bounds(compositor, id));
             }
@@ -1507,9 +1540,34 @@ impl Tree {
                 let rect = rect.translate(element.bounds.origin);
                 bounds.push(self.to_window(compositor, id, rect));
             }
-            pending.extend(element.children.iter().rev());
         }
         bounds
+    }
+
+    pub(crate) fn text_of(&self, name: &str) -> Option<String> {
+        let found = self
+            .visible_preorder(self.root)
+            .find(|id| self.elements[*id].spec.test_id.as_deref() == Some(name))?;
+        Some(
+            self.visible_preorder(found)
+                .filter_map(|id| self.elements[id].spec.text.as_ref())
+                .map(|data| data.content.as_str())
+                .collect(),
+        )
+    }
+
+    fn visible_preorder(&self, from: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        let mut pending = vec![from];
+        from_fn(move || {
+            while let Some(id) = pending.pop() {
+                let element = &self.elements[id];
+                if !element.hidden() {
+                    pending.extend(element.children.iter().rev());
+                    return Some(id);
+                }
+            }
+            None
+        })
     }
 
     pub(crate) fn text_click(
@@ -1692,6 +1750,10 @@ impl Tree {
                             Some(ElementSpec {
                                 image: Some(image), ..
                             }) => measure_image(image, known),
+                            Some(ElementSpec {
+                                canvas_measure: Some(measure),
+                                ..
+                            }) => measure_canvas(measure, text_system, known, available),
                             _ => Extent::ZERO,
                         },
                     )
@@ -1848,7 +1910,7 @@ impl Tree {
         path: &mut Vec<ElementId>,
     ) -> bool {
         let element = &self.elements[id];
-        if element.hidden() {
+        if element.unseen() {
             return false;
         }
         let through = |slot: Slot, point: Point| {
@@ -2079,7 +2141,7 @@ fn paint(
     cx: &mut PaintCx<'_>,
 ) {
     let element = &elements[id];
-    if element.hidden() {
+    if element.unseen() {
         return;
     }
     let backing = target.root == (id, Slot::Own);
@@ -2344,6 +2406,11 @@ fn paint_text(
     let Some(edit) = &text.edit else {
         return paint_glyphs(layout, origin, clip, text.color, out, cx);
     };
+    if text.content.is_empty() && !text.placeholder.is_empty() {
+        let mut shaped = cx.text_system.layout(&text.placeholder, &text.style);
+        shaped.break_lines(text.wrap_width);
+        paint_glyphs(&shaped, origin, clip, text.placeholder_color, out, cx);
+    }
     clip = clip.intersect(
         &Rect {
             origin,
@@ -2478,6 +2545,38 @@ fn measure_text(
     Extent {
         width: known.width.unwrap_or(width.ceil()),
         height: known.height.unwrap_or(height.ceil()),
+    }
+}
+
+fn shape_run(shaped: &mut ShapedRun, system: &mut TextSystem) {
+    let mut layout = system.layout(&shaped.run.content, &shaped.run.style);
+    layout.break_lines(shaped.run.wrap);
+    if shaped.run.right_aligned {
+        shaped.run.origin.x -= layout.size().0;
+        shaped.run.right_aligned = false;
+    }
+    shaped.layout = Some(Box::new(layout));
+}
+
+fn measure_canvas(
+    measure: &mut CanvasMeasure,
+    system: &mut TextSystem,
+    known: Extent<Option<f32>>,
+    available: Extent<AvailableSpace>,
+) -> Extent<f32> {
+    let width = known.width.or(match available.width {
+        AvailableSpace::Definite(width) => Some(width),
+        AvailableSpace::MinContent | AvailableSpace::MaxContent => None,
+    });
+    let height = known
+        .height
+        .unwrap_or_else(|| measure.height(system, width.unwrap_or(f32::INFINITY)));
+    if let (Some(width), None) = (width, known.height) {
+        measure.last = Some(Size::new(width, height));
+    }
+    Extent {
+        width: known.width.unwrap_or(0.0),
+        height,
     }
 }
 

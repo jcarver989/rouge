@@ -1,6 +1,6 @@
 use rouge_core::testing::{TestResult, TestUiBuilder, assert_near};
 use rouge_core::{
-    Apply, Color, Interactions, Key, Length, Styled, Typography, div, px, root_font_size,
+    Apply, Color, Interactions, Length, Styled, Typography, div, px, root_font_size,
     set_design_unit, styles, text, theme, virtual_list,
 };
 use rouge_reactive::{Runtime, signal};
@@ -120,8 +120,8 @@ fn on_press_answers_clicks_and_keys_and_interactions_are_tracked() -> TestResult
     ui.hover_on("button")?;
     assert!(state.get_untracked().hovered);
     ui.click_on("button")?;
-    ui.press(Key::Enter);
-    ui.press(Key::Space);
+    ui.press("enter");
+    ui.press("space");
     assert_eq!((presses.get(), outer.get()), (3, 0), "presses are consumed");
     assert!(state.get_untracked().focused());
     Ok(())

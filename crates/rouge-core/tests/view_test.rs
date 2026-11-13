@@ -7,7 +7,7 @@ use rouge_core::{
     Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View, div, dynamic, rich_text,
     show, text,
 };
-use rouge_reactive::{Runtime, Signal, signal};
+use rouge_reactive::{Runtime, Signal, signal, stored};
 use rouge_render::headless::Image;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -864,6 +864,32 @@ fn a_vec_of_views_builds_its_items_as_siblings_without_a_wrapper() -> TestResult
         "every item leaves with the vec"
     );
     assert_eq!(ui.stats().elements, 4);
+    Ok(())
+}
+
+#[test]
+fn handlers_run_in_the_scope_that_registered_them() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let shown = signal(true);
+    let made = stored(Vec::new());
+    let mut ui = TestUi::new(move || {
+        let button = move || {
+            div()
+                .test_id("button")
+                .size(20.0)
+                .on_click(move |_| made.update(|made| made.push(signal(0))))
+        };
+        div().size_full().child(show(move || shown.get(), button))
+    });
+    ui.click_on("button")?;
+    let created = made.with(|made| made[0]);
+    assert!(created.is_alive());
+    shown.set(false);
+    ui.advance(0.0);
+    assert!(
+        !created.is_alive(),
+        "the signal was owned by the button's branch"
+    );
     Ok(())
 }
 

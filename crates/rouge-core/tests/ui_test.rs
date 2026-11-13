@@ -1,10 +1,45 @@
 use rouge_core::testing::{BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, counter};
 use rouge_core::{
-    Color, DragEvent, DragPhase, Modifiers, Point, PointerButton, Rect, Size, Styled, div, pct,
-    scroll, window_size,
+    Color, DragEvent, DragPhase, Menu, MenuItem, Modifiers, Point, PointerButton, Rect, Size,
+    Styled, div, dynamic, pct, scroll, show, text, window_size,
 };
-use rouge_reactive::{Runtime, Signal, background, effect, resource, signal, sleep, spawn};
+use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
 use std::time::Duration;
+
+#[test]
+fn a_hovered_view_replaced_while_patches_apply_gets_no_events_after_it_is_disposed() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (shown, version) = (signal(false), signal(0u32));
+    let mut ui = TestUi::new(move || {
+        let row = dynamic(move || {
+            let hovered = signal(false);
+            div()
+                .test_id(format!("row-{}", version.get()))
+                .w_full()
+                .h(50.0)
+                .on_hover(move |inside| hovered.set(inside))
+        });
+        let replacer = show(
+            move || shown.get(),
+            move || {
+                dynamic(move || {
+                    version.set(1);
+                    div()
+                })
+            },
+        );
+        div().size_full().flex().col().child(row).child(replacer)
+    });
+    let row = ui.center_of("row-0")?;
+    ui.pointer_moved(row);
+
+    shown.set(true);
+    ui.pointer_moved(Point::new(row.x, row.y + 100.0));
+
+    assert!(ui.bounds_of("row-0").is_none());
+    assert!(ui.bounds_of("row-1").is_some());
+    Ok(())
+}
 
 #[test]
 fn paint_only_change_does_not_relayout() -> TestResult {
@@ -507,7 +542,7 @@ fn spawned_tasks_and_resources_update_the_ui_when_polled() -> TestResult {
     let mut ui = TestUi::new(move || {
         let user = resource(
             move || id.get(),
-            |id| async move { background(async move { id * 10 }).await },
+            |id| async move { spawn_blocking(move || id * 10).await.unwrap_or(0) },
         );
         let width = signal(10.0f32);
         spawn(async move {
@@ -538,6 +573,47 @@ fn spawned_tasks_and_resources_update_the_ui_when_polled() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn text_of_reads_the_current_text_inside_a_test_id() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, name) = TestUiBuilder::default().build_with(|| {
+        let name = signal("Ada".to_owned());
+        let card = div()
+            .test_id("card")
+            .child(text("Hello, "))
+            .child(div().child(text(move || name.get())));
+        (div().child(card).child(text("outside")), name)
+    });
+    assert_eq!(ui.text_of("card").as_deref(), Some("Hello, Ada"));
+    name.set("Grace".to_owned());
+    assert_eq!(ui.text_of("card").as_deref(), Some("Hello, Grace"));
+    assert_eq!(ui.text_of("missing"), None);
+}
+
+#[test]
+fn menu_shortcuts_dispatch_when_no_element_binding_handles_the_chord() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (refreshed, quit) = (signal(0), signal(0));
+    let menus = vec![Menu::new(
+        "View",
+        vec![
+            MenuItem::action("Refresh", Refresh).shortcut("cmd-r"),
+            MenuItem::callback("Quit", move || quit.update(|quit| *quit += 1)).shortcut("cmd-q"),
+        ],
+    )];
+    let mut ui = TestUi::new(move || {
+        div()
+            .size_full()
+            .on_action(move |_: &Refresh| refreshed.update(|count| *count += 1))
+    });
+    ui.bind_menus(&menus);
+    assert!(ui.press("cmd-r"));
+    assert!(ui.press("cmd-q"));
+    assert!(!ui.press("cmd-x"));
+    assert_eq!((refreshed.get(), quit.get()), (1, 1));
+    Ok(())
+}
+
 fn clicker() -> (TestUi, Signal<u32>) {
     let clicks = signal(0u32);
     let ui = TestUi::new(|| {
@@ -552,3 +628,6 @@ fn clicker() -> (TestUi, Signal<u32>) {
     });
     (ui, clicks)
 }
+
+#[derive(Clone, Copy)]
+struct Refresh;

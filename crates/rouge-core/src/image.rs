@@ -5,7 +5,7 @@ use crate::view::{BuildCx, Div, Patches, View, div, send};
 use image::{ImageError as DecodeError, load_from_memory};
 use rouge_macros::component;
 #[cfg(not(target_arch = "wasm32"))]
-use rouge_reactive::background;
+use rouge_reactive::{TaskError, spawn_blocking};
 use rouge_reactive::{effect, spawn};
 use rouge_render::{ImageData, ImageError};
 #[cfg(not(target_arch = "wasm32"))]
@@ -72,6 +72,9 @@ pub enum ImageLoadError {
     Decode(#[from] DecodeError),
     #[error(transparent)]
     Data(#[from] ImageError),
+    #[cfg(not(target_arch = "wasm32"))]
+    #[error("image loading did not complete")]
+    Task(#[from] TaskError),
 }
 
 pub fn decode_image(bytes: &[u8]) -> Result<ImageData, ImageLoadError> {
@@ -150,7 +153,9 @@ fn show(patches: &Patches, id: ElementId, source: ImageSource, on_error: Option<
     let patches = patches.clone();
     spawn(async move {
         #[cfg(not(target_arch = "wasm32"))]
-        let loaded = background(async move { load(source) }).await;
+        let loaded = spawn_blocking(move || load(source))
+            .await
+            .unwrap_or_else(|error| Err(error.into()));
         #[cfg(target_arch = "wasm32")]
         let loaded = load(source);
         match loaded {

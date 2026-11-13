@@ -1,7 +1,8 @@
-use crate::length::{Length, Radii};
+use crate::length::{Length, Radii, design_unit};
 use crate::prop::{IntoProp, Prop};
 use crate::tree::Variant;
 use rouge_render::{Color, Point};
+use rouge_text::TextStyle;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::rc::Rc;
@@ -105,6 +106,7 @@ pub struct Style {
     pub border_color: Color,
     pub corner_radii: Radii,
     pub shadows: Vec<BoxShadow>,
+    pub invisible: bool,
 }
 
 impl Default for Style {
@@ -126,6 +128,7 @@ impl Default for Style {
             border_color: Color::BLACK,
             corner_radii: Radii::default(),
             shadows: Vec::new(),
+            invisible: false,
         }
     }
 }
@@ -138,6 +141,7 @@ impl Style {
             && self.border_color == other.border_color
             && self.corner_radii == other.corner_radii
             && self.shadows == other.shadows
+            && self.invisible == other.invisible
     }
 
     pub(crate) fn resolved_layout(&self, root: f32) -> Layout {
@@ -342,6 +346,8 @@ pub trait Styled: Sized {
         absolute |s| s.layout.position = Position::Absolute;
         relative |s| s.layout.position = Position::Relative;
         overflow_hidden |s| s.layout.overflow = Axes { x: Overflow::Hidden, y: Overflow::Hidden };
+        invisible |s| s.invisible = true;
+        visible |s| s.invisible = false;
         w_full |s| LayoutLength::Width.set(s, Length::Fraction(1.0));
         h_full |s| LayoutLength::Height.set(s, Length::Fraction(1.0));
         size_full |s| {
@@ -438,6 +444,21 @@ pub struct Typography {
     pub size: f32,
     pub line_height: f32,
     pub weight: f32,
+}
+
+impl Typography {
+    pub fn text_style(self, root_font_size: f32) -> TextStyle {
+        let scale = design_unit().map_or(1.0, |unit| root_font_size / unit);
+        let defaults = TextStyle::default();
+        TextStyle {
+            family: self.font.map_or(defaults.family.clone(), Into::into),
+            size: self.size * scale,
+            weight: self.weight,
+            line_height: self.line_height,
+            wrap: false,
+            ..defaults
+        }
+    }
 }
 
 #[macro_export]

@@ -114,6 +114,35 @@ fn key_events_bubble_from_the_focused_element_and_can_be_stopped() {
 }
 
 #[test]
+fn with_nothing_focused_keys_and_actions_reach_the_root_view_inside_its_hosts()
+-> Result<(), ChordError> {
+    let _rt = Runtime::new().enter();
+    let escape: Chord = "escape".parse()?;
+    let (closed, close) = counter();
+    let (pressed, press) = counter();
+    let mut ui = TestUi::new(move || {
+        let root = div()
+            .size_full()
+            .bind_key(escape, Close)
+            .on_action(move |_: &Close| close())
+            .on_key_down(move |_| press());
+        let hosted = div()
+            .size_full()
+            .child(div().h(20.0))
+            .child(div().root_host().child(root));
+        div()
+            .size_full()
+            .child(div().h(20.0))
+            .child(div().root_host().child(hosted))
+    });
+    assert!(!ui.has_focus());
+    assert!(ui.key_down(KeyEvent::new(Key::Escape)));
+    assert!(ui.dispatch_action(Close));
+    assert_eq!((closed.get(), pressed.get()), (2, 1));
+    Ok(())
+}
+
+#[test]
 fn key_bindings_dispatch_typed_actions_along_the_focus_path() -> Result<(), ChordError> {
     let _rt = Runtime::new().enter();
     let (cmd_s, escape): (Chord, Chord) = ("cmd-s".parse()?, "escape".parse()?);

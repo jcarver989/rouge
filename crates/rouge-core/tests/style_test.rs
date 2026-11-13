@@ -1,6 +1,6 @@
 use rouge_core::testing::{BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder};
 use rouge_core::{
-    Color, Palette, Rect, Styled, Theme, div, dynamic, editable, rich_text, text, use_theme,
+    Color, Palette, Point, Rect, Styled, Theme, UiPalette, div, dynamic, editable, rich_text, text,
 };
 use rouge_reactive::{Runtime, provide_context, signal};
 
@@ -138,16 +138,13 @@ fn inherited_size_changes_relayout_but_an_override_shields_the_leaf() -> TestRes
 #[test]
 fn unstyled_leaves_fall_back_to_the_reactive_theme() -> TestResult {
     let _rt = Runtime::new().enter();
-    let (mut ui, theme) = TestUiBuilder::default().build_with(|| (text("MMMM"), use_theme()));
+    let (mut ui, theme) = TestUiBuilder::default().build_with(|| (text("MMMM"), Theme::current()));
     let before = ui.stats();
     theme.text.set(Color::RED);
     ui.advance(0.0);
     assert_eq!(ui.stats().layouts, before.layouts);
     let image = ui.render()?;
     assert!((0..20).any(|y| (0..70).any(|x| image.pixel(x, y) == RED)));
-    theme.text_size.set(30.0);
-    ui.advance(0.0);
-    assert_eq!(ui.bounds(1.0, 1.0)?.size.height, 42.0);
     Ok(())
 }
 
@@ -177,7 +174,7 @@ fn named_hover_groups_restyle_nested_elements_and_revert_on_leave() -> TestResul
             )
     });
     assert_eq!(ui.pixel(15, 15)?, RED);
-    ui.pointer_moved(rouge_core::Point::new(70.0, 70.0));
+    ui.pointer_moved(Point::new(70.0, 70.0));
     ui.advance(0.0);
     assert_eq!(ui.pixel(15, 15)?, BLUE);
     ui.pointer_left();
@@ -190,13 +187,11 @@ fn named_hover_groups_restyle_nested_elements_and_revert_on_leave() -> TestResul
 fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_overrides() -> TestResult {
     let _rt = Runtime::new().enter();
     let (mut ui, (outer, inner)) = TestUiBuilder::default().size(300.0, 200.0).build_with(|| {
-        let outer = use_theme();
-        outer.text_size.set(10.0);
+        let outer = Theme::current();
         outer.text.set(Color::RED);
         let inner = Theme::new(Palette {
-            text_size: 30.0,
             text: Color::GREEN,
-            ..Palette::light()
+            ..UiPalette::light().map(Color::from)
         });
         let view = div()
             .test_id("parent")
@@ -216,14 +211,12 @@ fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_override
             }));
         (view, (outer, inner))
     });
-    for (id, height) in [("outer", 10.0), ("inner", 30.0), ("override", 14.0)] {
-        assert_eq!(ui.bounds_of(id).ok_or("missing text")?.size.height, height);
+    for id in ["outer", "inner", "override"] {
+        assert_eq!(ui.bounds_of(id).ok_or("missing text")?.size.height, 14.0);
     }
-    outer.text_size.set(12.0);
-    inner.text_size.set(32.0);
+    outer.text.set(Color::GREEN);
+    inner.text.set(Color::RED);
     ui.advance(0.0);
-    assert_eq!(ui.bounds_of("outer").ok_or("outer")?.size.height, 12.0);
-    assert_eq!(ui.bounds_of("inner").ok_or("inner")?.size.height, 32.0);
     ui.hover_on("parent")?;
     for id in ["outer", "inner"] {
         let bounds = ui.bounds_of(id).ok_or("text")?;
@@ -240,7 +233,38 @@ fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_override
     );
     ui.pointer_left();
     ui.advance(0.0);
-    assert_eq!(ui.bounds_of("outer").ok_or("outer")?.size.height, 12.0);
-    assert_eq!(ui.bounds_of("inner").ok_or("inner")?.size.height, 32.0);
+    assert_eq!(ui.bounds_of("outer").ok_or("outer")?.size.height, 14.0);
+    assert_eq!(ui.bounds_of("inner").ok_or("inner")?.size.height, 14.0);
+    Ok(())
+}
+
+#[test]
+fn invisible_elements_keep_their_space_but_paint_and_hit_nothing_until_revealed() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let clicks = signal(0);
+    let mut ui = TestUi::canvas(move || {
+        div().group("row").test_id("row").size(80.0).flex().child(
+            div()
+                .test_id("action")
+                .size(20.0)
+                .bg(Color::RED)
+                .invisible()
+                .group_hover("row", Styled::visible)
+                .on_click(move |_| clicks.update(|clicks| *clicks += 1)),
+        )
+    });
+    assert_eq!(ui.pixel(10, 10)?, rouge_core::testing::WHITE);
+    assert_eq!(
+        ui.bounds_of("action").map(|bounds| bounds.size.width),
+        Some(20.0)
+    );
+    ui.pointer_moved(rouge_core::Point::new(60.0, 60.0));
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, RED);
+    ui.click_on("action")?;
+    assert_eq!(clicks.get(), 1);
+    ui.pointer_left();
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, rouge_core::testing::WHITE);
     Ok(())
 }
