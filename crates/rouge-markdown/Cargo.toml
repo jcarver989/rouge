@@ -1,0 +1,15 @@
+[package]
+name = "rouge-markdown"
+description = "Renderer-neutral Markdown documents, append streams and syntax-highlighted code blocks for Rouge apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pulldown-cmark = "0.13.0"
+rouge-syntax.workspace = true
+serde.workspace = true
