@@ -1,3 +1,4 @@
+use linkify::{LinkFinder, LinkKind};
 use pulldown_cmark::{
     Alignment, BrokenLink, CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Options, Parser,
     Tag,
@@ -642,10 +643,10 @@ pub(crate) fn parse_block(
     let kind = match event {
         Event::Start(Tag::Heading { level, .. }) => MarkdownBlockKind::Heading {
             level: heading_level(*level),
-            content: inline_children(&node.children),
+            content: inline_content(&node.children),
         },
         Event::Start(Tag::Paragraph) => MarkdownBlockKind::Paragraph {
-            content: inline_children(&node.children),
+            content: inline_content(&node.children),
         },
         Event::Start(Tag::BlockQuote(_)) => MarkdownBlockKind::BlockQuote {
             blocks: node
@@ -709,7 +710,7 @@ fn parse_item(
     Some(MarkdownListItem {
         depth,
         source: source_range(node.range.clone(), line_index),
-        content,
+        content: autolink(content),
         blocks,
         target_id: None,
     })
@@ -931,7 +932,7 @@ fn table_row(node: &Node, header: bool, line_index: &LineIndex) -> Option<Markdo
             }
             Some(MarkdownTableCell {
                 source: source_range(cell.range.clone(), line_index),
-                content: inline_children(&cell.children),
+                content: inline_content(&cell.children),
             })
         })
         .collect();
@@ -963,6 +964,70 @@ fn inline_children(children: &[Node]) -> Vec<MarkdownInline> {
         }
     }
     inlines
+}
+
+fn inline_content(children: &[Node]) -> Vec<MarkdownInline> {
+    autolink(inline_children(children))
+}
+
+fn autolink(inlines: Vec<MarkdownInline>) -> Vec<MarkdownInline> {
+    let mut merged: Vec<MarkdownInline> = Vec::with_capacity(inlines.len());
+    for inline in inlines {
+        match (inline, merged.last_mut()) {
+            (MarkdownInline::Text(text), Some(MarkdownInline::Text(previous))) => {
+                previous.push_str(&text);
+            }
+            (MarkdownInline::Strong(children), _) => {
+                merged.push(MarkdownInline::Strong(autolink(children)));
+            }
+            (MarkdownInline::Emphasis(children), _) => {
+                merged.push(MarkdownInline::Emphasis(autolink(children)));
+            }
+            (MarkdownInline::Strikethrough(children), _) => {
+                merged.push(MarkdownInline::Strikethrough(autolink(children)));
+            }
+            (inline, _) => merged.push(inline),
+        }
+    }
+    merged.into_iter().flat_map(split_links).collect()
+}
+
+fn split_links(inline: MarkdownInline) -> Vec<MarkdownInline> {
+    let MarkdownInline::Text(text) = inline else {
+        return vec![inline];
+    };
+    let mut output = Vec::new();
+    let mut rest = 0;
+    for link in LinkFinder::new().links(&text) {
+        let destination = match link.kind() {
+            LinkKind::Url
+                if ["https://", "http://"]
+                    .iter()
+                    .any(|scheme| link.as_str().starts_with(scheme)) =>
+            {
+                link.as_str().to_owned()
+            }
+            LinkKind::Email => format!("mailto:{}", link.as_str()),
+            _ => continue,
+        };
+        if link.start() > rest {
+            output.push(MarkdownInline::Text(text[rest..link.start()].to_owned()));
+        }
+        let content = vec![MarkdownInline::Text(link.as_str().to_owned())];
+        output.push(MarkdownInline::Link {
+            destination,
+            title: None,
+            content,
+        });
+        rest = link.end();
+    }
+    if output.is_empty() {
+        return vec![MarkdownInline::Text(text)];
+    }
+    if rest < text.len() {
+        output.push(MarkdownInline::Text(text[rest..].to_owned()));
+    }
+    output
 }
 
 fn inline_node(node: &Node) -> Option<MarkdownInline> {
