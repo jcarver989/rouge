@@ -2,7 +2,7 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::TestResult;
-use rouge_core::{Key, Styled, div};
+use rouge_core::{Styled, div};
 use rouge_reactive::{Runtime, on_cleanup, signal};
 use rouge_widgets::tabs;
 use std::cell::RefCell;
@@ -39,9 +39,9 @@ fn tabs_mount_only_the_selected_panel_and_switch_by_click_and_arrows() -> TestRe
         ["mount general", "dispose general", "mount advanced"]
     );
     assert_eq!(ui.bounds(5.0, strip + 20.0)?.size.width, 60.0);
-    ui.press(Key::ArrowRight);
+    ui.press("right");
     assert_eq!(selected.get(), 0, "arrows wrap around");
-    ui.press(Key::ArrowLeft);
+    ui.press("left");
     assert_eq!(selected.get(), 1);
     Ok(())
 }

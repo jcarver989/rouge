@@ -1,42 +1,37 @@
-use rouge_core::{BoxShadow, Color, Div, IntoProp, Key, KeyEvent, Style, Styled, Text, Theme};
-use rouge_reactive::Signal;
-
-pub(crate) fn ring(theme: Theme) -> impl Fn(Style) -> Style + 'static {
-    move |style| {
-        style.shadow(BoxShadow::new(0.0, 0.0, 0.0, theme.focus_ring.get_untracked()).spread(2.5))
-    }
-}
-
-pub(crate) fn over(base: Color, top: Color) -> Color {
-    let mix = |base: f32, top_channel: f32| top_channel * top.a + base * (1.0 - top.a);
-    Color::new(
-        mix(base.r, top.r),
-        mix(base.g, top.g),
-        mix(base.b, top.b),
-        base.a.max(top.a),
-    )
-}
-
-pub(crate) fn tint(base: Signal<Color>, top: Signal<Color>) -> impl Fn(Style) -> Style + 'static {
-    move |style| style.bg(over(base.get_untracked(), top.get_untracked()))
-}
-
-pub(crate) fn either<T: Clone + 'static>(
-    on: impl Fn() -> bool + 'static,
-    yes: Signal<T>,
-    no: Signal<T>,
-) -> impl Fn() -> T + 'static {
-    move || if on() { yes.get() } else { no.get() }
-}
-
-pub(crate) fn themed<U>(label: Text, color: impl IntoProp<Color, U>, theme: Theme) -> Text {
-    label.color(color).text_size(theme.text_size)
-}
+use rouge_core::{Cursor, Div, Interactions, Key, KeyEvent, Styled, Theme};
+use rouge_reactive::Callback;
+use rouge_theme::InteractionState;
 
 pub(crate) fn activates(event: &KeyEvent) -> bool {
     matches!(event.key, Key::Enter | Key::Space)
 }
 
-pub(crate) fn pressable(root: Div, theme: Theme, on_press: impl Fn() + 'static) -> Div {
-    root.focus_visible(ring(theme)).on_press(on_press)
+pub(crate) fn interaction(state: Interactions, enabled: bool) -> InteractionState {
+    if !enabled {
+        InteractionState::Disabled
+    } else if state.hovered {
+        InteractionState::Hovered
+    } else {
+        InteractionState::Rest
+    }
+}
+
+pub(crate) fn focus_ring(root: Div) -> Div {
+    let accent = Theme::current().accent;
+    root.focus_visible(move |style| style.border_color(accent.get_untracked()))
+}
+
+pub(crate) fn pressable(root: Div, keyboard: bool, enabled: bool, action: Callback) -> Div {
+    let root = root.enabled(enabled);
+    if !enabled || !action.is_set() {
+        return root;
+    }
+    if keyboard {
+        root.on_press(move || action.call())
+    } else {
+        root.cursor(Cursor::Pointer).on_click(move |event| {
+            event.stop_propagation();
+            action.call();
+        })
+    }
 }

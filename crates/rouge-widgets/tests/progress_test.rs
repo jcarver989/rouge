@@ -2,7 +2,7 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestResult, assert_near};
-use rouge_core::{Palette, Rect, Styled, div};
+use rouge_core::{Color, Rect, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::{progress, separator, spinner};
 
@@ -18,9 +18,9 @@ fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
             .col()
             .gap(10.0)
             .child(progress(done).w(200.0))
-            .child(separator())
+            .child(separator(false))
     });
-    let palette = Palette::light();
+    let palette = UiPalette::light().map(Color::from);
     let img = ui.render()?;
     assert_near(
         img.pixel(40, 13),
@@ -50,7 +50,7 @@ fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
 #[test]
 fn vertical_separators_span_the_height_of_a_row() -> TestResult {
     let _entered = Runtime::new().enter();
-    let mut ui = builder().build(|| div().size_full().flex().child(separator().vertical()));
+    let mut ui = builder().build(|| div().size_full().flex().child(separator(true)));
     assert_eq!(ui.bounds(0.5, 100.0)?, Rect::new(0.0, 0.0, 1.0, 200.0));
     Ok(())
 }

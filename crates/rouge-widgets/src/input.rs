@@ -1,117 +1,73 @@
-use crate::util::{either, themed};
-use rouge_core::component;
+use crate::tokens::RADIUS_CONTROL;
+use crate::typography::UiStyles;
 use rouge_core::{
-    BuildCx, Cursor, Div, Editable, ElementId, Styled, Theme, View, div, editable, focus_handle,
-    show, styled, text, use_theme,
+    Apply, Cursor, Div, Editable, Styled, Theme, component, div, editable, focus_handle, px, view,
 };
-use rouge_reactive::Signal;
+use rouge_reactive::{Callback, Signal};
 use std::ops::Range;
 
-pub struct TextInput {
-    root: Div,
-    field: Editable,
-    value: Signal<String>,
-    placeholder: Option<String>,
-    theme: Theme,
-}
-
 #[component]
 #[track_caller]
-pub fn text_input(value: Signal<String>) -> TextInput {
-    let theme = use_theme();
-    let root = div()
-        .flex()
-        .items_center()
-        .px(8.0)
-        .py(6.0)
-        .border(1.0)
-        .rounded(theme.radius)
-        .bg(theme.surface)
-        .overflow_hidden();
+#[allow(clippy::needless_pass_by_value)]
+pub fn text_input(
+    value: Signal<String>,
+    #[prop(into)] placeholder: Option<String>,
+    selection: Option<Signal<Range<usize>>>,
+    min_rows: Option<usize>,
+    max_rows: Option<usize>,
+    #[prop(default)] multiline: bool,
+    #[prop(default)] submit_on_enter: bool,
+    #[prop(default, into)] on_submit: Callback<(String,)>,
+) -> Div {
+    let theme = Theme::current();
+    let focus = focus_handle();
     let field = editable(value)
         .w_full()
+        .body()
         .color(theme.text)
-        .text_size(theme.text_size)
-        .caret_color(theme.accent.get_untracked());
-    TextInput {
-        root,
-        field,
-        value,
-        placeholder: None,
-        theme,
+        .caret_color(theme.accent.get_untracked())
+        .track_focus(focus)
+        .submit_on_enter(submit_on_enter)
+        .on_submit(move |text| on_submit.call(text.to_owned()))
+        .when(multiline, Editable::multiline)
+        .when_some(placeholder, |field, hint| {
+            field.placeholder(hint, theme.text_muted)
+        })
+        .when_some(selection, Editable::selection)
+        .when_some(min_rows, Editable::min_rows)
+        .when_some(max_rows, Editable::max_rows);
+    let fixed = min_rows.is_some() || max_rows.is_some();
+    view! {
+        <div flex px=8.0 py=6.0 border=px(1.0) rounded=RADIUS_CONTROL bg=theme.elevated overflow_hidden
+             cursor=Cursor::Text when:items_start=multiline when:items_center={!multiline}
+             when:min_h=(multiline && !fixed, 72.0)
+             border_color={move || if focus.is_focused() { theme.accent.get() } else { theme.border.get() }}
+             on_pointer_down={move |_| focus.focus()}>
+            {div().flex_1().min_w(0.0).child(field)}
+        </div>
     }
 }
 
 #[component]
 #[track_caller]
-pub fn text_area(value: Signal<String>) -> TextInput {
-    let input = text_input(value);
-    TextInput {
-        root: input.root.items_start().min_h(72.0),
-        field: input.field.multiline(),
-        ..input
-    }
-}
-
-impl TextInput {
-    pub fn selection(mut self, selection: Signal<Range<usize>>) -> Self {
-        self.field = self.field.selection(selection);
-        self
-    }
-    pub fn min_rows(mut self, rows: usize) -> Self {
-        self.root = self.root.min_h(0.0);
-        self.field = self.field.min_rows(rows);
-        self
-    }
-    pub fn max_rows(mut self, rows: usize) -> Self {
-        self.root = self.root.min_h(0.0);
-        self.field = self.field.max_rows(rows);
-        self
-    }
-    pub fn submit_on_enter(mut self, submit: bool) -> Self {
-        self.field = self.field.submit_on_enter(submit);
-        self
-    }
-
-    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
-        self.placeholder = Some(placeholder.into());
-        self
-    }
-
-    pub fn on_submit(mut self, f: impl Fn(&str) + 'static) -> Self {
-        self.field = self.field.on_submit(f);
-        self
-    }
-}
-
-styled!(TextInput => root);
-
-impl View for TextInput {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let (value, theme) = (self.value, self.theme);
-        let focus = focus_handle();
-        let hint = self.placeholder.map(|placeholder| {
-            let hint = move || {
-                let hint = themed(text(placeholder.clone()), theme.text_muted, theme).no_wrap();
-                div().absolute().inset(0.0).pass_through().child(hint)
-            };
-            show(move || value.with(String::is_empty), hint)
-        });
-        let slot = div()
-            .relative()
-            .flex_1()
-            .min_w(0.0)
-            .child(self.field.track_focus(focus))
-            .children(hint);
-        self.root
-            .cursor(Cursor::Text)
-            .border_color(either(
-                move || focus.is_focused(),
-                theme.accent,
-                theme.border,
-            ))
-            .on_pointer_down(move |_| focus.focus())
-            .child(slot)
-            .build(cx)
-    }
+#[allow(clippy::needless_pass_by_value)]
+pub fn text_area(
+    value: Signal<String>,
+    #[prop(into)] placeholder: Option<String>,
+    selection: Option<Signal<Range<usize>>>,
+    min_rows: Option<usize>,
+    max_rows: Option<usize>,
+    #[prop(default)] submit_on_enter: bool,
+    #[prop(default, into)] on_submit: Callback<(String,)>,
+) -> Div {
+    text_input(
+        value,
+        placeholder,
+        selection,
+        min_rows,
+        max_rows,
+        true,
+        submit_on_enter,
+        on_submit,
+    )
 }

@@ -2,9 +2,9 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestResult, TestUi, counter};
-use rouge_core::{Key, Point, Rect, Styled, div, show};
+use rouge_core::{Color, Point, Rect, Styled, div, show};
 use rouge_reactive::{Runtime, signal};
-use rouge_widgets::{Hint, Placement, button, popover, tooltip};
+use rouge_widgets::{Hint, Material, Placement, popover, tooltip};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -15,10 +15,10 @@ fn popover_opens_below_its_trigger_and_closes_on_outside_click_or_escape() -> Te
     let (inside, hit_inside) = counter();
     let (behind, hit_behind) = counter();
     let mut ui = builder().build(move || {
-        let trigger = button("Open")
+        let trigger = div()
             .w(60.0)
             .h(24.0)
-            .on_click(move || open.update(|open| *open = !*open));
+            .on_press(move || open.update(|open| *open = !*open));
         let content = move || {
             let hit_inside = hit_inside.clone();
             div().size(80.0).on_click(move |_| hit_inside())
@@ -57,12 +57,12 @@ fn popover_opens_below_its_trigger_and_closes_on_outside_click_or_escape() -> Te
     ui.run(0.6);
     assert!(open.get());
     assert!(
-        ui.press(Key::Escape),
+        ui.press("escape"),
         "focus moved into the popover, so escape reaches it"
     );
     assert!(!open.get());
     ui.run(0.6);
-    assert!(ui.press(Key::Enter), "focus returned to the trigger");
+    assert!(ui.press("enter"), "focus returned to the trigger");
     assert!(open.get());
     Ok(())
 }
@@ -91,6 +91,28 @@ fn popover_can_be_placed_on_any_side_of_its_trigger() -> TestResult {
             "{placement:?} sits a gap away from the trigger"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn a_glass_popover_lets_what_is_behind_it_show_through_its_panel() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let panel = |material: Material| {
+        let open = signal(true);
+        let mut ui = builder().build(move || {
+            let trigger = div().w(60.0).h(20.0);
+            div()
+                .size_full()
+                .bg(Color::RED)
+                .child(popover(open, trigger, || div().size(80.0)).material(material))
+        });
+        ui.run(0.6);
+        ui.pixel(40, 60)
+    };
+    let [red, green, ..] = panel(Material::Floating)?;
+    assert_eq!(red, green, "a solid surface hides the page");
+    let [red, green, ..] = panel(Material::Glass)?;
+    assert!(red > green, "glass shows the page through its tint");
     Ok(())
 }
 
@@ -131,10 +153,7 @@ fn any_view_takes_an_optional_hint_and_none_adds_nothing() {
     let mut ui = builder().build(|| {
         let hinted = div().w(60.0).h(20.0).hint(Some("Helpful"));
         let plain = div().w(60.0).h(20.0).hint(None::<&str>);
-        div()
-            .size_full()
-            .child(hinted.delay(Duration::from_millis(20)))
-            .child(plain.delay(Duration::from_millis(20)))
+        div().size_full().child(hinted).child(plain)
     });
     let shown = |ui: &mut TestUi| ui.stats().elements;
     let idle = shown(&mut ui);

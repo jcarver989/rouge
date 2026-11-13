@@ -1,7 +1,9 @@
+use crate::material::{Material, MaterialExt};
+use crate::typography::UiStyles;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, BoxShadow, BuildCx, Div, ElementId, Key, PointerEvent, Pose, Rect, Styled, Theme,
-    Tween, View, div, overlay, px, show, styled, text, use_theme, window_size,
+    AnyView, BuildCx, Div, ElementId, Key, PointerEvent, Pose, Rect, Styled, Theme, Tween, View,
+    div, overlay, px, show, styled, text, window_size,
 };
 use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -66,42 +68,28 @@ impl Placement {
     }
 }
 
-pub(crate) fn panel(theme: Theme) -> Div {
-    div()
-        .bg(theme.surface)
-        .border(1.0)
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .shadow(BoxShadow::md())
+pub(crate) fn dismissable(layer: Div, panel: Div, dismiss: impl Fn() + Clone + 'static) -> Div {
+    let escape = dismiss.clone();
+    layer
+        .absolute()
+        .inset(0.0)
+        .on_pointer_down(move |_| dismiss())
+        .on_key_down(move |event| {
+            if event.key == Key::Escape {
+                escape();
+                event.stop_propagation();
+            }
+        })
+        .child(panel.on_pointer_down(PointerEvent::stop_propagation))
 }
 
 pub(crate) fn popup(
     open: Signal<bool>,
-    dismissable: bool,
     backdrop: impl Fn(Div) -> Div + 'static,
     content: impl Fn() -> Div + 'static,
 ) -> impl View {
-    let dismiss = move || {
-        if dismissable {
-            open.set(false);
-        }
-    };
     overlay(move || {
-        let layer = move || {
-            let panel = content()
-                .on_pointer_down(PointerEvent::stop_propagation)
-                .on_key_down(move |event| {
-                    if event.key == Key::Escape {
-                        dismiss();
-                        event.stop_propagation();
-                    }
-                });
-            let layer = div()
-                .absolute()
-                .inset(0.0)
-                .on_pointer_down(move |_| dismiss());
-            backdrop(layer).child(panel)
-        };
+        let layer = move || dismissable(backdrop(div()), content(), move || open.set(false));
         show(move || open.get(), layer)
             .enter(Pose::new().opacity(0.0), Tween::ms(120.0))
             .exit(Pose::new().opacity(0.0), Tween::ms(100.0))
@@ -119,6 +107,7 @@ pub struct Popover {
     anchor: Signal<Rect>,
     content: Box<dyn Fn() -> AnyView>,
     placement: Placement,
+    material: Material,
 }
 
 #[component]
@@ -134,6 +123,7 @@ pub fn popover<T: View, U: View>(
         anchor,
         content: Box::new(move || children().into_any()),
         placement: Placement::default(),
+        material: Material::default(),
     }
 }
 
@@ -142,55 +132,65 @@ impl Popover {
         self.placement = placement;
         self
     }
+
+    pub fn material(mut self, material: Material) -> Self {
+        self.material = material;
+        self
+    }
 }
 
 styled!(Popover => root);
 
 impl View for Popover {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let theme = use_theme();
-        let (anchor, placement, content) = (self.anchor, self.placement, self.content);
+        let (anchor, placement, content, material) =
+            (self.anchor, self.placement, self.content, self.material);
         let body = move || {
-            let body = panel(theme).focus_scope().autofocus().child(content());
+            let body = div()
+                .material(material)
+                .focus_scope()
+                .autofocus()
+                .child(content());
             placement.place(body, anchor)
         };
         self.root
-            .child(popup(self.open, true, |layer| layer, body))
+            .child(popup(self.open, |layer| layer, body))
             .build(cx)
     }
 }
 
 pub struct Tooltip {
     root: Div,
-    label: Option<String>,
+    label: String,
     delay: Duration,
     anchor: Signal<Rect>,
 }
 
 #[component]
 pub fn tooltip(children: impl View, label: impl Into<String>) -> Tooltip {
-    children.hint(Some(label))
+    children.tooltip(label)
 }
 
 pub trait Hint: View + Sized {
     fn tooltip(self, label: impl Into<String>) -> Tooltip {
-        self.hint(Some(label))
-    }
-
-    fn hint(self, label: Option<impl Into<String>>) -> Tooltip;
-}
-
-impl<T: View> Hint for T {
-    fn hint(self, label: Option<impl Into<String>>) -> Tooltip {
         let (root, anchor) = anchored(self);
         Tooltip {
             root,
-            label: label.map(Into::into),
+            label: label.into(),
             delay: Duration::from_millis(500),
             anchor,
         }
     }
+
+    fn hint(self, label: Option<impl Into<String>>) -> AnyView {
+        match label {
+            Some(label) => self.tooltip(label).into_any(),
+            None => self.into_any(),
+        }
+    }
 }
+
+impl<T: View> Hint for T {}
 
 impl Tooltip {
     pub fn delay(mut self, delay: Duration) -> Self {
@@ -203,11 +203,8 @@ styled!(Tooltip => root);
 
 impl View for Tooltip {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let theme = use_theme();
-        let Some(label) = self.label else {
-            return self.root.build(cx);
-        };
-        let (delay, anchor) = (self.delay, self.anchor);
+        let theme = Theme::current();
+        let (label, delay, anchor) = (self.label, self.delay, self.anchor);
         let open = signal(false);
         let pending = Rc::new(Cell::new(None::<Task>));
         on_cleanup({
@@ -220,10 +217,7 @@ impl View for Tooltip {
         });
         let bubble = overlay(move || {
             let tip = move || {
-                let caption = text(label.clone())
-                    .color(theme.surface)
-                    .text_size(12.0)
-                    .no_wrap();
+                let caption = text(label.clone()).small().color(theme.elevated).no_wrap();
                 let bubble = div()
                     .pass_through()
                     .px(8.0)

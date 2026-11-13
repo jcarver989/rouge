@@ -1,7 +1,7 @@
 mod common;
 
 use common::builder;
-use rouge_core::{Key, Styled, div};
+use rouge_core::{Styled, div};
 use rouge_reactive::Runtime;
 use rouge_widgets::RovingFocus;
 
@@ -17,14 +17,14 @@ fn arrow_home_and_end_keys_move_focus_between_items_and_wrap() {
     let focused =
         |focus: &RovingFocus| (0..focus.len()).find(|index| focus.handle(*index).is_focused());
     assert_eq!(focused(&focus), Some(0), "the first item takes focus");
-    ui.press(Key::ArrowDown);
+    ui.press("down");
     assert_eq!(focused(&focus), Some(1));
-    ui.press(Key::End);
+    ui.press("end");
     assert_eq!(focused(&focus), Some(2));
-    ui.press(Key::ArrowDown);
+    ui.press("down");
     assert_eq!(focused(&focus), Some(0), "moving past the end wraps");
-    ui.press(Key::ArrowUp);
+    ui.press("up");
     assert_eq!(focused(&focus), Some(2));
-    ui.press(Key::Home);
+    ui.press("home");
     assert_eq!(focused(&focus), Some(0));
 }

@@ -1,7 +1,7 @@
 use rouge_core::component;
 use rouge_core::{
-    Div, IntoProp, PointerEvent, ResizeEdge, Styled, View, WindowHandle, div, text, use_theme,
-    window_handle,
+    Div, IntoProp, PointerButton, PointerEvent, ResizeEdge, Styled, Theme, View, WindowHandle, div,
+    text, window_handle,
 };
 
 #[component]
@@ -10,7 +10,7 @@ where
     T: View,
 {
     let window = window_handle();
-    let theme = use_theme();
+    let theme = Theme::current();
     let button = move |id, label, click: fn(WindowHandle)| {
         div()
             .test_id(id)
@@ -19,7 +19,7 @@ where
             .flex()
             .items_center()
             .justify_center()
-            .hover(move |s| s.bg(theme.hover.get_untracked()))
+            .hover(move |s| s.bg(theme.surface_hover.get_untracked()))
             .on_pointer_down(PointerEvent::stop_propagation)
             .on_click(move |_| click(window))
             .child(text(label))
@@ -31,14 +31,12 @@ where
         .flex_none()
         .flex()
         .items_center()
-        .bg(theme.surface)
+        .bg(theme.elevated)
         .text_color(theme.text)
-        .on_pointer_down(move |event| {
-            if event.click_count == 2 {
-                window.zoom();
-            } else {
-                window.start_drag();
-            }
+        .on_pointer_down(move |event| match (event.button, event.click_count) {
+            (PointerButton::Primary, 2) => window.zoom(),
+            (PointerButton::Primary, _) => window.start_drag(),
+            _ => {}
         })
         .child(div().flex_1().px(12.0).child(text(title)))
         .child(button("window-minimize", "−", WindowHandle::minimize))
@@ -47,6 +45,7 @@ where
     let mut chrome = div().relative().flex().col().size_full().child(bar).child(
         div()
             .test_id("window-content")
+            .root_host()
             .flex_1()
             .min_h(0.0)
             .child(children),

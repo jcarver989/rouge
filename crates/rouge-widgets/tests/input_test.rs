@@ -2,7 +2,7 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestError, TestResult, TestUi, assert_near};
-use rouge_core::{Key, Palette, Styled, div};
+use rouge_core::{Color, Styled, UiPalette, div, view};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::{text_area, text_input};
 use std::cell::RefCell;
@@ -10,26 +10,23 @@ use std::rc::Rc;
 
 #[test]
 fn text_area_forwards_selection_row_limits_and_shift_enter_submission() -> TestResult {
-    let _rt = Runtime::new().enter();
+    let _entered = Runtime::new().enter();
     let value = signal("first".to_owned());
     let selected = signal(0..0);
     let submitted = signal(String::new());
     let mut ui = builder().build(|| {
-        text_area(value)
-            .w(200.0)
-            .min_rows(1)
-            .max_rows(2)
-            .selection(selected)
-            .submit_on_enter(true)
-            .on_submit(move |text| submitted.set(text.to_owned()))
+        view! {
+            <text_area value min_rows=1 max_rows=2 selection=selected submit_on_enter w=200.0
+                       on_submit={move |text: String| submitted.set(text)}/>
+        }
     });
     ui.click_at(20.0, 20.0);
     selected.set(0..5);
     ui.advance(0.0);
     ui.type_text("two");
-    ui.press_with(Key::Enter, rouge_core::Modifiers::SHIFT);
+    ui.press("shift-enter");
     ui.type_text("lines");
-    ui.press(Key::Enter);
+    ui.press("enter");
     assert_eq!(submitted.get(), "two\nlines");
     assert_eq!(selected.get(), 9..9);
     Ok(())
@@ -42,13 +39,13 @@ fn text_input_edits_its_signal_shows_focus_and_submits() -> TestResult {
     let submitted = Rc::new(RefCell::new(Vec::new()));
     let sink = submitted.clone();
     let mut ui = builder().build(move || {
-        let field = text_input(value)
-            .placeholder("Name")
-            .w(200.0)
-            .on_submit(move |text| sink.borrow_mut().push(text.to_owned()));
+        let field = view! {
+            <text_input value placeholder="Name" w=200.0
+                        on_submit={move |text: String| sink.borrow_mut().push(text)}/>
+        };
         div().p(10.0).child(field)
     });
-    let palette = Palette::light();
+    let palette = UiPalette::light().map(Color::from);
     assert_near(
         ui.render()?.pixel(100, 10),
         palette.border.to_rgba8(),
@@ -62,7 +59,7 @@ fn text_input_edits_its_signal_shows_focus_and_submits() -> TestResult {
         "focused border",
     );
     ui.type_text("Ada");
-    ui.press(Key::Enter);
+    ui.press("enter");
     assert_eq!(value.get(), "Ada");
     assert_eq!(*submitted.borrow(), ["Ada"]);
     Ok(())
@@ -78,8 +75,8 @@ fn placeholder_is_shown_only_while_empty_and_text_area_takes_newlines() -> TestR
             .flex()
             .col()
             .gap(10.0)
-            .child(text_input(name).placeholder("MMMMMM").w(200.0))
-            .child(text_area(notes).w(200.0))
+            .child(view! { <text_input value=name placeholder="MMMMMM" w=200.0/> })
+            .child(view! { <text_area value=notes w=200.0/> })
     });
     let dark = |ui: &mut TestUi| -> Result<usize, TestError> {
         let img = ui.render()?;
@@ -94,7 +91,7 @@ fn placeholder_is_shown_only_while_empty_and_text_area_takes_newlines() -> TestR
     );
     ui.click_at(100.0, 90.0);
     ui.type_text("a");
-    ui.press(Key::Enter);
+    ui.press("enter");
     ui.type_text("b");
     assert_eq!(notes.get(), "a\nb");
     Ok(())

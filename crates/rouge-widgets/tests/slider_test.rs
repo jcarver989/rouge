@@ -1,7 +1,7 @@
 mod common;
 
 use common::builder;
-use rouge_core::{Key, Point, PointerButton, Styled, div};
+use rouge_core::{Point, PointerButton, Styled, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::slider;
 
@@ -12,7 +12,7 @@ fn slider_follows_the_pointer_snaps_to_steps_and_takes_arrow_keys() {
     let mut ui = builder().build(move || {
         div()
             .p(10.0)
-            .child(slider(value).range(0.0, 100.0).step(10.0).w(216.0))
+            .child(slider(value, Some((0.0, 100.0)), Some(10.0)).w(216.0))
     });
     ui.click_at(118.0, 18.0);
     assert_eq!(value.get(), 50.0, "the middle of the track");
@@ -29,11 +29,11 @@ fn slider_follows_the_pointer_snaps_to_steps_and_takes_arrow_keys() {
     assert_eq!(value.get(), 100.0, "clamped to the range");
     ui.pointer_moved(Point::new(30.0, 18.0));
     assert_eq!(value.get(), 100.0, "moves after release are ignored");
-    ui.press(Key::ArrowLeft);
-    ui.press(Key::ArrowLeft);
+    ui.press("left");
+    ui.press("left");
     assert_eq!(value.get(), 80.0);
-    ui.press(Key::Home);
+    ui.press("home");
     assert_eq!(value.get(), 0.0);
-    ui.press(Key::End);
+    ui.press("end");
     assert_eq!(value.get(), 100.0);
 }

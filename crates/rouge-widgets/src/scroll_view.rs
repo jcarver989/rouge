@@ -1,43 +1,25 @@
+use crate::tokens::{SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH};
 use rouge_core::component;
 use rouge_core::{
     BuildCx, Div, DragPhase, ElementId, Length, Point, PointerButton, PointerEvent, ScrollLinked,
-    ScrollState, Scrollable, Styled, View, div, px, root_font_size, show, styled, use_theme,
+    ScrollState, Scrollable, Styled, Theme, View, div, px, root_font_size, show, styled,
 };
 use rouge_reactive::{Signal, memo, signal};
 use std::cell::Cell;
 
-const MIN_THUMB: f32 = 24.0;
-
-#[derive(Clone, Copy)]
-pub struct ScrollbarStyle {
-    pub track: Length,
-    pub inset: Length,
-    pub thumb: Length,
-    pub min_thumb: Length,
-    pub radius: Length,
-}
-
-impl Default for ScrollbarStyle {
-    fn default() -> Self {
-        Self {
-            track: Length::design(10.0),
-            inset: Length::design(2.0),
-            thumb: Length::design(6.0),
-            min_thumb: Length::design(MIN_THUMB),
-            radius: Length::design(3.0),
-        }
-    }
-}
+const THUMB_INSET: f32 = 2.0;
+const THUMB_WIDTH: f32 = 8.0;
+const THUMB_RADIUS: f32 = 4.0;
 
 #[component]
-pub fn vertical_scrollbar(state: Signal<ScrollState>, style: ScrollbarStyle) -> impl View {
-    scrollbar_if_needed(state, Axis::Vertical, style)
+pub fn vertical_scrollbar(state: Signal<ScrollState>) -> impl View {
+    scrollbar_if_needed(state, Axis::Vertical)
 }
 
-fn scrollbar_if_needed(state: Signal<ScrollState>, axis: Axis, style: ScrollbarStyle) -> impl View {
+fn scrollbar_if_needed(state: Signal<ScrollState>, axis: Axis) -> impl View {
     show(
         move || axis.content(state.get()) > axis.viewport(state.get()) + 0.5,
-        move || scrollbar(state, axis, style),
+        move || scrollbar(state, axis),
     )
 }
 
@@ -68,8 +50,7 @@ styled!(ScrollView<T> => root);
 impl<T: Scrollable + Styled> View for ScrollView<T> {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
         let state = self.state.unwrap_or_else(|| signal(ScrollState::default()));
-        let bars = [Axis::Vertical, Axis::Horizontal]
-            .map(|axis| scrollbar_if_needed(state, axis, ScrollbarStyle::default()));
+        let bars = [Axis::Vertical, Axis::Horizontal].map(|axis| scrollbar_if_needed(state, axis));
         self.root
             .child(self.content.size_full().scroll_state(state))
             .children(bars)
@@ -117,14 +98,18 @@ impl Axis {
     }
 }
 
-fn scrollbar(state: Signal<ScrollState>, axis: Axis, style: ScrollbarStyle) -> Div {
-    let theme = use_theme();
+fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
+    let theme = Theme::current();
     let root = root_font_size();
     let length = memo(move || {
         let state = state.get();
         let viewport = axis.viewport(state);
         (viewport * viewport / axis.content(state).max(1.0))
-            .clamp(viewport.min(style.min_thumb.resolve(root.get())), viewport)
+            .clamp(
+                viewport.min(Length::design(SCROLLBAR_MIN_THUMB_HEIGHT).resolve(root.get())),
+                viewport,
+            )
+            .round()
     });
     let extent = memo(move || {
         let state = state.get();
@@ -142,7 +127,7 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis, style: ScrollbarStyle) -> D
     let origin = Cell::new(0.0);
     let thumb = div()
         .absolute()
-        .rounded(style.radius)
+        .rounded(THUMB_RADIUS)
         .bg(move || theme.text_muted.get().with_alpha(0.5))
         .on_pointer_down(PointerEvent::stop_propagation)
         .on_drag(move |event| {
@@ -164,12 +149,12 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis, style: ScrollbarStyle) -> D
                 .top(0.0)
                 .bottom(0.0)
                 .right(0.0)
-                .w(style.track),
+                .w(SCROLLBAR_WIDTH),
             thumb
                 .test_id("scroll-thumb-vertical")
                 .top(0.0)
-                .right(style.inset)
-                .w(style.thumb)
+                .right(THUMB_INSET)
+                .w(THUMB_WIDTH)
                 .h(move || px(length.get()))
                 .scroll_linked(state, link),
         ),
@@ -179,12 +164,12 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis, style: ScrollbarStyle) -> D
                 .left(0.0)
                 .right(0.0)
                 .bottom(0.0)
-                .h(style.track),
+                .h(SCROLLBAR_WIDTH),
             thumb
                 .test_id("scroll-thumb-horizontal")
                 .left(0.0)
-                .bottom(style.inset)
-                .h(style.thumb)
+                .bottom(THUMB_INSET)
+                .h(THUMB_WIDTH)
                 .w(move || px(length.get()))
                 .scroll_linked(state, link),
         ),

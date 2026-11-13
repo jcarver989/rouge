@@ -1,21 +1,19 @@
-use crate::popover::{Placement, panel, popup};
+use crate::components::list_row;
+use crate::icon::{Icon, IconName};
+use crate::material::{Material, MaterialExt};
+use crate::popover::{Placement, popup};
 use crate::roving::RovingFocus;
-use crate::util::{activates, pressable, themed, tint};
-use rouge_core::component;
+use crate::tokens::{MENU_WIDTH, RADIUS_CONTROL, RADIUS_INNER};
+use crate::typography::UiStyles;
+use crate::util::{activates, focus_ring};
 use rouge_core::{
-    BuildCx, Cursor, Div, ElementId, Key, Menu, Path, Point, PointerButton, Rect, Styled, Theme,
-    View, div, icon, px, styled, text, use_theme,
+    BuildCx, Div, ElementId, Key, Menu, Point, PointerButton, Rect, Styled, Theme, View, component,
+    div, pct, px, styled, text, view,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
 
-const CHEVRON: &str = "M6 9 L12 15 L18 9";
-
 pub use rouge_core::MenuItem;
-
-pub fn menu_item(label: impl Into<String>, on_select: impl Fn() + 'static) -> MenuItem {
-    MenuItem::callback(label, on_select)
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MenuFocus {
@@ -44,7 +42,7 @@ fn trigger(
     parent_close: Option<Rc<dyn Fn()>>,
 ) -> (Div, Signal<bool>) {
     let (open, anchor) = (signal(false), signal(Rect::ZERO));
-    let theme = use_theme();
+    let hover = Theme::current().surface_hover;
     let close: Rc<dyn Fn()> = Rc::new(move || {
         open.set(false);
         if let Some(close) = &parent_close {
@@ -57,37 +55,28 @@ fn trigger(
         .track_bounds(anchor)
         .px(10.0)
         .py(4.0)
-        .hover(tint(theme.surface, theme.hover))
+        .hover(move |style| style.bg(hover.get_untracked()))
         .on_click(move |event| {
             event.stop_propagation();
             open.update(|open| *open = !*open);
         })
         .child(text(menu.title))
-        .child(popup(open, true, Div::preserve_focus, move || {
+        .child(popup(open, Div::preserve_focus, move || {
             placement.place(
-                render_items(&menu.items, open, theme, focus, close.clone()),
+                render_items(&menu.items, open, focus, close.clone()),
                 anchor,
             )
         }));
     (row, open)
 }
 
-pub(crate) fn menu_items(
-    items: &[MenuItem],
-    open: Signal<bool>,
-    theme: Theme,
-    focus: MenuFocus,
-) -> Div {
-    render_items(items, open, theme, focus, Rc::new(move || open.set(false)))
-}
-
 fn render_items(
     items: &[MenuItem],
     open: Signal<bool>,
-    theme: Theme,
     focus: MenuFocus,
     close: Rc<dyn Fn()>,
 ) -> Div {
+    let theme = Theme::current();
     let actionable = items
         .iter()
         .filter(|item| !matches!(item, MenuItem::Separator));
@@ -95,7 +84,7 @@ fn render_items(
     let mut index = 0;
     let rows = items.iter().cloned().map(|item| {
         if matches!(item, MenuItem::Separator) {
-            return div().h(1.0).my(4.0).bg(theme.border);
+            return div().h(px(1.0)).my(4.0).bg(theme.border);
         }
         let current = index;
         index += 1;
@@ -104,14 +93,12 @@ fn render_items(
                 let (row, child_open) = trigger(menu, Placement::Right, focus, Some(close.clone()));
                 (row, Rc::new(move || child_open.set(true)), true)
             }
-            MenuItem::Action {
+            MenuItem::Item {
                 ref title,
                 ref shortcut,
-                ..
-            }
-            | MenuItem::Callback {
-                ref title,
-                ref shortcut,
+                ref id,
+                ref icon,
+                destructive,
                 ..
             } => {
                 let close = close.clone();
@@ -121,26 +108,24 @@ fn render_items(
                     close();
                 });
                 let clicked = activate.clone();
-                let mut row = div()
-                    .test_id(format!("menu-item-{title}"))
-                    .px(10.0)
-                    .py(5.0)
-                    .rounded(4.0)
-                    .cursor(Cursor::Pointer)
-                    .hover(tint(theme.surface, theme.hover))
-                    .on_click(move |event| {
-                        event.stop_propagation();
-                        clicked();
-                    })
-                    .child(themed(text(title.clone()), theme.text, theme).no_wrap());
-                if let Some(shortcut) = shortcut {
-                    row = row.flex().justify_between().gap(24.0).child(themed(
-                        text(shortcut.display()),
-                        theme.text_muted,
-                        theme,
-                    ));
-                }
-                (row, activate, false)
+                let fg = if destructive {
+                    theme.destructive
+                } else {
+                    theme.text
+                };
+                let id = id.clone().unwrap_or_else(|| format!("menu-item-{title}"));
+                let icon = icon.clone().map(|icon| Icon::new(icon, fg));
+                let shortcut = shortcut
+                    .as_ref()
+                    .map(|chord| view! { <text caption muted>{chord.display()}</text> });
+                let row = view! {
+                    <list_row id on_click={move || clicked()}>
+                        {icon}
+                        <text label no_wrap color=fg flex_1>{title.clone()}</text>
+                        {shortcut}
+                    </list_row>
+                };
+                (div().rounded(RADIUS_INNER).child(row), activate, false)
             }
             MenuItem::Separator => unreachable!(),
         };
@@ -148,10 +133,10 @@ fn render_items(
             let handles = handles.clone();
             row = row
                 .track_focus(handles.handle(current))
-                .focus(tint(theme.surface, theme.hover))
+                .focus(move |style| style.bg(theme.surface_hover.get_untracked()))
                 .on_key_down(move |event| {
                     match event.key {
-                        Key::ArrowDown | Key::ArrowUp => {
+                        Key::ArrowDown | Key::ArrowUp | Key::Home | Key::End => {
                             handles.step(current, &event.key);
                         }
                         Key::ArrowLeft => open.set(false),
@@ -168,15 +153,12 @@ fn render_items(
         row
     });
     focus
-        .apply(panel(theme))
+        .apply(div().material(Material::Floating))
         .flex()
         .col()
         .p(4.0)
-        .min_w(if matches!(focus, MenuFocus::Take) {
-            120.0
-        } else {
-            160.0
-        })
+        .w(MENU_WIDTH)
+        .max_w(pct(100.0))
         .children(rows)
 }
 
@@ -184,6 +166,7 @@ pub struct ContextMenu {
     root: Div,
     items: Rc<[MenuItem]>,
     focus: MenuFocus,
+    dropdown: bool,
 }
 
 #[component]
@@ -192,6 +175,7 @@ pub fn context_menu(children: impl View, items: impl IntoIterator<Item = MenuIte
         root: div().child(children),
         items: items.into_iter().collect(),
         focus: MenuFocus::Take,
+        dropdown: false,
     }
 }
 
@@ -200,37 +184,56 @@ impl ContextMenu {
         self.focus = focus;
         self
     }
+
+    pub fn dropdown(mut self) -> Self {
+        self.dropdown = true;
+        self.root = self.root.flex_none();
+        self
+    }
 }
 
 styled!(ContextMenu => root);
 
 impl View for ContextMenu {
     fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let (theme, items, focus) = (use_theme(), self.items, self.focus);
-        let (open, at) = (signal(false), signal(Point::ZERO));
+        let (items, focus, dropdown) = (self.items, self.focus, self.dropdown);
+        let (open, at, anchor) = (signal(false), signal(Point::ZERO), signal(Rect::ZERO));
         let body = move || {
-            let menu = menu_items(&items, open, theme, focus).absolute();
-            menu.left(move || px(at.get().x))
-                .top(move || px(at.get().y))
+            let menu = render_items(&items, open, focus, Rc::new(move || open.set(false)));
+            if dropdown {
+                let width = move || px(anchor.get().size.width);
+                Placement::Below.place(menu.min_w(width), anchor)
+            } else {
+                menu.absolute()
+                    .left(move || px(at.get().x))
+                    .top(move || px(at.get().y))
+            }
         };
-        self.root
-            .on_pointer_down(move |event| {
+        let root = if dropdown {
+            self.root
+                .track_bounds(anchor)
+                .focusable()
+                .on_click(move |event| {
+                    event.stop_propagation();
+                    open.set(true);
+                })
+                .on_key_down(move |event| {
+                    if matches!(event.key, Key::Enter | Key::Space | Key::ArrowDown) {
+                        event.stop_propagation();
+                        open.set(true);
+                    }
+                })
+        } else {
+            self.root.on_pointer_down(move |event| {
                 if event.button == PointerButton::Secondary {
                     at.set(event.position);
                     open.set(true);
                     event.stop_propagation();
                 }
             })
-            .child(popup(open, true, |layer| layer, body))
-            .build(cx)
+        };
+        root.child(popup(open, |layer| layer, body)).build(cx)
     }
-}
-
-pub struct Select<T> {
-    root: Div,
-    value: Signal<T>,
-    options: Rc<[(T, String)]>,
-    theme: Theme,
 }
 
 #[component]
@@ -238,76 +241,40 @@ pub struct Select<T> {
 pub fn select<T: Clone + PartialEq + 'static>(
     value: Signal<T>,
     options: impl IntoIterator<Item = (T, String)>,
-) -> Select<T> {
-    let theme = use_theme();
-    let root = div()
+) -> ContextMenu {
+    let theme = Theme::current();
+    let options: Rc<[(T, String)]> = options.into_iter().collect();
+    let labels = options.clone();
+    let current = move || {
+        let chosen = value.get();
+        labels
+            .iter()
+            .find(|(option, _)| *option == chosen)
+            .map(|(_, label)| label.clone())
+            .unwrap_or_default()
+    };
+    let items = options.iter().cloned().map(move |(option, label)| {
+        MenuItem::callback(label, move || {
+            value.set_if_changed(option.clone());
+        })
+    });
+    let label = view! {
+        <div flex flex_1 items_center justify_between gap=8.0>
+            <text body primary no_wrap>{current}</text>
+            {Icon::new(IconName::ChevronDown, theme.text_muted).size(14.0)}
+        </div>
+    };
+    let mut menu = context_menu(label, items).dropdown();
+    menu.root = focus_ring(menu.root)
         .flex()
         .items_center()
-        .justify_between()
-        .flex_none()
-        .gap(theme.spacing)
         .px(10.0)
         .py(6.0)
         .min_w(120.0)
-        .border(1.0)
+        .border(px(1.0))
         .border_color(theme.border)
-        .rounded(theme.radius)
-        .bg(theme.surface)
-        .hover(tint(theme.surface, theme.hover));
-    Select {
-        root,
-        value,
-        options: options.into_iter().collect(),
-        theme,
-    }
-}
-
-styled!(Select<T> => root);
-
-impl<T: Clone + PartialEq + 'static> View for Select<T> {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let (value, options, theme) = (self.value, self.options, self.theme);
-        let (open, anchor) = (signal(false), signal(Rect::ZERO));
-        let labels = options.clone();
-        let current = move || {
-            let chosen = value.get();
-            let label = labels
-                .iter()
-                .find(|(option, _)| *option == chosen)
-                .map(|(_, label)| label.clone());
-            label.unwrap_or_default()
-        };
-        let body = move || {
-            let items: Vec<_> = options
-                .iter()
-                .cloned()
-                .map(|(option, label)| {
-                    menu_item(label, move || {
-                        value.set_if_changed(option.clone());
-                    })
-                })
-                .collect();
-            let menu = menu_items(&items, open, theme, MenuFocus::Take)
-                .min_w(move || anchor.get().size.width);
-            Placement::Below.place(menu, anchor)
-        };
-        let root = self.root.track_bounds(anchor);
-        pressable(root, theme, move || open.update(|open| *open = !*open))
-            .on_key_down(move |event| {
-                if event.key == Key::ArrowDown {
-                    open.set(true);
-                    event.stop_propagation();
-                }
-            })
-            .child(themed(text(current), theme.text, theme).no_wrap())
-            .child(
-                icon(Path::svg(CHEVRON))
-                    .stroke(2.0)
-                    .color(theme.text_muted)
-                    .size(14.0)
-                    .flex_none(),
-            )
-            .child(popup(open, true, |layer| layer, body))
-            .build(cx)
-    }
+        .rounded(RADIUS_CONTROL)
+        .bg(theme.elevated)
+        .hover(move |style| style.bg(theme.surface_hover.get_untracked()));
+    menu
 }

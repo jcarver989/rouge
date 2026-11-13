@@ -1,6 +1,11 @@
+use crate::components::icon_button;
+use crate::icon::IconName;
 use rouge_core::component;
-use rouge_core::{BuildCx, Cursor, Div, DragPhase, ElementId, Styled, View, div, px, styled};
-use rouge_reactive::{Signal, effect};
+use rouge_core::{
+    AnyView, BuildCx, Cursor, Div, DragPhase, ElementId, Styled, View, div, px, root_font_size,
+    styled,
+};
+use rouge_reactive::{Callback, Signal, effect};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -19,7 +24,6 @@ pub struct ResizablePanel {
     min: f32,
     max: f32,
     reset: f32,
-    unit: Option<Signal<f32>>,
     on_reset: Option<Rc<dyn Fn()>>,
     on_resize: Option<Rc<dyn Fn(f32)>>,
 }
@@ -33,7 +37,6 @@ pub fn resizable_panel(edge: Side, size: Signal<f32>) -> ResizablePanel {
         min: 0.0,
         max: f32::MAX,
         reset: size.get_untracked(),
-        unit: None,
         on_reset: None,
         on_resize: None,
     }
@@ -56,14 +59,15 @@ impl ResizablePanel {
         self.on_resize = Some(Rc::new(f));
         self
     }
-    pub fn unit(mut self, unit: Signal<f32>) -> Self {
-        self.unit = Some(unit);
-        self
-    }
     pub fn on_reset(mut self, f: impl Fn() + 'static) -> Self {
         self.on_reset = Some(Rc::new(f));
         self
     }
+    pub fn test_id(mut self, id: impl Into<String>) -> Self {
+        self.root = self.root.test_id(id);
+        self
+    }
+
     pub fn child(mut self, child: impl View) -> Self {
         self.root = self.root.child(child);
         self
@@ -81,12 +85,12 @@ impl View for ResizablePanel {
             min,
             max,
             reset,
-            unit,
             on_reset,
             on_resize,
         } = self;
         let max = max.max(min);
-        let scale = move || unit.map_or(1.0, |unit| unit.get().max(0.001));
+        let unit = root_font_size();
+        let scale = move || unit.get().max(0.001);
         let dimension = move || px(size.get() * scale());
         effect(move || {
             size.set_if_changed(size.get().clamp(min, max));
@@ -133,7 +137,7 @@ impl View for ResizablePanel {
                 let handle = handle
                     .top(0.0)
                     .bottom(0.0)
-                    .w(move || px(6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 }))
+                    .w(move || px(6.0 * scale() / 16.0))
                     .cursor(Cursor::ResizeHorizontal);
                 if side == Side::Left {
                     handle.right(0.0)
@@ -146,7 +150,7 @@ impl View for ResizablePanel {
                 let handle = handle
                     .left(0.0)
                     .right(0.0)
-                    .h(move || px(6.0 * if unit.is_some() { scale() / 16.0 } else { 1.0 }))
+                    .h(move || px(6.0 * scale() / 16.0))
                     .cursor(Cursor::ResizeVertical);
                 if side == Side::Top {
                     handle.bottom(0.0)
@@ -157,4 +161,21 @@ impl View for ResizablePanel {
         };
         root.child(handle).build(cx)
     }
+}
+
+#[component]
+pub fn panel_toggle(
+    side: Side,
+    #[prop(into)] id: String,
+    open: bool,
+    name: &str,
+    #[prop(default, into)] on_click: Callback,
+) -> AnyView {
+    let icon = match side {
+        Side::Left => IconName::PanelLeft,
+        Side::Right => IconName::PanelRight,
+        Side::Top | Side::Bottom => IconName::Rows2,
+    };
+    let label = format!("{} {name}", if open { "Hide" } else { "Show" });
+    icon_button(id, icon, label, None, false, open, true, on_click)
 }
