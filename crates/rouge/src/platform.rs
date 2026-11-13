@@ -7,12 +7,14 @@ use rouge_core::{
 use rouge_render::{Point, Size};
 #[cfg(feature = "open-url")]
 use std::io::Error as IoError;
+use std::time::{Duration, Instant};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{MouseButton, MouseScrollDelta};
+use winit::event::{MouseButton, MouseScrollDelta, TouchPhase};
 use winit::keyboard::{ModifiersState, NamedKey};
 use winit::window::{CursorIcon, ResizeDirection, Theme, Window};
 
 const LINE_SCROLL: f32 = 40.0;
+const MOMENTUM_GAP: Duration = Duration::from_millis(50);
 
 fn logical<T: Into<f64>>(x: T, y: T, scale: f32) -> (f32, f32) {
     (x.into() as f32 / scale, y.into() as f32 / scale)
@@ -98,6 +100,59 @@ pub fn scroll_delta(delta: MouseScrollDelta, scale: f32) -> Point {
     match delta {
         MouseScrollDelta::LineDelta(x, y) => Point::new(x * LINE_SCROLL, y * LINE_SCROLL),
         MouseScrollDelta::PixelDelta(delta) => logical_point(delta, scale),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WheelGesture {
+    Scroll(Point),
+    Drag(Point),
+    Release(Point),
+    Coast,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum WheelPhase {
+    #[default]
+    Idle,
+    Tracking,
+    Lifted(Instant),
+    Coasting,
+}
+
+#[derive(Debug, Default)]
+pub struct Wheel(WheelPhase);
+
+impl Wheel {
+    pub fn input(
+        &mut self,
+        delta: MouseScrollDelta,
+        phase: TouchPhase,
+        scale: f32,
+        now: Instant,
+    ) -> WheelGesture {
+        let by = scroll_delta(delta, scale);
+        if let MouseScrollDelta::LineDelta(..) = delta {
+            return WheelGesture::Scroll(by);
+        }
+        let ended = matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled);
+        let (next, gesture) = match (self.0, phase) {
+            (WheelPhase::Lifted(at), TouchPhase::Started)
+                if now.saturating_duration_since(at) <= MOMENTUM_GAP =>
+            {
+                (WheelPhase::Coasting, WheelGesture::Coast)
+            }
+            (_, TouchPhase::Started) => (WheelPhase::Tracking, WheelGesture::Drag(by)),
+            (WheelPhase::Tracking, _) if ended => {
+                (WheelPhase::Lifted(now), WheelGesture::Release(by))
+            }
+            (WheelPhase::Tracking, _) => (WheelPhase::Tracking, WheelGesture::Drag(by)),
+            (WheelPhase::Coasting, _) if ended => (WheelPhase::Idle, WheelGesture::Coast),
+            (WheelPhase::Coasting, _) => (WheelPhase::Coasting, WheelGesture::Coast),
+            (phase, _) => (phase, WheelGesture::Scroll(by)),
+        };
+        self.0 = next;
+        gesture
     }
 }
 

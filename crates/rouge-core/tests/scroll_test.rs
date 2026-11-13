@@ -431,7 +431,7 @@ fn dragged_scrolling_rubber_bands_then_springs_back() -> TestResult {
     );
     assert!(!ui.needs_frame(), "and holds while it is held");
 
-    ui.scroll_release(Point::ZERO);
+    ui.scroll_release();
     assert!(ui.needs_frame());
     ui.run(3.0);
     assert!(
@@ -450,13 +450,12 @@ fn dragged_scrolling_rubber_bands_then_springs_back() -> TestResult {
 }
 
 #[test]
-fn releasing_a_scroll_with_velocity_keeps_momentum() {
+fn releasing_a_scroll_drag_keeps_the_finger_momentum() {
     let _rt = Runtime::new().enter();
     let state = signal(ScrollState::default());
     let mut ui = scroller(state);
     ui.pointer_moved(Point::new(50.0, 50.0));
-    ui.scroll_drag(Point::new(0.0, -20.0));
-    ui.scroll_release(Point::new(0.0, -200.0));
+    flick(&mut ui, 200.0, 0.05);
     ui.run(0.1);
     let coasting = state.get_untracked().offset.y;
     assert!(
@@ -471,14 +470,69 @@ fn releasing_a_scroll_with_velocity_keeps_momentum() {
     );
     assert!(!ui.needs_frame());
 
-    ui.scroll_drag(Point::new(0.0, -20.0));
-    ui.scroll_release(Point::new(0.0, -4000.0));
+    flick(&mut ui, 4000.0, 0.0025);
     ui.run(5.0);
     assert_eq!(
         state.get_untracked().offset.y,
         200.0,
         "momentum past the end bounces back onto it"
     );
+}
+
+#[test]
+fn a_flick_into_the_end_bounces_past_it_once_and_settles_without_more_input() {
+    let _rt = Runtime::new().enter();
+    let state = signal(ScrollState::default());
+    let mut ui = scroller(state);
+    ui.pointer_moved(Point::new(50.0, 50.0));
+    for _ in 0..5 {
+        ui.scroll_drag(Point::new(0.0, -30.0));
+        ui.advance(FRAME);
+    }
+    ui.scroll_release();
+    let mut trace = Vec::new();
+    for _ in 0..60 {
+        ui.advance(FRAME);
+        trace.push(state.get_untracked().offset.y);
+    }
+    let peak = trace.iter().copied().fold(f32::MIN, f32::max);
+    assert!(
+        peak > 220.0 && peak < 260.0,
+        "the finger's speed carries it past the end: {peak}"
+    );
+    let at_peak = trace.iter().position(|y| *y == peak).unwrap_or_default();
+    assert!(
+        at_peak < 10 && trace[at_peak + 10] < peak - 15.0,
+        "and it turns straight back instead of being held: {trace:?}"
+    );
+    assert!(
+        (state.get_untracked().offset.y - 200.0).abs() < 0.5,
+        "settled on the end within a second: {trace:?}"
+    );
+    ui.run(1.0);
+    assert_eq!(state.get_untracked().offset.y, 200.0);
+    assert!(!ui.needs_frame());
+}
+
+#[test]
+fn a_scroll_drag_held_still_before_lifting_does_not_coast() {
+    let _rt = Runtime::new().enter();
+    let state = signal(ScrollState::default());
+    let mut ui = scroller(state);
+    ui.pointer_moved(Point::new(50.0, 50.0));
+    for _ in 0..5 {
+        ui.scroll_drag(Point::new(0.0, -10.0));
+        ui.advance(FRAME);
+    }
+    ui.advance(0.2);
+    ui.scroll_release();
+    ui.run(1.0);
+    assert_eq!(
+        state.get_untracked().offset.y,
+        50.0,
+        "stays where it was let go"
+    );
+    assert!(!ui.needs_frame());
 }
 
 #[test]
@@ -1106,6 +1160,15 @@ fn a_following_list_sticks_to_its_end_until_scrolled_up_and_resumes_at_the_botto
     );
     following.set(true);
     assert_eq!(bottom(&mut ui, 29), Some(100.0));
+}
+
+const FRAME: f64 = 1.0 / 60.0;
+
+fn flick(ui: &mut TestUi, speed: f32, over: f64) {
+    ui.scroll_drag(Point::new(0.0, -10.0));
+    ui.advance(over);
+    ui.scroll_drag(Point::new(0.0, -speed * over as f32));
+    ui.scroll_release();
 }
 
 fn scroller(state: Signal<ScrollState>) -> TestUi {

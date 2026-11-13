@@ -1,8 +1,8 @@
 #[cfg(target_os = "macos")]
 use crate::platform::native_menu::NativeMenus;
 use crate::platform::{
-    appearance as platform_appearance, cursor_icon, logical_point, logical_size, menu_root,
-    modifiers, named_key, pointer_button, scroll_delta, window_commands,
+    Wheel, WheelGesture, appearance as platform_appearance, cursor_icon, logical_point,
+    logical_size, menu_root, modifiers, named_key, pointer_button, window_commands,
 };
 use crate::profile::{Profile, present_mode, trace};
 use arboard::Clipboard as SystemClipboard;
@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::env::var;
 use std::mem::take;
 use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle;
@@ -228,7 +229,7 @@ struct WindowState {
     background: Color,
     frames: u64,
     occluded: bool,
-    tracking: bool,
+    wheel: Wheel,
     modifiers: Modifiers,
     cursor: Cursor,
     ime: bool,
@@ -359,7 +360,7 @@ impl WindowState {
             background: options.background,
             frames: 0,
             occluded: false,
-            tracking: false,
+            wheel: Wheel::default(),
             modifiers: Modifiers::NONE,
             cursor: Cursor::Default,
             ime: false,
@@ -420,18 +421,21 @@ impl WindowState {
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
-        let by = scroll_delta(delta, self.ui.scale());
-        let ended = matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled);
-        self.tracking |= phase == TouchPhase::Started;
-        match (delta, self.tracking) {
-            (MouseScrollDelta::PixelDelta(_), true) => self.ui.scroll_drag(by),
-            _ => {
+        match self
+            .wheel
+            .input(delta, phase, self.ui.scale(), Instant::now())
+        {
+            WheelGesture::Scroll(by) => {
                 self.ui.scroll(by);
             }
-        }
-        if ended && self.tracking {
-            self.tracking = false;
-            self.ui.scroll_release(Point::ZERO);
+            WheelGesture::Drag(by) => self.ui.scroll_drag(by),
+            WheelGesture::Release(by) => {
+                if by != Point::ZERO {
+                    self.ui.scroll_drag(by);
+                }
+                self.ui.scroll_release();
+            }
+            WheelGesture::Coast => {}
         }
     }
 

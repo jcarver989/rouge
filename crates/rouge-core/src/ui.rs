@@ -49,26 +49,49 @@ const VELOCITY_WINDOW: f64 = 0.1;
 const MULTI_CLICK_SECONDS: f64 = 0.4;
 const MULTI_CLICK_SLOP: f32 = 4.0;
 
+#[derive(Default)]
+struct Samples(VecDeque<(f64, Point)>);
+
+impl Samples {
+    fn new(at: f64, position: Point) -> Self {
+        Samples(VecDeque::from([(at, position)]))
+    }
+
+    fn push(&mut self, at: f64, position: Point) {
+        self.0.push_back((at, position));
+        while self
+            .0
+            .front()
+            .is_some_and(|(from, _)| at - from > VELOCITY_WINDOW)
+        {
+            self.0.pop_front();
+        }
+    }
+
+    fn velocity(&self, now: f64) -> Point {
+        let (Some((from, first)), Some((to, last))) = (self.0.front(), self.0.back()) else {
+            return Point::ZERO;
+        };
+        let elapsed = (to - from) as f32;
+        if elapsed <= 1.0e-4 || now - to > VELOCITY_WINDOW {
+            return Point::ZERO;
+        }
+        Point::new((last.x - first.x) / elapsed, (last.y - first.y) / elapsed)
+    }
+}
+
 struct Drag {
     element: ElementId,
     start: Point,
     last: Point,
     started: bool,
-    samples: VecDeque<(f64, Point)>,
+    samples: Samples,
 }
 
-impl Drag {
-    fn velocity(&self) -> Point {
-        let (Some((from, first)), Some((to, last))) = (self.samples.front(), self.samples.back())
-        else {
-            return Point::ZERO;
-        };
-        let elapsed = (to - from) as f32;
-        if elapsed <= 1.0e-4 {
-            return Point::ZERO;
-        }
-        Point::new((last.x - first.x) / elapsed, (last.y - first.y) / elapsed)
-    }
+struct ScrollDrag {
+    layer: Option<LayerId>,
+    travel: Point,
+    samples: Samples,
 }
 
 pub struct Ui {
@@ -86,7 +109,7 @@ pub struct Ui {
     held: Option<PointerButton>,
     outside: bool,
     drag: Option<Drag>,
-    scrolling: Option<LayerId>,
+    scrolling: Option<ScrollDrag>,
     modifiers: Modifiers,
     clicks: Option<(f64, Point, u32)>,
     started: Instant,
@@ -561,7 +584,7 @@ impl Ui {
         let path = tree.hover_path().to_vec();
         self.dispatch(&path, On::PointerDown, position, button);
         if button == PointerButton::Primary {
-            let samples = VecDeque::from([(self.now(), position)]);
+            let samples = Samples::new(self.now(), position);
             let targets = self.tree().listeners(&path, On::Drag);
             self.drag = targets.first().map(|(element, _)| Drag {
                 element: *element,
@@ -645,8 +668,18 @@ impl Ui {
     pub fn scroll_drag(&mut self, delta: Point) {
         let by = Point::ZERO - delta;
         if self.scroll_event(delta) {
-            self.scrolling = self.scrolling.or_else(|| self.scroll_target(by, true));
-            if let Some(layer) = self.scrolling {
+            let now = self.now();
+            let layer = (self.scrolling.as_ref().and_then(|drag| drag.layer))
+                .or_else(|| self.scroll_target(by, true));
+            let drag = self.scrolling.get_or_insert_with(|| ScrollDrag {
+                layer: None,
+                travel: Point::ZERO,
+                samples: Samples::default(),
+            });
+            drag.layer = layer;
+            drag.travel = drag.travel + by;
+            drag.samples.push(now, drag.travel);
+            if let Some(layer) = layer {
                 self.tree
                     .scroll_command(layer, LayerCommand::ScrollDrag(by));
             }
@@ -654,10 +687,14 @@ impl Ui {
         self.refresh_pointer();
     }
 
-    pub fn scroll_release(&mut self, velocity: Point) {
-        if let Some(layer) = self.scrolling.take() {
+    pub fn scroll_release(&mut self) {
+        let Some(drag) = self.scrolling.take() else {
+            return;
+        };
+        let velocity = drag.samples.velocity(self.now());
+        if let Some(layer) = drag.layer {
             self.tree()
-                .scroll_command(layer, LayerCommand::ScrollRelease(Point::ZERO - velocity));
+                .scroll_command(layer, LayerCommand::ScrollRelease(velocity));
         }
     }
 
@@ -689,14 +726,7 @@ impl Ui {
     fn drag_moved(&mut self, position: Point) {
         let now = self.now();
         let Some(drag) = &mut self.drag else { return };
-        drag.samples.push_back((now, position));
-        while drag
-            .samples
-            .front()
-            .is_some_and(|(at, _)| now - at > VELOCITY_WINDOW)
-        {
-            drag.samples.pop_front();
-        }
+        drag.samples.push(now, position);
         let travel = position - drag.start;
         if !drag.started && travel.x.hypot(travel.y) < DRAG_SLOP {
             return;
@@ -727,7 +757,7 @@ impl Ui {
                 Point::ZERO
             },
             translation: position - drag.start,
-            velocity: drag.velocity(),
+            velocity: drag.samples.velocity(self.now()),
         };
         emit(&listeners, Event::Drag(&event), |_| {});
     }
