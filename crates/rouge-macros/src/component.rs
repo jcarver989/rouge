@@ -69,6 +69,7 @@ pub(crate) fn component(args: TokenStream, item: TokenStream) -> syn::Result<Tok
     let export = matches!(function.vis, Visibility::Public(_)).then(|| quote!(#[macro_export]));
     let vis = &function.vis;
     Ok(quote! {
+        #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
         #function
 
         #[doc(hidden)]
