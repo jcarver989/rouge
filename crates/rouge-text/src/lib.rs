@@ -1,8 +1,8 @@
 use parley::fontique::Blob;
 use parley::{
     Affinity, Alignment, AlignmentOptions, BoundingBox, Cluster, Cursor, FontContext, FontData,
-    FontFamily, FontStyle, FontWeight, Layout, LayoutContext, LineHeight, PositionedLayoutItem,
-    Selection, StyleProperty,
+    FontFamily, FontStyle, FontWeight, IndentOptions, Layout, LayoutContext, LineHeight,
+    OverflowWrap, PositionedLayoutItem, Selection, StyleProperty,
 };
 use rouge_render::Color;
 use std::borrow::Cow;
@@ -64,8 +64,18 @@ pub struct TextStyle {
     pub line_height: f32,
     pub align: TextAlign,
     pub wrap: bool,
+    pub wrap_indent: WrapIndent,
     pub tab_size: u8,
     pub spans: Vec<(Range<usize>, SpanStyle)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WrapIndent {
+    #[default]
+    None,
+    Leading {
+        extra_columns: u8,
+    },
 }
 
 impl Default for TextStyle {
@@ -78,6 +88,7 @@ impl Default for TextStyle {
             line_height: 1.4,
             align: TextAlign::Start,
             wrap: true,
+            wrap_indent: WrapIndent::None,
             tab_size: 4,
             spans: Vec::new(),
         }
@@ -216,6 +227,7 @@ pub struct TextLayout {
     layout: Layout<SpanStyle>,
     align: TextAlign,
     wrap: bool,
+    indent: f32,
     len: usize,
     #[expect(clippy::option_option)]
     broken_at: Option<Option<f32>>,
@@ -342,6 +354,14 @@ impl TextLayout {
         if self.broken_at == Some(max_width) {
             return;
         }
+        let indent = max_width.map_or(0.0, |width| self.indent.min(width / 2.0).max(0.0));
+        self.layout.set_text_indent(
+            indent,
+            IndentOptions {
+                each_line: true,
+                hanging: true,
+            },
+        );
         self.layout.break_all_lines(max_width);
         let alignment = match self.align {
             TextAlign::Start => Alignment::Start,
@@ -368,6 +388,13 @@ impl TextLayout {
 
     pub fn line_count(&self) -> usize {
         self.layout.len()
+    }
+
+    pub fn line_tops(&self) -> Vec<f32> {
+        self.layout
+            .lines()
+            .map(|line| line.metrics().block_min_coord)
+            .collect()
     }
 
     pub fn for_each_glyph(&self, mut f: impl FnMut(PositionedGlyph<'_>)) {
@@ -483,13 +510,34 @@ impl TextSystem {
             });
             layout = self.build(&source, style, &stops);
         }
+        let indent = match style.wrap_indent {
+            WrapIndent::Leading { extra_columns } if style.wrap => {
+                layout.break_all_lines(None);
+                leading_width(&layout, text) + f32::from(extra_columns) * self.space(style)
+            }
+            _ => 0.0,
+        };
         TextLayout {
             layout,
             align: style.align,
             wrap: style.wrap,
+            indent,
             len: text.len(),
             broken_at: None,
         }
+    }
+
+    fn space(&mut self, style: &TextStyle) -> f32 {
+        let plain = TextStyle {
+            spans: Vec::new(),
+            wrap: false,
+            wrap_indent: WrapIndent::None,
+            align: TextAlign::Start,
+            ..style.clone()
+        };
+        let mut space = self.layout(" ", &plain);
+        space.break_lines(None);
+        space.size().0
     }
 
     fn build(
@@ -510,6 +558,9 @@ impl TextSystem {
         builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
             style.line_height,
         )));
+        if style.wrap {
+            builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
+        }
         let mut boundaries = vec![0, text.len()];
         for (range, _) in &style.spans {
             if range.start < range.end && range.start < text.len() {
@@ -596,6 +647,13 @@ impl TextSystem {
     }
 }
 
+fn leading_width(layout: &Layout<SpanStyle>, text: &str) -> f32 {
+    text.char_indices()
+        .take_while(|(_, c)| *c == ' ' || *c == '\t')
+        .map(|(index, _)| Cluster::from_byte_index(layout, index).map_or(0.0, |c| c.advance()))
+        .sum()
+}
+
 fn tab_stops(text: &str, tab_size: u8, space: impl Fn(usize) -> f32) -> Vec<(usize, f32)> {
     let tab_size = usize::from(tab_size);
     let mut column = 0;
@@ -627,7 +685,14 @@ impl Hash for TextStyle {
         [self.size, self.weight, self.line_height]
             .map(f32::to_bits)
             .hash(state);
-        (self.italic, self.align, self.wrap, self.tab_size).hash(state);
+        (
+            self.italic,
+            self.align,
+            self.wrap,
+            self.wrap_indent,
+            self.tab_size,
+        )
+            .hash(state);
         for (range, span) in &self.spans {
             range.hash(state);
             [span.color, span.background]

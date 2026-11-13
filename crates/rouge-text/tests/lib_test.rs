@@ -1,4 +1,6 @@
-use rouge_text::{Granularity, Movement, SUBPIXEL_BUCKETS, TextLayout, TextStyle, TextSystem};
+use rouge_text::{
+    Granularity, Movement, SUBPIXEL_BUCKETS, TextLayout, TextStyle, TextSystem, WrapIndent,
+};
 
 #[test]
 fn layout_measures_scales_and_wraps() {
@@ -297,6 +299,62 @@ fn tabs_keep_byte_offsets_for_hit_testing_and_selection() {
     );
 }
 
+#[test]
+fn wrapping_breaks_overlong_tokens_but_prefers_word_boundaries() {
+    let mut text = TextSystem::new();
+    let column = column_width(&mut text);
+    let token = laid_out(
+        &mut text,
+        &"x".repeat(40),
+        &code(WrapIndent::None),
+        Some(column * 10.5),
+    );
+    assert_eq!(
+        token.line_count(),
+        4,
+        "an unbreakable token wraps at the edge"
+    );
+    assert!(token.size().0 <= column * 10.5 + 0.5);
+
+    let words = laid_out(
+        &mut text,
+        "aaaa bbbb cccc",
+        &code(WrapIndent::None),
+        Some(column * 10.5),
+    );
+    assert_eq!(words.line_count(), 2);
+    let second = words.size().1 * 0.75;
+    assert_eq!(
+        words.index_at(column * 0.5, second),
+        Some(10),
+        "the break falls on a space"
+    );
+}
+
+#[test]
+fn continuation_lines_hang_under_the_leading_indent_capped_at_half_the_width() {
+    let mut text = TextSystem::new();
+    let column = column_width(&mut text);
+    let deep = format!("{}deeply(nested, call, with, arguments);", " ".repeat(30));
+    let cases = [
+        ("    let total = alpha + beta + gamma + delta;", 20.5, 6.0),
+        ("\tcall(first, second, third, fourth);", 16.5, 6.0),
+        (deep.as_str(), 20.0, 10.0),
+    ];
+    for (source, columns, hang) in cases {
+        let indent = WrapIndent::Leading { extra_columns: 2 };
+        let layout = laid_out(&mut text, source, &code(indent), Some(column * columns));
+        let starts = line_starts(&layout);
+        assert!(starts.len() >= 2, "{source:?} wraps");
+        assert!(
+            starts[1..]
+                .iter()
+                .all(|start| (start - column * hang).abs() < 0.01),
+            "{source:?}: {starts:?}"
+        );
+    }
+}
+
 fn style(size: f32) -> TextStyle {
     TextStyle {
         size,
@@ -305,7 +363,16 @@ fn style(size: f32) -> TextStyle {
 }
 
 fn shaped(content: &str, max_width: Option<f32>) -> TextLayout {
-    let mut layout = TextSystem::new().layout(content, &style(16.0));
+    laid_out(&mut TextSystem::new(), content, &style(16.0), max_width)
+}
+
+fn laid_out(
+    text: &mut TextSystem,
+    content: &str,
+    style: &TextStyle,
+    max_width: Option<f32>,
+) -> TextLayout {
+    let mut layout = text.layout(content, style);
     layout.break_lines(max_width);
     layout
 }
@@ -320,9 +387,30 @@ fn monospace() -> TextStyle {
 }
 
 fn last_glyph_x(text: &mut TextSystem, content: &str, style: &TextStyle) -> f32 {
-    let mut layout = text.layout(content, style);
-    layout.break_lines(None);
+    let layout = laid_out(text, content, style, None);
     let mut x = 0.0;
     layout.for_each_glyph(|glyph| x = glyph.x);
     x
+}
+
+fn code(wrap_indent: WrapIndent) -> TextStyle {
+    TextStyle {
+        wrap: true,
+        wrap_indent,
+        ..monospace()
+    }
+}
+
+fn column_width(text: &mut TextSystem) -> f32 {
+    laid_out(text, "0123456789", &monospace(), None).size().0 / 10.0
+}
+
+fn line_starts(layout: &TextLayout) -> Vec<f32> {
+    let mut starts: Vec<(f32, f32)> = Vec::new();
+    layout.for_each_glyph(|glyph| {
+        if starts.last().is_none_or(|(y, _)| (glyph.y - y).abs() > 0.5) {
+            starts.push((glyph.y, glyph.x));
+        }
+    });
+    starts.into_iter().map(|(_, x)| x).collect()
 }
