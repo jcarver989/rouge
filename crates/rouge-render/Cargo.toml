@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rouge-theme.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 thiserror.workspace = true

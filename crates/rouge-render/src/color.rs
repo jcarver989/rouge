@@ -1,3 +1,5 @@
+use rouge_theme::Rgba;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Color {
     pub r: f32,
@@ -63,5 +65,11 @@ impl Color {
     pub fn to_rgba8(self) -> [u8; 4] {
         self.to_array()
             .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+    }
+}
+
+impl From<Rgba> for Color {
+    fn from(value: Rgba) -> Self {
+        Color::from_rgba8(value.r, value.g, value.b, value.a)
     }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "rouge-theme"
+description = "Renderer-neutral colors, UI palettes, semantic control states and picker behavior for Rouge apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nucleo-matcher.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
