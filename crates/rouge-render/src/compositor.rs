@@ -12,6 +12,7 @@ use tokio::sync::oneshot::Sender;
 const RUBBER_BAND: f32 = 0.25;
 const BOUNCE: Spring = Spring::new(220.0, 30.0);
 const STAGE_BITS: u32 = 8;
+const CLOCK_PERIOD: f32 = 3600.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LayerId(pub u64);
@@ -241,18 +242,21 @@ type Motions = HashMap<MotionId, Motion>;
 struct Applied {
     shader: Shader,
     values: [Animated; EffectInstance::VALUES],
+    elapsed: f32,
 }
 
 impl Applied {
-    fn new(effect: &EffectInstance) -> Self {
+    fn new(effect: &EffectInstance, elapsed: f32) -> Self {
         Applied {
             shader: effect.shader(),
             values: effect.values().map(Animated::new),
+            elapsed,
         }
     }
 
     fn instance(&self) -> EffectInstance {
         EffectInstance::from_values(self.shader, self.values.map(|value| value.value()))
+            .at(self.elapsed)
     }
 
     fn retarget(&mut self, effect: &EffectInstance, timing: Timing) -> bool {
@@ -265,9 +269,14 @@ impl Applied {
     }
 
     fn tick(&mut self, dt: f32) -> bool {
-        self.values
+        let moving = self
+            .values
             .iter_mut()
-            .fold(false, |moving, value| value.tick(dt) | moving)
+            .fold(false, |moving, value| value.tick(dt) | moving);
+        if self.shader.clock().is_some() {
+            self.elapsed = (self.elapsed + dt.max(0.0)) % CLOCK_PERIOD;
+        }
+        moving || self.shader.clock().is_some()
     }
 }
 
@@ -613,13 +622,14 @@ impl Compositor {
                 animate,
             } => {
                 let transition = layer.transition.filter(|_| animate);
-                let retarget = (layer.effects.get_mut(&slot).zip(effect.as_ref()))
-                    .filter(|(applied, effect)| applied.shader == effect.shader())
-                    .zip(transition);
-                if let Some(((applied, effect), timing)) = retarget {
-                    wake = applied.retarget(effect, timing);
+                let running = (layer.effects.get_mut(&slot).zip(effect.as_ref()))
+                    .filter(|(applied, effect)| applied.shader == effect.shader());
+                let elapsed = running.as_ref().map_or(0.0, |(applied, _)| applied.elapsed);
+                wake = effect.is_some_and(|effect| effect.shader().clock().is_some());
+                if let Some(((applied, effect), timing)) = running.zip(transition) {
+                    wake |= applied.retarget(effect, timing);
                 } else if let Some(effect) = &effect {
-                    layer.effects.insert(slot, Applied::new(effect));
+                    layer.effects.insert(slot, Applied::new(effect, elapsed));
                 } else {
                     layer.effects.remove(&slot);
                 }

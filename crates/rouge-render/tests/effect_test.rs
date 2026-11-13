@@ -147,6 +147,60 @@ fn refraction_and_highlight_affect_only_the_rim() -> Result<(), GpuError> {
 }
 
 #[test]
+fn saturation_scales_how_colorful_the_backdrop_shows_through() -> Result<(), GpuError> {
+    let chroma = |glass: Glass| {
+        let scene = quads([full(Color::new(0.8, 0.4, 0.4, 1.0))]);
+        let img = over(
+            &scene,
+            EffectDraw::new(&glass, Rect::new(10.0, 10.0, 80.0, 80.0)),
+        )?;
+        let [r, g, ..] = img.pixel(50, 50);
+        Ok::<_, GpuError>(i32::from(r) - i32::from(g))
+    };
+    let plain = chroma(Glass::frosted(0.0))?;
+
+    assert_eq!(chroma(Glass::frosted(0.0).saturation(0.0))?, 0, "gray");
+    assert!(
+        chroma(Glass::frosted(0.0).saturation(1.5))? > plain + 30,
+        "more vivid than the backdrop itself"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_light_brightens_the_rim_nearest_to_it_and_leaves_the_far_side_alone() -> Result<(), GpuError> {
+    let draw = |glass: Glass| {
+        let backdrop = EffectDraw {
+            corner_radii: Corners::all(20.0),
+            ..EffectDraw::new(&glass, Rect::new(10.0, 10.0, 80.0, 80.0))
+        };
+        over(&quads([full(Color::BLACK)]), backdrop)
+    };
+    let dark = Glass::frosted(0.0).edge_width(12.0);
+    let (unlit, lit) = (
+        draw(dark)?,
+        draw(dark.light(Point::new(0.0, 40.0), 1.0, 20.0))?,
+    );
+
+    let near = lit.pixel(10, 50);
+    assert!(
+        near[0] > unlit.pixel(10, 50)[0] + 60,
+        "the rim beside the light catches it: {near:?}"
+    );
+    assert_near(
+        lit.pixel(50, 50),
+        unlit.pixel(50, 50),
+        "the light has faded by the middle",
+    );
+    assert_near(
+        lit.pixel(89, 50),
+        unlit.pixel(89, 50),
+        "and never reaches the far rim",
+    );
+    Ok(())
+}
+
+#[test]
 fn shadow_falls_outside_the_glass_and_never_darkens_it() -> Result<(), GpuError> {
     let draw = |glass: Glass| {
         let bounds = Rect::new(30.0, 30.0, 40.0, 40.0);

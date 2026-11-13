@@ -24,6 +24,7 @@ impl Inputs {
 pub trait Effect: 'static {
     const WGSL: &'static str;
     const INPUTS: Inputs;
+    const CLOCK: Option<usize> = None;
 
     fn uniforms(&self) -> Vec<f32> {
         Vec::new()
@@ -47,6 +48,7 @@ pub struct Shader {
     id: TypeId,
     wgsl: &'static str,
     inputs: Inputs,
+    clock: Option<usize>,
 }
 
 impl Shader {
@@ -55,6 +57,7 @@ impl Shader {
             id: TypeId::of::<T>(),
             wgsl: T::WGSL,
             inputs: T::INPUTS,
+            clock: T::CLOCK,
         }
     }
 
@@ -64,6 +67,10 @@ impl Shader {
 
     pub fn inputs(&self) -> Inputs {
         self.inputs
+    }
+
+    pub fn clock(&self) -> Option<usize> {
+        self.clock
     }
 }
 
@@ -98,6 +105,11 @@ impl EffectInstance {
             "rouge: an effect has at most {} uniform values",
             Self::UNIFORMS
         );
+        assert!(
+            T::CLOCK.is_none_or(|index| index < Self::UNIFORMS),
+            "rouge: an effect's clock is one of its {} uniform values",
+            Self::UNIFORMS
+        );
         let mut values = [0.0; Self::VALUES];
         values[0] = effect.margin().max(0.0);
         values[1] = effect.content_blur().max(0.0);
@@ -111,6 +123,13 @@ impl EffectInstance {
 
     pub fn from_values(shader: Shader, values: [f32; Self::VALUES]) -> Self {
         EffectInstance { shader, values }
+    }
+
+    pub fn at(mut self, seconds: f32) -> Self {
+        if let Some(index) = self.shader.clock {
+            self.values[3 + index] = seconds;
+        }
+        self
     }
 
     pub fn shader(&self) -> Shader {
@@ -400,6 +419,10 @@ pub struct Glass {
     highlight: f32,
     edge_width: f32,
     shadow: f32,
+    saturation: f32,
+    light: Point,
+    light_strength: f32,
+    light_reach: f32,
 }
 
 impl Default for Glass {
@@ -418,6 +441,10 @@ impl Glass {
             highlight: 0.35,
             edge_width: 14.0,
             shadow: 0.25,
+            saturation: 1.0,
+            light: Point::new(0.0, 0.0),
+            light_strength: 0.0,
+            light_reach: 1.0,
         }
     }
 
@@ -430,6 +457,10 @@ impl Glass {
             highlight: 0.0,
             edge_width: 1.0,
             shadow: 0.0,
+            saturation: 1.0,
+            light: Point::new(0.0, 0.0),
+            light_strength: 0.0,
+            light_reach: 1.0,
         }
     }
 
@@ -467,6 +498,18 @@ impl Glass {
         self.shadow = amount;
         self
     }
+
+    pub const fn saturation(mut self, amount: f32) -> Self {
+        self.saturation = amount;
+        self
+    }
+
+    pub const fn light(mut self, at: Point, strength: f32, reach: f32) -> Self {
+        self.light = at;
+        self.light_strength = strength;
+        self.light_reach = reach;
+        self
+    }
 }
 
 impl Effect for Glass {
@@ -481,6 +524,11 @@ impl Effect for Glass {
             self.highlight,
             self.edge_width,
             self.shadow,
+            self.saturation,
+            self.light.x,
+            self.light.y,
+            self.light_strength,
+            self.light_reach,
         ]);
         uniforms
     }
