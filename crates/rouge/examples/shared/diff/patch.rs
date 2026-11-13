@@ -1,7 +1,50 @@
-use clankerdiff_core::FileDiff as CoreFileDiff;
-pub(crate) use clankerdiff_core::{
-    FileStatus as Status, Hunk, PatchLine as Line, PatchLineKind as Tone,
-};
+use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Status {
+    Modified,
+    Added,
+    Deleted,
+    Renamed,
+}
+
+impl Status {
+    pub(crate) const fn code(self) -> char {
+        match self {
+            Self::Modified => 'M',
+            Self::Added => 'A',
+            Self::Deleted => 'D',
+            Self::Renamed => 'R',
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tone {
+    Context,
+    Added,
+    Removed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Line {
+    pub kind: Tone,
+    pub text: Arc<str>,
+    pub old_line_no: Option<usize>,
+    pub new_line_no: Option<usize>,
+    pub no_newline: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Hunk {
+    pub header: String,
+    pub function_context: Option<String>,
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+    pub lines: Vec<Line>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FileDiff {
@@ -117,7 +160,6 @@ impl FileDiff {
             Tone::Context => (old.next(), new.next()),
             Tone::Added => (None, new.next()),
             Tone::Removed => (old.next(), None),
-            Tone::HunkHeader | Tone::Meta => return,
         };
         self.added += usize::from(tone == Tone::Added);
         self.removed += usize::from(tone == Tone::Removed);
@@ -177,25 +219,4 @@ fn range(text: &str) -> Option<Remaining> {
         number: start.parse().ok()?,
         left: len.parse().ok()?,
     })
-}
-
-impl From<CoreFileDiff> for FileDiff {
-    fn from(file: CoreFileDiff) -> Self {
-        Self {
-            renamed_from: file.renamed_from().map(|path| path.as_str().to_owned()),
-            added: file.additions(),
-            removed: file.deletions(),
-            path: file.path.as_str().to_owned(),
-            status: file.status,
-            hunks: file.hunks,
-        }
-    }
-}
-
-impl From<Vec<CoreFileDiff>> for Patch {
-    fn from(files: Vec<CoreFileDiff>) -> Self {
-        Self {
-            files: files.into_iter().map(FileDiff::from).collect(),
-        }
-    }
 }

@@ -3,9 +3,9 @@ mod presentation;
 mod syntax;
 pub(crate) mod theme;
 
-pub(crate) use patch::Patch;
+pub(crate) use patch::{Patch, Tone};
 
-use patch::{FileDiff, Status, Tone};
+use patch::{FileDiff, Status};
 use presentation::{Cell, Document, HEADER_HEIGHT, Presentation, Row, RowKey, RowKind};
 use rouge::core::IntoProp;
 use rouge::prelude::*;
@@ -162,7 +162,7 @@ pub(crate) fn diff_view(patch: Patch) -> AnyView {
             .child(message)
             .into_any();
     }
-    provide_theme(Palette::dark());
+    Theme::provide(UiPalette::dark());
     let review = Review::new(Document::new(patch));
     div()
         .size_full()

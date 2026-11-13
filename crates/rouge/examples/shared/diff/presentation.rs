@@ -160,10 +160,6 @@ fn hunk_rows(hunk: &Hunk, language: Language) -> (Vec<RowKind>, Vec<RowKind>) {
         };
         unified.push(RowKind::Unified(cell.clone()));
         match line.kind {
-            Tone::HunkHeader | Tone::Meta => {
-                split.extend(pair(take(&mut removed), take(&mut added)));
-                split.push(RowKind::Hunk(line.text.to_string()));
-            }
             Tone::Removed => removed.push(cell),
             Tone::Added => added.push(cell),
             Tone::Context => {

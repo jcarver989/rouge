@@ -24,7 +24,7 @@ pub(crate) const fn tone(tone: Tone) -> ToneColors {
     let tint = match tone {
         Tone::Added => GREEN,
         Tone::Removed => RED,
-        Tone::Context | Tone::Meta | Tone::HunkHeader => {
+        Tone::Context => {
             return ToneColors {
                 background: Color::TRANSPARENT,
                 hover: Color::WHITE.with_alpha(0.05),
@@ -55,9 +55,9 @@ pub(crate) const fn token(token: Token) -> Color {
 
 pub(crate) const fn status(status: Status) -> Color {
     match status {
-        Status::Added | Status::Untracked => GREEN,
+        Status::Added => GREEN,
         Status::Deleted => RED,
         Status::Modified => YELLOW,
-        Status::Renamed | Status::Copied => ACCENT,
+        Status::Renamed => ACCENT,
     }
 }
