@@ -7,7 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
+markdown = ["syntax", "rouge-widgets/markdown", "dep:rouge-markdown"]
 open-url = ["dep:open"]
+syntax = ["rouge-widgets/syntax", "dep:rouge-syntax"]
 tokio-rt = [
     "rouge-reactive/tokio-rt",
     "dep:serde",
@@ -32,6 +34,8 @@ tokio.workspace = true
 arboard.workspace = true
 image.workspace = true
 rouge-widgets.workspace = true
+rouge-markdown = { workspace = true, optional = true }
+rouge-syntax = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-chrome = "0.7"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }

@@ -10,8 +10,12 @@ pub use rouge_core::{
     Appearance, Decorations, EditAction, Menu, MenuItem, ResizeEdge, WindowHandle, appearance,
     window_focused, window_handle,
 };
+#[cfg(feature = "markdown")]
+pub use rouge_markdown as markdown;
 pub use rouge_reactive as reactive;
 pub use rouge_render as render;
+#[cfg(feature = "syntax")]
+pub use rouge_syntax as syntax;
 pub use rouge_widgets as widgets;
 
 pub mod prelude {

@@ -2915,8 +2915,10 @@ dependencies = [
  "pollster",
  "rouge",
  "rouge-core",
+ "rouge-markdown",
  "rouge-reactive",
  "rouge-render",
+ "rouge-syntax",
  "rouge-widgets",
  "serde",
  "serde_json",
@@ -3112,8 +3114,10 @@ version = "0.1.0"
 dependencies = [
  "rouge",
  "rouge-core",
+ "rouge-markdown",
  "rouge-reactive",
  "rouge-render",
+ "rouge-syntax",
  "rouge-theme",
 ]
 

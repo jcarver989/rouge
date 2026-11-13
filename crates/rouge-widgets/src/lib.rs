@@ -5,6 +5,8 @@ mod icon;
 mod inline_edit;
 mod input;
 mod interface_size;
+#[cfg(feature = "markdown")]
+mod markdown;
 mod material;
 mod menu;
 mod menu_bar;
@@ -15,6 +17,8 @@ mod resizable_panel;
 mod roving;
 mod scroll_view;
 mod slider;
+#[cfg(feature = "syntax")]
+mod syntax;
 mod tabs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
@@ -34,6 +38,8 @@ pub use icon::{Icon, IconName};
 pub use inline_edit::inline_edit;
 pub use input::{text_area, text_input};
 pub use interface_size::{DEFAULT_INTERFACE_SIZE, InterfaceSize, SizeAction};
+#[cfg(feature = "markdown")]
+pub use markdown::{MarkdownAction, MarkdownPaint, MarkdownRow, MarkdownRows, markdown};
 pub use material::{Material, MaterialExt, scroll_edge};
 pub use menu::{ContextMenu, MenuFocus, MenuItem, context_menu, select};
 pub use menu_bar::menu_bar;
@@ -51,6 +57,8 @@ pub use rouge_theme::{
 pub use roving::RovingFocus;
 pub use scroll_view::{ScrollView, scroll_view, vertical_scrollbar};
 pub use slider::slider;
+#[cfg(feature = "syntax")]
+pub use syntax::{CODE_WRAP, syntax_spans};
 pub use tabs::{Tabs, tabs};
 pub use tree::{indent, tree_row};
 pub use typography::UiStyles;

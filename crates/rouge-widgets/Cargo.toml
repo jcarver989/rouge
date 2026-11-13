@@ -6,9 +6,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+markdown = ["syntax", "dep:rouge-markdown"]
+syntax = ["dep:rouge-syntax"]
+
 [dependencies]
 rouge-core.workspace = true
+rouge-markdown = { workspace = true, optional = true }
 rouge-reactive.workspace = true
+rouge-syntax = { workspace = true, optional = true }
 rouge-theme.workspace = true
 
 [dev-dependencies]
