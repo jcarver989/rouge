@@ -3,7 +3,7 @@ use rouge_core::testing::{
 };
 use rouge_core::{
     Align, Color, Point, RowKey, ScrollEvent, ScrollLinked, ScrollState, Scrollable, Size, Styled,
-    View, div, dynamic, rem, root_font_size, scroll, text, virtual_list, virtual_list_handle,
+    View, div, dynamic, scroll, text, virtual_list, virtual_list_handle,
 };
 use rouge_reactive::{Runtime, Signal, batch, effect, on_cleanup, signal};
 use std::cell::RefCell;
@@ -873,17 +873,17 @@ fn measured_rows_keep_the_partial_anchor_and_align_using_actual_heights() -> Tes
 #[test]
 fn measured_list_reflows_wrapped_text_and_invalidates_offscreen_cache() {
     let _rt = Runtime::new().enter();
-    let revision = signal(0);
-    let (mut ui, (handle, font)) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
+    let (revision, font) = (signal(0), signal(16.0));
+    let (mut ui, handle) = TestUiBuilder::default().size(100.0, 100.0).build_with(|| {
         let handle = virtual_list_handle();
         (
             virtual_list(
                 || 200,
                 20.0,
-                |index| {
+                move |index| {
                     if index == 0 {
                         text("This paragraph wraps to several lines at a narrow width")
-                            .text_size(rem(1.0))
+                            .text_size(font)
                             .into_any()
                     } else {
                         div().h(20.0).into_any()
@@ -894,7 +894,7 @@ fn measured_list_reflows_wrapped_text_and_invalidates_offscreen_cache() {
             .measure_rows(move || revision.get())
             .handle(handle)
             .size_full(),
-            (handle, root_font_size()),
+            handle,
         )
     });
     let narrow = handle.row_top(1);

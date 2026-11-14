@@ -17,7 +17,7 @@ fn text_content_accepts_strings_closures_and_signals() {
     let _rt = Runtime::new().enter();
     let name = signal(String::from("signal"));
     let n = signal(1);
-    let mut ui = build(1.0, || {
+    let ui = build(1.0, || {
         div()
             .child(text("literal"))
             .child(text(String::from("owned")))
@@ -102,6 +102,7 @@ fn content_change_relayouts_but_color_change_only_repaints() -> TestResult {
     assert!(ui.bounds(2.0, 2.0)?.size.width > before * 2.0);
 
     label.set("a considerably longer label".into());
+    ui.flush();
     assert!(!ui.needs_frame(), "identical content changes nothing");
     Ok(())
 }
@@ -215,6 +216,7 @@ fn transition_runs_in_the_compositor_and_lands_on_target() -> TestResult {
         2,
         "the binding ran once to hand over the target"
     );
+    ui.flush();
     assert!(ui.is_animating() && ui.needs_frame());
 
     ui.update_at(5.0);
@@ -760,6 +762,7 @@ fn cursor_follows_a_reactive_prop() {
     ui.pointer_moved(Point::new(10.0, 10.0));
     assert_eq!(ui.cursor(), Cursor::Default);
     pointer.set(true);
+    ui.flush();
     assert_eq!(ui.cursor(), Cursor::Pointer);
 }
 
@@ -784,7 +787,7 @@ fn click_text_clicks_the_middle_of_the_matching_text() -> TestResult {
 fn tabs_advance_to_the_configured_tab_stop_without_shifting_byte_offsets() {
     let _rt = Runtime::new().enter();
     for (tab_size, index) in [(2, Some(1)), (4, Some(0))] {
-        let mut ui = TestUi::canvas(move || {
+        let ui = TestUi::canvas(move || {
             rich_text("\tx", Vec::new())
                 .text_size(32.0)
                 .font("monospace")
@@ -857,7 +860,7 @@ fn a_mounted_subtree_applies_its_reactive_props_at_build_and_shapes_each_text_on
         "the 40 reactive props apply at build, not as {} patches",
         built.patches
     );
-    assert_eq!(built.passes, 1);
+    assert_eq!((built.layouts, built.relayouts), (1, 0));
     Ok(())
 }
 
@@ -883,11 +886,7 @@ fn a_vec_of_views_builds_its_items_as_siblings_without_a_wrapper() -> TestResult
         30.0,
         "and their parent's later children follow them"
     );
-    assert_eq!(
-        ui.stats().elements,
-        7,
-        "root, container, show and vec anchors, three boxes"
-    );
+    assert_eq!(ui.stats().elements, 5, "root, container and three boxes");
     visible.set(false);
     ui.update();
     assert_eq!(
@@ -895,7 +894,7 @@ fn a_vec_of_views_builds_its_items_as_siblings_without_a_wrapper() -> TestResult
         30.0,
         "every item leaves with the vec"
     );
-    assert_eq!(ui.stats().elements, 4);
+    assert_eq!(ui.stats().elements, 3);
     Ok(())
 }
 
@@ -992,6 +991,7 @@ fn fade_to_blue(
 
 fn run(ui: &mut TestUi, max_frames: usize, hz: f64) -> Result<Vec<u32>, TestError> {
     let mut positions = Vec::new();
+    ui.flush();
     while positions.len() < max_frames && ui.is_animating() {
         ui.advance(1.0 / hz);
         positions.push(ui.first_x(RED, 10)?);

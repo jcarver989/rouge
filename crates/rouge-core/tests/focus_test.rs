@@ -200,9 +200,11 @@ fn focus_handles_focus_blur_and_report_events() {
         (root, handle)
     });
     handle.focus();
+    ui.flush();
     assert!(ui.has_focus());
     assert!(handle.is_focused());
     handle.blur();
+    ui.flush();
     assert!(!ui.has_focus());
     assert_eq!(*log.borrow(), [("focus", false), ("blur", false)]);
 }

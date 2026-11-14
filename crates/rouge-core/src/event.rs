@@ -1,4 +1,4 @@
-use rouge_render::Point;
+use rouge_render::{Point, Size};
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -309,6 +309,7 @@ pub struct PointerEvent {
     pub modifiers: Modifiers,
     pub click_count: u32,
     pub(crate) local: Cell<Point>,
+    pub(crate) size: Cell<Size>,
     pub(crate) stopped: Cell<bool>,
     pub(crate) captured: Cell<bool>,
 }
@@ -321,6 +322,7 @@ impl PointerEvent {
             modifiers: Modifiers::NONE,
             click_count: 1,
             local: Cell::new(position),
+            size: Cell::new(Size::ZERO),
             stopped: Cell::new(false),
             captured: Cell::new(false),
         }
@@ -328,6 +330,10 @@ impl PointerEvent {
 
     pub fn local(&self) -> Point {
         self.local.get()
+    }
+
+    pub fn size(&self) -> Size {
+        self.size.get()
     }
 
     pub fn capture(&self) {
@@ -358,6 +364,14 @@ impl ScrollEvent {
     pub fn stop_propagation(&self) {
         self.stopped.set(true);
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TouchPhase {
+    Start,
+    Move,
+    End,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

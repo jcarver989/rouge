@@ -1,6 +1,7 @@
 use rouge_core::testing::{BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder};
 use rouge_core::{
-    Color, Palette, Point, Rect, Styled, Theme, UiPalette, div, dynamic, editable, rich_text, text,
+    Color, Palette, Point, Rect, Size, Styled, Theme, UiPalette, div, dynamic, editable, rich_text,
+    text,
 };
 use rouge_reactive::{Runtime, provide_context, signal};
 
@@ -140,7 +141,10 @@ fn unstyled_leaves_fall_back_to_the_reactive_theme() -> TestResult {
     let _rt = Runtime::new().enter();
     let (mut ui, theme) = TestUiBuilder::default().build_with(|| (text("MMMM"), Theme::current()));
     let before = ui.stats();
-    theme.text.set(Color::RED);
+    theme.set(Palette {
+        text: Color::RED,
+        ..theme.get_untracked()
+    });
     ui.advance(0.0);
     assert_eq!(ui.stats().layouts, before.layouts);
     let image = ui.render()?;
@@ -188,7 +192,10 @@ fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_override
     let _rt = Runtime::new().enter();
     let (mut ui, (outer, inner)) = TestUiBuilder::default().size(300.0, 200.0).build_with(|| {
         let outer = Theme::current();
-        outer.text.set(Color::RED);
+        outer.set(Palette {
+            text: Color::RED,
+            ..outer.get_untracked()
+        });
         let inner = Theme::new(Palette {
             text: Color::GREEN,
             ..UiPalette::light().map(Color::from)
@@ -214,8 +221,14 @@ fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_override
     for id in ["outer", "inner", "override"] {
         assert_eq!(ui.bounds_of(id).ok_or("missing text")?.size.height, 14.0);
     }
-    outer.text.set(Color::GREEN);
-    inner.text.set(Color::RED);
+    outer.set(Palette {
+        text: Color::GREEN,
+        ..outer.get_untracked()
+    });
+    inner.set(Palette {
+        text: Color::RED,
+        ..inner.get_untracked()
+    });
     ui.advance(0.0);
     ui.hover_on("parent")?;
     for id in ["outer", "inner"] {
@@ -235,6 +248,57 @@ fn scoped_theme_defaults_and_hover_declarations_cascade_without_masking_override
     ui.advance(0.0);
     assert_eq!(ui.bounds_of("outer").ok_or("outer")?.size.height, 14.0);
     assert_eq!(ui.bounds_of("inner").ok_or("inner")?.size.height, 14.0);
+    Ok(())
+}
+
+#[test]
+fn hover_variants_track_reactive_values_and_revert_on_leave() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let hover = signal(Color::BLUE);
+    let mut ui = TestUi::canvas(move || {
+        div()
+            .test_id("box")
+            .size(40.0)
+            .bg(Color::RED)
+            .hover(move |s| s.bg(hover))
+    });
+    assert_eq!(ui.pixel(10, 10)?, RED);
+    hover.set(Color::GREEN);
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, RED);
+    ui.hover_on("box")?;
+    assert_eq!(ui.pixel(10, 10)?, GREEN);
+    hover.set(Color::BLUE);
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, BLUE);
+    ui.pointer_left();
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, RED);
+    Ok(())
+}
+
+#[test]
+fn hover_variants_override_layout_until_leave_while_base_changes_still_apply() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let height = signal(20.0);
+    let mut ui = TestUi::canvas(move || {
+        div()
+            .test_id("box")
+            .w(40.0)
+            .h(height)
+            .bg(Color::RED)
+            .hover(|s| s.w(60.0).p(2.0))
+    });
+    let size = |ui: &mut TestUi| ui.bounds_of("box").map(|bounds| bounds.size);
+    assert_eq!(size(&mut ui), Some(Size::new(40.0, 20.0)));
+    ui.hover_on("box")?;
+    assert_eq!(size(&mut ui), Some(Size::new(60.0, 20.0)));
+    height.set(30.0);
+    ui.advance(0.0);
+    assert_eq!(size(&mut ui), Some(Size::new(60.0, 30.0)));
+    ui.pointer_left();
+    ui.advance(0.0);
+    assert_eq!(size(&mut ui), Some(Size::new(40.0, 30.0)));
     Ok(())
 }
 

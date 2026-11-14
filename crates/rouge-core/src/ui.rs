@@ -1,32 +1,32 @@
-use crate::clipboard::{Clipboard, ClipboardTarget};
+use crate::clipboard::Clipboard;
+use crate::compositor::LayerId;
 use crate::event::{
     Chord, Cursor, DragEvent, DragPhase, FileDropEvent, FileDropPhase, ImeEvent, IntoChord, Key,
-    KeyEvent, Modifiers, PointerButton, PointerEvent, ScrollEvent,
+    KeyEvent, Modifiers, PointerButton, PointerEvent, ScrollEvent, TouchPhase,
 };
 use crate::keymap::Keymap;
 use crate::motion::UiContext;
 use crate::style::Dirty;
+use crate::text::TextSystem;
 use crate::theme::Theme;
-use crate::tree::edit::EditOp;
-use crate::tree::{ActionHandler, ElementId, Event, FrameStats, On, PaintCache, Tree, emit};
-use crate::view::{BuildCx, Patch, Patches, View, send};
+use crate::tree::{
+    ActionHandler, ElementId, Event, FrameStats, Listeners, On, PaintCache, Tree, emit,
+};
+use crate::view::{BuildCx, Queue, View};
 use crate::window::{Appearance, Menu, MenuItem, Sent, WindowCommand, WindowHandle};
 use rouge_reactive::{
-    ReadSignal, Scope, Signal, batch, effect, expect_context, poll_tasks, provide_context, signal,
-    stats,
+    ReadSignal, Scope, Signal, batch, expect_context, poll_tasks, provide_context, signal, stats,
 };
-use rouge_render::{
-    Atlas, Compositor, Item, LayerCommand, LayerId, Point, Rect, Size, SurfaceRegistrar, SurfaceUse,
-};
-use rouge_text::TextSystem;
+use rouge_render::{Atlas, Item, Point, Rect, Size, Surfaces};
 use rouge_theme::UiPalette;
 use std::any::{Any, TypeId};
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::iter::empty;
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tracing::trace_span;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
@@ -39,14 +39,14 @@ pub fn window_size() -> ReadSignal<Size> {
 }
 
 #[derive(Clone, Copy)]
-struct RootFontSize(Signal<f32>);
+struct Zoom(Signal<f32>);
 
-pub fn root_font_size() -> Signal<f32> {
-    expect_context::<RootFontSize>().0
+pub fn zoom() -> Signal<f32> {
+    expect_context::<Zoom>().0
 }
 
-const MAX_PASSES: usize = 8;
 const DRAG_SLOP: f32 = 3.0;
+const TOUCH_SLOP: f32 = 8.0;
 const VELOCITY_WINDOW: f64 = 0.1;
 const MULTI_CLICK_SECONDS: f64 = 0.4;
 const MULTI_CLICK_SLOP: f32 = 4.0;
@@ -90,6 +90,12 @@ struct Drag {
     samples: Samples,
 }
 
+struct Touch {
+    start: Point,
+    last: Point,
+    panning: bool,
+}
+
 struct ScrollDrag {
     layer: Option<LayerId>,
     travel: Point,
@@ -97,13 +103,14 @@ struct ScrollDrag {
 }
 
 pub struct Ui {
-    window_commands: UnboundedReceiver<Sent>,
     window_handle: WindowHandle,
     tree: Tree,
-    compositor: Compositor,
     size: Signal<Size>,
-    patches: Patches,
-    pending: UnboundedReceiver<Patch>,
+    viewport: Size,
+    device_scale: f32,
+    zoom: Signal<f32>,
+    zoomed: f32,
+    queue: Queue,
     scope: Scope,
     cache: PaintCache,
     text_system: TextSystem,
@@ -112,13 +119,13 @@ pub struct Ui {
     outside: bool,
     drag: Option<Drag>,
     scrolling: Option<ScrollDrag>,
+    touch: Option<Touch>,
     modifiers: Modifiers,
     clicks: Option<(f64, Point, u32)>,
     started: Instant,
     clock: Option<f64>,
     last_tick: Option<f64>,
     shortcuts: Vec<(Chord, MenuItem)>,
-    surfaces: Option<SurfaceRegistrar>,
 }
 
 pub struct Frame<'a> {
@@ -128,25 +135,25 @@ pub struct Frame<'a> {
 
 impl Ui {
     pub fn new<T: View>(size: Size, root: impl FnOnce() -> T) -> Ui {
-        Self::with_fonts(size, [], root)
+        Self::with_fonts(size, empty::<&'static [u8]>(), root)
     }
 
-    pub fn with_fonts<T: View>(
+    pub fn with_fonts<T: View, U: Into<Cow<'static, [u8]>>>(
         size: Size,
-        fonts: impl IntoIterator<Item = Vec<u8>>,
+        fonts: impl IntoIterator<Item = U>,
         root: impl FnOnce() -> T,
     ) -> Ui {
-        let (patches, pending) = unbounded_channel();
-        let mut tree = Tree::new(size);
+        let queue = Queue::default();
+        let mut tree = Tree::new(size, queue.clone());
         let mut text_system = TextSystem::new();
         for font in fonts {
             text_system.add_font(font);
         }
         let scope = Scope::root();
-        let (commands, window_commands) = unbounded_channel();
-        let (size, window_handle) = scope.run(|| {
+        let viewport = size;
+        let (size, zoom, window_handle) = scope.run(|| {
             let window_handle = WindowHandle {
-                commands: signal(commands),
+                queue: signal(queue.clone()),
                 title: signal(String::new()),
                 appearance: signal(Appearance::Light),
                 focused: signal(true),
@@ -154,35 +161,31 @@ impl Ui {
             provide_context(window_handle);
             let size = signal(size);
             provide_context(WindowSize(size.read_only()));
-            let root_size = signal(16.0);
-            provide_context(RootFontSize(root_size));
-            let root_patches = patches.clone();
-            effect(move || {
-                let size = root_size.get();
-                send(&root_patches, move |cx| cx.tree.set_root_font_size(size));
-            });
-            provide_context(UiContext::new(patches.clone()));
+            let zoom = signal(1.0);
+            provide_context(Zoom(zoom));
+            provide_context(UiContext::new(queue.clone()));
             let keymap = Keymap(signal(Vec::new()));
             provide_context(keymap);
             tree.observe_keymap(keymap);
             Theme::provide(UiPalette::light());
             let mut cx = BuildCx {
+                parent: tree.content(),
                 tree: &mut tree,
-                patches: &patches,
+                queue: &queue,
                 text: &mut text_system,
             };
-            let element = root().build(&mut cx);
-            tree.append_child(tree.root(), element);
-            (size, window_handle)
+            root().build(&mut cx);
+            (size, zoom, window_handle)
         });
         Ui {
-            window_commands,
             window_handle,
             tree,
-            compositor: Compositor::new(),
             size,
-            patches,
-            pending,
+            viewport,
+            device_scale: 1.0,
+            zoom,
+            zoomed: 1.0,
+            queue,
             scope,
             cache: PaintCache::new(1.0),
             text_system,
@@ -191,124 +194,14 @@ impl Ui {
             outside: false,
             drag: None,
             scrolling: None,
+            touch: None,
             modifiers: Modifiers::NONE,
             clicks: None,
             started: Instant::now(),
             clock: None,
             last_tick: None,
             shortcuts: Vec::new(),
-            surfaces: None,
         }
-    }
-
-    fn tree(&mut self) -> &mut Tree {
-        poll_tasks();
-        self.scope.run(|| {
-            let mut drain = || {
-                batch(|| {
-                    while let Ok(patch) = self.pending.try_recv() {
-                        let text = &mut self.text_system;
-                        patch(&mut BuildCx {
-                            tree: &mut self.tree,
-                            patches: &self.patches,
-                            text,
-                        });
-                        self.tree.stats.patches += 1;
-                    }
-                    self.tree.settle_focus();
-                });
-                !self.pending.is_empty()
-            };
-            while drain() {}
-        });
-        self.tree.publish_bindings();
-        if let Some(commit) = self.tree.take_commit() {
-            self.compositor.apply(commit);
-        }
-        self.forward_surfaces();
-        &mut self.tree
-    }
-
-    fn forward_surfaces(&mut self) {
-        let Some(registrar) = &self.surfaces else {
-            return;
-        };
-        for op in self.tree.take_surface_ops() {
-            op.send(registrar);
-        }
-        for usage in self.compositor.take_surface_uses() {
-            match usage {
-                SurfaceUse::Bound(id) => registrar.bind(id),
-                SurfaceUse::Unbound(id) => registrar.unbind(id),
-            }
-        }
-    }
-
-    pub fn set_surfaces(&mut self, registrar: SurfaceRegistrar) {
-        self.surfaces = Some(registrar);
-        self.tree();
-    }
-
-    pub fn set_visible(&mut self, visible: bool) {
-        self.tree.set_window_visible(visible);
-        self.tree
-            .publish_surfaces(&self.compositor, self.cache.scale);
-        self.tree();
-    }
-
-    pub fn has_surfaces(&self) -> bool {
-        self.compositor.has_surfaces()
-    }
-
-    pub fn set_appearance(&mut self, appearance: Appearance) {
-        self.window_handle.appearance.set_if_changed(appearance);
-    }
-
-    pub fn set_focused(&mut self, focused: bool) {
-        self.window_handle.focused.set_if_changed(focused);
-    }
-
-    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
-        poll_tasks();
-        let mut commands = Vec::new();
-        while let Ok(sent) = self.window_commands.try_recv() {
-            match sent {
-                Sent::Window(command) => commands.push(command),
-                Sent::Copy(text) => self.tree.copy_text(&text),
-            }
-        }
-        commands
-    }
-
-    pub fn add_font(&mut self, data: Vec<u8>) -> Vec<String> {
-        self.text_system.add_font(data)
-    }
-
-    pub fn needs_frame(&mut self) -> bool {
-        self.tree().dirty() != Dirty::None
-            || self.compositor.is_animating()
-            || self.tree.caret_animating(self.now())
-    }
-
-    pub fn is_animating(&mut self) -> bool {
-        self.tree();
-        self.compositor.is_animating()
-    }
-
-    pub fn set_size(&mut self, size: Size) {
-        self.size.set_if_changed(size);
-        self.tree().set_size(size);
-    }
-
-    pub fn set_scale(&mut self, scale: f32) {
-        if self.cache.scale != scale {
-            self.cache.scale = scale;
-            self.tree().invalidate_paint();
-        }
-    }
-
-    pub fn scale(&self) -> f32 {
-        self.cache.scale
     }
 
     pub fn update(&mut self) -> bool {
@@ -321,101 +214,258 @@ impl Ui {
         self.step(now)
     }
 
+    fn step(&mut self, now: f64) -> bool {
+        let _update = trace_span!("update").entered();
+        self.tree.tick_caret(now);
+        self.flush();
+        let animating = self.animate(now);
+        self.publish();
+        self.flush();
+        self.layout();
+        self.publish();
+        self.flush();
+        if self.layout() {
+            self.tree.stats.relayouts += 1;
+        }
+        self.publish();
+        let changed = self.paint();
+        self.tree.place_surfaces(self.cache.scale);
+        self.last_tick = self.tree.compositor.is_animating().then_some(now);
+        animating || changed
+    }
+
+    pub fn flush(&mut self) {
+        poll_tasks();
+        loop {
+            self.scope.run(|| {
+                batch(|| {
+                    while let Some(patch) = self.queue.pop() {
+                        patch.apply(&mut BuildCx {
+                            parent: self.tree.content(),
+                            tree: &mut self.tree,
+                            queue: &self.queue,
+                            text: &mut self.text_system,
+                        });
+                        self.tree.stats.patches += 1;
+                    }
+                    self.tree.settle_focus();
+                });
+            });
+            self.apply_zoom();
+            if self.queue.is_empty() {
+                break;
+            }
+        }
+        self.tree.publish_bindings();
+    }
+
+    fn animate(&mut self, now: f64) -> bool {
+        let animating = self.tree.compositor.is_animating();
+        if animating {
+            let dt = self.last_tick.map_or(0.0, |last| (now - last).max(0.0));
+            self.tree.compositor.tick(dt as f32);
+        }
+        animating
+    }
+
+    fn publish(&mut self) {
+        let _publish = trace_span!("publish").entered();
+        self.tree.publish();
+    }
+
+    fn layout(&mut self) -> bool {
+        if !self.tree.layout(&mut self.text_system) {
+            return false;
+        }
+        if self.pointer.is_some() {
+            let _hover = trace_span!("hover").entered();
+            self.tree.set_pointer(self.pointer, self.modifiers);
+        }
+        true
+    }
+
+    fn paint(&mut self) -> bool {
+        self.tree.paint(&mut self.cache, &mut self.text_system)
+    }
+
+    pub fn sync_surfaces(&mut self, surfaces: &mut Surfaces) {
+        self.tree.sync_surfaces(surfaces);
+    }
+
+    pub fn set_visible(&mut self, visible: bool) {
+        self.tree.set_window_visible(visible);
+        self.tree.place_surfaces(self.cache.scale);
+    }
+
+    pub fn has_surfaces(&self) -> bool {
+        self.tree.compositor.has_surfaces()
+    }
+
+    pub fn set_appearance(&mut self, appearance: Appearance) {
+        self.window_handle.appearance.set_if_changed(appearance);
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        self.window_handle.focused.set_if_changed(focused);
+    }
+
+    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
+        let mut commands = Vec::new();
+        for sent in self.queue.take_sent() {
+            match sent {
+                Sent::Window(command) => commands.push(command),
+                Sent::Copy(text) => self.tree.copy_text(&text),
+            }
+        }
+        commands
+    }
+
+    pub fn add_font(&mut self, data: impl Into<Cow<'static, [u8]>>) -> Vec<String> {
+        self.text_system.add_font(data)
+    }
+
+    pub fn needs_frame(&self) -> bool {
+        !self.queue.is_empty()
+            || self.tree.dirty() != Dirty::None
+            || self.tree.compositor.is_animating()
+            || self.tree.caret_animating(self.now())
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.tree.compositor.is_animating()
+    }
+
+    pub fn set_size(&mut self, size: Size) {
+        self.viewport = size;
+        self.rescale();
+    }
+
+    pub fn set_device_scale(&mut self, scale: f32) {
+        self.device_scale = scale;
+        self.rescale();
+    }
+
+    fn apply_zoom(&mut self) {
+        let zoom = self.zoom.get_untracked();
+        let zoom = if zoom.is_finite() && zoom > 0.0 {
+            zoom
+        } else {
+            1.0
+        };
+        if zoom == self.zoomed {
+            return;
+        }
+        let ratio = self.zoomed / zoom;
+        self.pointer = self
+            .pointer
+            .map(|pointer| Point::new(pointer.x * ratio, pointer.y * ratio));
+        self.zoomed = zoom;
+        self.rescale();
+    }
+
+    fn rescale(&mut self) {
+        let scale = self.device_scale * self.zoomed;
+        if self.cache.scale != scale {
+            self.cache.scale = scale;
+            self.tree.invalidate_paint();
+        }
+        let size = Size::new(
+            self.viewport.width / self.zoomed,
+            self.viewport.height / self.zoomed,
+        );
+        self.size.set_if_changed(size);
+        self.tree.set_size(size);
+    }
+
+    pub fn scale(&self) -> f32 {
+        self.cache.scale
+    }
+
     fn now(&self) -> f64 {
         self.clock
             .unwrap_or_else(|| self.started.elapsed().as_secs_f64())
     }
 
-    fn step(&mut self, now: f64) -> bool {
-        let _update = trace_span!("update").entered();
-        self.tree.tick_caret(now);
-        self.tree();
-        let mut changed = self.compositor.is_animating();
-        if changed {
-            let dt = self.last_tick.map_or(0.0, |last| (now - last).max(0.0));
-            self.compositor.tick(dt as f32);
-        }
-        for _ in 0..MAX_PASSES {
-            self.tree.publish(&self.compositor);
-            let relayout = self.tree().dirty().needs_layout();
-            if !self.tree.update(&mut self.cache, &mut self.text_system) {
-                break;
-            }
-            self.tree.stats.passes += 1;
-            changed = true;
-            self.tree();
-            if relayout && self.pointer.is_some() {
-                let _hover = trace_span!("hover").entered();
-                self.tree
-                    .set_pointer(&self.compositor, self.pointer, self.modifiers);
-            }
-        }
-        self.tree
-            .publish_surfaces(&self.compositor, self.cache.scale);
-        self.tree();
-        self.last_tick = self.compositor.is_animating().then_some(now);
-        changed
-    }
-
     pub fn frame(&mut self) -> Frame<'_> {
         let _scene = trace_span!("scene").entered();
         Frame {
-            scene: self.compositor.scene(self.cache.scale),
+            scene: self.tree.compositor.scene(self.cache.scale),
             atlas: &mut self.cache.atlas,
         }
     }
 
-    pub fn stats(&mut self) -> FrameStats {
+    pub fn stats(&self) -> FrameStats {
         FrameStats {
             text: self.text_system.stats(),
             reactive: stats(),
-            ..self.tree().stats()
+            ..self.tree.stats()
         }
     }
 
-    pub fn bounds_of(&mut self, name: &str) -> Option<Rect> {
+    pub fn bounds_of(&self, name: &str) -> Option<Rect> {
         self.bounds_of_all(name).into_iter().next()
     }
 
-    pub fn bounds_of_all(&mut self, name: &str) -> Vec<Rect> {
-        self.tree();
-        self.tree.bounds_of_all(&self.compositor, name)
+    pub fn bounds_of_all(&self, name: &str) -> Vec<Rect> {
+        self.tree.bounds_of_all(name)
     }
 
-    pub fn text_of(&mut self, name: &str) -> Option<String> {
-        self.tree();
+    pub fn text_of(&self, name: &str) -> Option<String> {
         self.tree.text_of(name)
     }
 
-    pub fn text_bounds(&mut self, needle: &str) -> Option<Rect> {
-        self.tree();
-        self.tree.text_bounds(&self.compositor, needle)
+    pub fn text_bounds(&self, needle: &str) -> Option<Rect> {
+        self.tree.text_bounds(needle)
     }
 
-    pub fn text_index_at(&mut self, position: Point) -> Option<usize> {
-        self.tree();
+    pub fn text_index_at(&self, position: Point) -> Option<usize> {
         self.tree
-            .hit_test(&self.compositor, position)
+            .hit_test(position)
             .iter()
             .rev()
-            .find_map(|id| self.tree.text_hit(&self.compositor, *id, position))
+            .find_map(|id| self.tree.text_hit(*id, position))
             .map(|hit| hit.index)
     }
 
-    pub fn bounds_at(&mut self, position: Point) -> Option<Rect> {
-        self.tree();
-        let Ui {
-            tree, compositor, ..
-        } = self;
-        tree.hit_test(compositor, position)
-            .last()
-            .map(|id| tree.window_bounds(compositor, *id))
+    pub fn bounds_at(&self, position: Point) -> Option<Rect> {
+        let hit = self.tree.hit_test(position);
+        hit.last().map(|id| self.tree.window_bounds(*id))
+    }
+
+    pub fn text_cursor_area(&self) -> Option<Rect> {
+        self.tree.caret_area()
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        self.tree.cursor()
+    }
+
+    pub fn has_focus(&self) -> bool {
+        self.tree.focused().is_some()
+    }
+
+    pub fn accepts_text(&self) -> bool {
+        let path = self.tree.focus_path();
+        self.tree.focused().is_some() && !self.tree.listeners(&path, On::Ime).is_empty()
+    }
+
+    pub fn binding_for<T: Any>(&self) -> Option<Chord> {
+        self.tree
+            .effective_bindings()
+            .into_iter()
+            .find(|(kind, _)| *kind == TypeId::of::<T>())
+            .map(|(_, chord)| chord)
+    }
+
+    fn emit(&mut self, listeners: &Listeners, event: Event<'_>) {
+        self.scope.run(|| emit(listeners, event, |_| {}));
+        self.flush();
     }
 
     fn refresh_pointer(&mut self) {
-        self.tree();
-        self.tree
-            .set_pointer(&self.compositor, self.pointer, self.modifiers);
+        self.flush();
+        self.tree.set_pointer(self.pointer, self.modifiers);
+        self.flush();
     }
 
     pub fn pointer_moved(&mut self, position: Point) {
@@ -440,45 +490,16 @@ impl Ui {
         self.tree.set_clipboard(Box::new(clipboard));
     }
 
-    pub fn clipboard_target(&mut self) -> Option<ClipboardTarget> {
-        self.tree().clipboard_target()
-    }
-
-    pub fn clipboard_selection(&mut self) -> Option<(ClipboardTarget, String)> {
-        self.tree();
-        self.tree.clipboard_selection(&mut self.text_system)
-    }
-
-    pub fn paste_text(&mut self, target: ClipboardTarget, text: String) -> bool {
-        self.clipboard_edit(&target, EditOp::PasteText(text))
-    }
-
-    pub fn cut_selection(&mut self, target: ClipboardTarget) -> bool {
-        self.clipboard_edit(&target, EditOp::CutSelection)
-    }
-
-    fn clipboard_edit(&mut self, target: &ClipboardTarget, op: EditOp) -> bool {
-        self.tree();
-        let applied = self
-            .scope
-            .run(|| self.tree.clipboard_edit(target, op, &mut self.text_system));
-        self.tree();
-        applied
-    }
-
     pub fn clear_focus(&mut self) {
-        if self.tree().is_composing() {
+        self.flush();
+        if self.tree.is_composing() {
             self.ime(ImeEvent::Preedit {
                 text: String::new(),
                 cursor: None,
             });
         }
-        self.tree().set_focus(None, false);
-    }
-
-    pub fn text_cursor_area(&mut self) -> Option<Rect> {
-        self.tree();
-        self.tree.caret_area(&self.compositor)
+        self.tree.set_focus(None, false);
+        self.flush();
     }
 
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
@@ -488,29 +509,11 @@ impl Ui {
         }
     }
 
-    pub fn cursor(&mut self) -> Cursor {
-        self.tree().cursor()
-    }
-
-    pub fn has_focus(&mut self) -> bool {
-        self.tree().focused().is_some()
-    }
-
     pub fn focus_next(&mut self, reverse: bool) -> bool {
-        self.tree().focus_next(reverse)
-    }
-
-    pub fn accepts_text(&mut self) -> bool {
-        let path = self.tree().focus_path();
-        self.tree.focused().is_some() && !self.tree.listeners(&path, On::Ime).is_empty()
-    }
-
-    pub fn binding_for<T: Any>(&mut self) -> Option<Chord> {
-        self.tree()
-            .effective_bindings()
-            .into_iter()
-            .find(|(kind, _)| *kind == TypeId::of::<T>())
-            .map(|(_, chord)| chord)
+        self.flush();
+        let moved = self.tree.focus_next(reverse);
+        self.flush();
+        moved
     }
 
     pub fn dispatch_action<T: Any>(&mut self, action: T) -> bool {
@@ -518,7 +521,8 @@ impl Ui {
     }
 
     pub(crate) fn dispatch_action_ref(&mut self, action: &dyn Any) -> bool {
-        let path = self.tree().focus_path();
+        self.flush();
+        let path = self.tree.focus_path();
         let handlers = self.tree.action_handlers(&path, action.type_id());
         self.invoke_action(action, &handlers)
     }
@@ -530,17 +534,18 @@ impl Ui {
 
     pub(crate) fn invoke(&mut self, f: impl FnOnce()) {
         self.scope.run(|| batch(f));
-        self.tree();
+        self.flush();
     }
 
     pub fn key_down(&mut self, event: KeyEvent) -> bool {
-        if event.key == Key::Enter && self.tree().is_composing() {
+        self.flush();
+        if event.key == Key::Enter && self.tree.is_composing() {
             return true;
         }
         if self.key_event(&event, On::KeyDown) {
             return true;
         }
-        let path = self.tree().focus_path();
+        let path = self.tree.focus_path();
         if let Some((action, handlers)) = self.tree.binding(&path, &event) {
             return self.invoke_action(&*action, &handlers);
         }
@@ -558,7 +563,7 @@ impl Ui {
             alt,
             meta,
         } = event.modifiers;
-        event.key == Key::Tab && !(ctrl || alt || meta) && self.tree().focus_next(shift)
+        event.key == Key::Tab && !(ctrl || alt || meta) && self.focus_next(shift)
     }
 
     pub fn bind_menus(&mut self, menus: &[Menu]) {
@@ -599,32 +604,31 @@ impl Ui {
     }
 
     fn emit_focused(&mut self, on: On, event: Event<'_>) {
-        let path = self.tree().focus_path();
-        self.scope
-            .run(|| emit(&self.tree.listeners(&path, on), event, |_| {}));
-        self.tree();
+        self.flush();
+        let path = self.tree.focus_path();
+        let listeners = self.tree.listeners(&path, on);
+        self.emit(&listeners, event);
     }
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(position) = self.pointer else { return };
         self.held = Some(button);
         let now = self.now();
-        let tree = self.tree();
+        self.flush();
         if button == PointerButton::Primary {
-            tree.press();
-            tree.focus_pointer();
+            self.tree.press();
+            self.tree.focus_pointer();
             let repeat = self.clicks.filter(|(at, last, _)| {
                 let travel = position - *last;
                 now - at <= MULTI_CLICK_SECONDS && travel.x.hypot(travel.y) <= MULTI_CLICK_SLOP
             });
             self.clicks = Some((now, position, repeat.map_or(1, |(_, _, count)| count + 1)));
         }
-        let tree = &mut self.tree;
-        let path = tree.hover_path().to_vec();
+        let path = self.tree.hover_path().to_vec();
         self.dispatch(&path, On::PointerDown, position, button);
         if button == PointerButton::Primary {
             let samples = Samples::new(self.now(), position);
-            let targets = self.tree().listeners(&path, On::Drag);
+            let targets = self.tree.listeners(&path, On::Drag);
             self.drag = targets.first().map(|(element, _)| Drag {
                 element: *element,
                 start: position,
@@ -643,7 +647,8 @@ impl Ui {
         if let Some(drag) = &dragged {
             self.drag_event(drag, DragPhase::End, position);
         }
-        let path = self.tree().pointer_path().to_vec();
+        self.flush();
+        let path = self.tree.pointer_path().to_vec();
         self.dispatch(&path, On::PointerUp, position, button);
         self.tree.release_capture();
         self.refresh_pointer();
@@ -661,6 +666,11 @@ impl Ui {
     }
 
     pub fn pointer_cancel(&mut self) {
+        self.release_press();
+        self.pointer_left();
+    }
+
+    fn release_press(&mut self) {
         self.held = None;
         if let (Some(drag), Some(position)) =
             (self.drag.take().filter(|drag| drag.started), self.pointer)
@@ -669,21 +679,68 @@ impl Ui {
         }
         self.tree.release_capture();
         self.tree.release();
-        self.pointer_left();
+    }
+
+    pub fn touch(&mut self, phase: TouchPhase, position: Point) {
+        match phase {
+            TouchPhase::Start => {
+                if self.touch.is_some() {
+                    self.touch(TouchPhase::Cancel, position);
+                }
+                self.pointer_moved(position);
+                self.pointer_down(PointerButton::Primary);
+                self.touch = Some(Touch {
+                    start: position,
+                    last: position,
+                    panning: false,
+                });
+            }
+            TouchPhase::Move => {
+                let Some(mut touch) = self.touch.take() else {
+                    return;
+                };
+                let travel = position - touch.start;
+                if touch.panning {
+                    self.scroll_drag(position - touch.last);
+                } else if self.drag.is_none() && travel.x.hypot(travel.y) >= TOUCH_SLOP {
+                    touch.panning = true;
+                    self.release_press();
+                    self.scroll_drag(travel);
+                } else {
+                    self.pointer_moved(position);
+                }
+                touch.last = position;
+                self.touch = Some(touch);
+            }
+            TouchPhase::End | TouchPhase::Cancel => {
+                let Some(touch) = self.touch.take() else {
+                    return;
+                };
+                if touch.panning {
+                    self.scroll_release();
+                } else if phase == TouchPhase::End {
+                    if position != touch.last {
+                        self.pointer_moved(position);
+                    }
+                    self.pointer_up(PointerButton::Primary);
+                } else {
+                    self.release_press();
+                }
+                self.pointer_left();
+            }
+        }
     }
 
     pub fn file_drop(&mut self, phase: FileDropPhase, paths: Vec<PathBuf>) -> bool {
+        self.flush();
         let position = self.pointer;
-        let tree = self.tree();
         let path = match position {
-            Some(_) => tree.hover_path().to_vec(),
-            None => tree.focus_path(),
+            Some(_) => self.tree.hover_path().to_vec(),
+            None => self.tree.focus_path(),
         };
-        let listeners = tree.listeners(&path, On::FileDrop);
+        let listeners = self.tree.listeners(&path, On::FileDrop);
         let event = FileDropEvent::new(phase, position, paths);
-        self.scope
-            .run(|| emit(&listeners, Event::FileDrop(&event), |_| {}));
-        self.tree();
+        self.emit(&listeners, Event::FileDrop(&event));
         event.stopped.get()
     }
 
@@ -695,7 +752,7 @@ impl Ui {
         let handled = if !self.scroll_event(delta) {
             true
         } else if let Some(layer) = self.scroll_target(by, false) {
-            self.tree.scroll_command(layer, LayerCommand::ScrollBy(by));
+            self.tree.scroll_by(layer, by);
             true
         } else {
             false
@@ -719,8 +776,7 @@ impl Ui {
             drag.travel = drag.travel + by;
             drag.samples.push(now, drag.travel);
             if let Some(layer) = layer {
-                self.tree
-                    .scroll_command(layer, LayerCommand::ScrollDrag(by));
+                self.tree.scroll_drag(layer, by);
             }
         }
         self.refresh_pointer();
@@ -732,8 +788,7 @@ impl Ui {
         };
         let velocity = drag.samples.velocity(self.now());
         if let Some(layer) = drag.layer {
-            self.tree()
-                .scroll_command(layer, LayerCommand::ScrollRelease(velocity));
+            self.tree.scroll_release(layer, velocity);
         }
     }
 
@@ -741,17 +796,18 @@ impl Ui {
         let Some(position) = self.pointer else {
             return false;
         };
-        let tree = self.tree();
-        let listeners = tree.listeners(tree.hover_path(), On::Scroll);
+        self.flush();
+        let listeners = self.tree.listeners(self.tree.hover_path(), On::Scroll);
         let event = ScrollEvent::new(position, delta);
-        emit(&listeners, Event::Scroll(&event), |_| {});
+        self.emit(&listeners, Event::Scroll(&event));
         !event.stopped.get()
     }
 
-    fn scroll_target(&mut self, by: Point, elastic: bool) -> Option<LayerId> {
-        let targets = self.tree().scroll_targets();
+    fn scroll_target(&self, by: Point, elastic: bool) -> Option<LayerId> {
+        let targets = self.tree.scroll_targets();
         let moves = |layer: &&LayerId| {
-            self.compositor
+            self.tree
+                .compositor
                 .scroll(**layer)
                 .is_some_and(|s| s.clamp(s.offset + by) != s.offset)
         };
@@ -785,7 +841,8 @@ impl Ui {
     }
 
     fn drag_event(&mut self, drag: &Drag, phase: DragPhase, position: Point) {
-        let listeners = self.tree().listeners(&[drag.element], On::Drag);
+        self.flush();
+        let listeners = self.tree.listeners(&[drag.element], On::Drag);
         let event = DragEvent {
             phase,
             position,
@@ -798,35 +855,35 @@ impl Ui {
             translation: position - drag.start,
             velocity: drag.samples.velocity(self.now()),
         };
-        emit(&listeners, Event::Drag(&event), |_| {});
+        self.emit(&listeners, Event::Drag(&event));
     }
 
     fn dispatch(&mut self, path: &[ElementId], on: On, position: Point, button: PointerButton) {
-        self.tree();
+        self.flush();
         if on == On::Click {
-            self.tree
-                .text_click(&self.compositor, path, position, self.modifiers);
+            self.tree.text_click(path, position, self.modifiers);
+            self.flush();
         }
-        let listeners = self.tree().listeners(path, on);
+        let listeners = self.tree.listeners(path, on);
         let mut event = PointerEvent::new(position, button);
         event.modifiers = self.modifiers;
         event.click_count = self.clicks.map_or(1, |(_, _, count)| count);
-        let (tree, compositor) = (&self.tree, &self.compositor);
+        let tree = &self.tree;
         let target = Cell::new(None);
         self.scope.run(|| {
             emit(&listeners, Event::Pointer(&event), |element| {
                 if !event.captured.get() {
                     target.set(Some(element));
                 }
-                let local = tree.to_local(compositor, element, position);
-                event.local.set(local);
+                event.local.set(tree.to_local(element, position));
+                event.size.set(tree.size_of(element));
             });
         });
         let captured = target.take().filter(|_| event.captured.get());
         if let Some(element) = captured.filter(|_| on == On::PointerDown) {
             self.tree.capture(path, element);
         }
-        self.tree();
+        self.flush();
     }
 }
 

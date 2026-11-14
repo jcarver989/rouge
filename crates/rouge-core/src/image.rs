@@ -1,7 +1,7 @@
 use crate::prop::{IntoProp, Prop, PropFrom};
 use crate::styled;
-use crate::tree::ElementId;
-use crate::view::{BuildCx, Div, Patches, View, div, send};
+use crate::tree::{ElementId, Kind};
+use crate::view::{BuildCx, Div, Patch, Queue, View, div};
 use image::{ImageError as DecodeError, load_from_memory};
 use rouge_macros::component;
 #[cfg(not(target_arch = "wasm32"))]
@@ -146,11 +146,11 @@ impl Image {
 
 styled!(Image => div);
 
-fn show(patches: &Patches, id: ElementId, source: ImageSource, on_error: Option<ErrorHandler>) {
+fn show(queue: &Queue, id: ElementId, source: ImageSource, on_error: Option<ErrorHandler>) {
     if let ImageSource::Data(data) = source {
-        return send(patches, move |cx| cx.tree.set_image(id, Some(data)));
+        return queue.push(Patch::Image(id, Some(data)));
     }
-    let patches = patches.clone();
+    let queue = queue.clone();
     spawn(async move {
         #[cfg(not(target_arch = "wasm32"))]
         let loaded = spawn_blocking(move || load(source))
@@ -159,9 +159,9 @@ fn show(patches: &Patches, id: ElementId, source: ImageSource, on_error: Option<
         #[cfg(target_arch = "wasm32")]
         let loaded = load(source);
         match loaded {
-            Ok(data) => send(&patches, move |cx| cx.tree.set_image(id, Some(data))),
+            Ok(data) => queue.push(Patch::Image(id, Some(data))),
             Err(error) => {
-                send(&patches, move |cx| cx.tree.set_image(id, None));
+                queue.push(Patch::Image(id, None));
                 if let Some(on_error) = on_error {
                     on_error(&error);
                 }
@@ -171,22 +171,21 @@ fn show(patches: &Patches, id: ElementId, source: ImageSource, on_error: Option<
 }
 
 impl View for Image {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let Image {
             mut div,
             source,
             fit,
             on_error,
         } = self;
-        div.spec.image = Some(ImageSpec { data: None, fit });
-        let id = div.build(cx);
-        let patches = cx.patches.clone();
+        div.spec.kind = Kind::Image(Box::new(ImageSpec { data: None, fit }));
+        let id = div.mount(cx);
+        let queue = cx.queue.clone();
         match source {
-            Prop::Static(source) => show(&patches, id, source, on_error),
+            Prop::Static(source) => show(&queue, id, source, on_error),
             Prop::Dynamic(compute) => {
-                effect(move || show(&patches, id, compute(), on_error.clone()));
+                effect(move || show(&queue, id, compute(), on_error.clone()));
             }
         }
-        id
     }
 }

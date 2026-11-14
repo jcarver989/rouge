@@ -1,12 +1,12 @@
 use crate::motion::UiContext;
-use crate::view::{Patches, send};
+use crate::view::{Patch, Queue};
 use rouge_reactive::{Signal, expect_context, signal};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FocusHandle {
     id: u64,
     focused: Signal<bool>,
-    patches: Signal<Patches>,
+    queue: Signal<Queue>,
 }
 
 #[track_caller]
@@ -15,7 +15,7 @@ pub fn focus_handle() -> FocusHandle {
     FocusHandle {
         id: context.next_id(),
         focused: signal(false),
-        patches: signal(context.patches()),
+        queue: signal(context.queue()),
     }
 }
 
@@ -25,10 +25,10 @@ impl FocusHandle {
     }
 
     fn request(&self, focus: bool) {
-        if self.patches.is_alive() {
+        if self.queue.is_alive() {
             let id = self.id;
-            self.patches
-                .with_untracked(|patches| send(patches, move |cx| cx.tree.focus_handle(id, focus)));
+            self.queue
+                .with_untracked(|queue| queue.push(Patch::Focus(id, focus)));
         }
     }
 

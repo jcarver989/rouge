@@ -1,18 +1,16 @@
 use crate::clipboard::ClipboardMedia;
 use crate::event::{Cursor, ImeEvent, Key, KeyEvent, PointerButton};
 use crate::focus::FocusHandle;
-use crate::length::Length;
 use crate::prop::IntoProp;
 use crate::style::Dirty;
-use crate::tree::ElementId;
+use crate::text::Movement;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
-use crate::view::{BuildCx, Text, View, send, text};
+use crate::view::{BuildCx, Patch, Text, View, text};
 use crate::window::EditAction;
 use crate::{Styled, styled};
 use rouge_macros::component;
 use rouge_reactive::{Scope, Signal, effect, run_in};
 use rouge_render::Color;
-use rouge_text::Movement;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ops::Range;
@@ -129,7 +127,7 @@ impl Editable {
         self
     }
 
-    pub fn text_size<U>(mut self, size: impl IntoProp<Length, U>) -> Self {
+    pub fn text_size<U>(mut self, size: impl IntoProp<f32, U>) -> Self {
         self.text = self.text.text_size(size);
         self
     }
@@ -197,7 +195,7 @@ fn key_op(event: &KeyEvent, multiline: bool) -> Option<EditOp> {
 }
 
 impl View for Editable {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let Editable {
             text: Text(mut div),
             value,
@@ -209,10 +207,10 @@ impl View for Editable {
         let multiline = state.multiline;
         let selection = state.selection_signal;
         let target = Rc::new(Cell::new(None));
-        let (element, patches) = (target.clone(), cx.patches.clone());
+        let (element, queue) = (target.clone(), cx.queue.clone());
         let edit: Rc<dyn Fn(EditOp)> = Rc::new(move |op| {
             if let Some(id) = element.get() {
-                send(&patches, move |cx| cx.tree.edit(id, op, cx.text));
+                queue.push(Patch::Edit(id, op));
             }
         });
         state.on_change = Some(Rc::new(move |content: &str| {
@@ -220,10 +218,11 @@ impl View for Editable {
                 value.set_if_changed(content.to_owned());
             }
         }));
-        let data = div.spec.text.get_or_insert_default();
-        data.content = value.get_untracked();
-        data.edit = Some(state);
-        data.style.wrap = multiline;
+        if let Some(data) = div.spec.kind.text_mut() {
+            data.content = value.get_untracked();
+            data.edit = Some(Box::new(state));
+            data.style.wrap = multiline;
+        }
 
         let select = edit.clone();
         let (keys, ime, down, moved, actions) =
@@ -286,17 +285,14 @@ impl View for Editable {
                 }
             })
             .on_pointer_up(move |_| released.set(false))
-            .build(cx);
+            .mount(cx);
         target.set(Some(id));
         if let Some(selection) = selection {
-            let patches = cx.patches.clone();
+            let queue = cx.queue.clone();
             effect(move || {
                 let range = selection.get();
-                send(&patches, move |cx| {
-                    cx.tree.edit(id, EditOp::Select(range), cx.text);
-                });
+                queue.push(Patch::Edit(id, EditOp::Select(range)));
             });
         }
-        id
     }
 }

@@ -8,7 +8,7 @@ fn props_accept_values_closures_signals_and_memos() {
     let color = signal(Color::RED);
     let width = signal(10.0f32);
     let wide = memo(move || width.get() * 2.0);
-    let mut ui = TestUi::new(|| {
+    let ui = TestUi::new(|| {
         div()
             .bg(Color::RED)
             .bg(0xff0000)

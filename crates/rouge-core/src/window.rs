@@ -2,12 +2,12 @@ use crate::event::{Chord, IntoChord, Key, KeyEvent, Modifiers};
 use crate::path::Path;
 use crate::tree::edit::EditOp;
 use crate::ui::Ui;
+use crate::view::Queue;
 use rouge_reactive::{ReadSignal, Signal, expect_context};
 pub use rouge_theme::Appearance;
 use std::any::Any;
 use std::rc::Rc;
 use std::slice::from_ref;
-use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Decorations {
@@ -248,7 +248,7 @@ pub(crate) enum Sent {
 
 #[derive(Clone, Copy)]
 pub struct WindowHandle {
-    pub(crate) commands: Signal<UnboundedSender<Sent>>,
+    pub(crate) queue: Signal<Queue>,
     pub(crate) title: Signal<String>,
     pub(crate) appearance: Signal<Appearance>,
     pub(crate) focused: Signal<bool>,
@@ -272,10 +272,8 @@ impl WindowHandle {
     }
 
     fn post(self, command: Sent) {
-        if self.commands.is_alive() {
-            self.commands.with_untracked(|commands| {
-                let _ = commands.send(command);
-            });
+        if self.queue.is_alive() {
+            self.queue.with_untracked(|queue| queue.post(command));
         }
     }
 

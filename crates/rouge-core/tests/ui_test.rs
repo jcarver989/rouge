@@ -1,7 +1,10 @@
-use rouge_core::testing::{BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, counter};
+use rouge_core::testing::{
+    BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
+};
 use rouge_core::{
-    Color, DragEvent, DragPhase, Menu, MenuItem, Modifiers, Point, PointerButton, Rect, Size,
-    Styled, div, dynamic, pct, scroll, show, text, window_size,
+    Color, DragEvent, DragPhase, Interactions, Menu, MenuItem, Modifiers, Point, PointerButton,
+    Rect, ScrollState, Scrollable, Size, Styled, TouchPhase, div, dynamic, pct, scroll, show, text,
+    window_size, zoom,
 };
 use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
 use std::time::Duration;
@@ -325,6 +328,73 @@ fn window_size_tracks_resizes() {
 }
 
 #[test]
+fn zoom_shrinks_the_logical_window_and_paints_everything_at_the_higher_scale() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let seen = signal(Size::ZERO);
+    let (mut ui, zoom) = TestUiBuilder::default().build_with(move || {
+        let size = window_size();
+        effect(move || seen.set(size.get()));
+        let block = div()
+            .test_id("block")
+            .w(32.0)
+            .h(20.0)
+            .rounded(8.0)
+            .bg(Color::RED);
+        (div().test_id("root").size_full().child(block), zoom())
+    });
+    assert_near(ui.pixel(3, 3)?, RED, "inside the corner radius");
+    assert_eq!(ui.pixel(40, 15)?, CLEAR);
+    zoom.set(2.0);
+    ui.advance(0.0);
+    assert_eq!(ui.scale(), 2.0);
+    assert_eq!(seen.get_untracked(), Size::new(100.0, 50.0));
+    assert_eq!(ui.rect_of("root")?, Rect::new(0.0, 0.0, 100.0, 50.0));
+    assert_eq!(ui.rect_of("block")?, Rect::new(0.0, 0.0, 32.0, 20.0));
+    assert_eq!(ui.pixel(40, 15)?, RED);
+    assert_eq!(ui.pixel(70, 10)?, CLEAR);
+    assert_near(ui.pixel(3, 3)?, CLEAR, "the corner radius doubled too");
+    zoom.set(1.0);
+    ui.advance(0.0);
+    assert_eq!(seen.get_untracked(), Size::new(200.0, 100.0));
+    assert_eq!(ui.pixel(40, 15)?, CLEAR);
+    Ok(())
+}
+
+#[test]
+fn physical_pointer_positions_divided_by_the_scale_hit_what_is_painted_there() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (left, right) = (
+        signal(Interactions::default()),
+        signal(Interactions::default()),
+    );
+    let (mut ui, zoom) = TestUiBuilder::default().scale(2.0).build_with(move || {
+        let half = |color, state| div().w(50.0).h(20.0).bg(color).track_interaction(state);
+        let row = div()
+            .flex()
+            .row()
+            .child(half(Color::RED, left))
+            .child(half(Color::BLUE, right));
+        (row, zoom())
+    });
+    zoom.set(1.5);
+    ui.advance(0.0);
+    assert_eq!(ui.scale(), 3.0);
+    assert_eq!(ui.pixel(180, 30)?, BLUE);
+    let scale = ui.scale();
+    ui.pointer_moved(Point::new(180.0 / scale, 30.0 / scale));
+    ui.advance(0.0);
+    assert!(right.get_untracked().hovered && !left.get_untracked().hovered);
+    zoom.set(3.0);
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(180, 30)?, RED);
+    assert!(
+        left.get_untracked().hovered && !right.get_untracked().hovered,
+        "a still pointer keeps its physical position across zoom changes"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_captured_pointer_keeps_delivering_moves_and_the_release_even_outside_the_window() -> TestResult
 {
     let _rt = Runtime::new().enter();
@@ -586,6 +656,7 @@ fn text_of_reads_the_current_text_inside_a_test_id() {
     });
     assert_eq!(ui.text_of("card").as_deref(), Some("Hello, Ada"));
     name.set("Grace".to_owned());
+    ui.flush();
     assert_eq!(ui.text_of("card").as_deref(), Some("Hello, Grace"));
     assert_eq!(ui.text_of("missing"), None);
 }
@@ -614,6 +685,166 @@ fn menu_shortcuts_dispatch_when_no_element_binding_handles_the_chord() -> TestRe
     Ok(())
 }
 
+#[test]
+fn a_tap_clicks_shows_its_press_and_leaves_no_hover_behind() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, clicks) = clicker();
+    let at = Point::new(20.0, 20.0);
+    ui.touch(TouchPhase::Start, at);
+    ui.update();
+    assert_eq!(ui.pixel(20, 20)?, BLUE, "pressed while the finger is down");
+    ui.touch(TouchPhase::Move, Point::new(22.0, 21.0));
+    ui.touch(TouchPhase::End, Point::new(22.0, 21.0));
+    ui.update();
+    assert_eq!(clicks.get(), 1);
+    assert_eq!(ui.pixel(20, 20)?, RED, "no hover once the finger lifts");
+    Ok(())
+}
+
+#[test]
+fn a_touch_pan_scrolls_without_clicking_and_flings_on_release() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, state, clicks) = touch_scroller();
+    ui.touch(TouchPhase::Start, Point::new(50.0, 80.0));
+    for y in [70.0, 50.0, 30.0] {
+        ui.advance(0.01);
+        ui.touch(TouchPhase::Move, Point::new(50.0, y));
+    }
+    ui.advance(0.0);
+    assert_eq!(
+        state.get_untracked().offset.y,
+        50.0,
+        "content follows the finger"
+    );
+    ui.touch(TouchPhase::End, Point::new(50.0, 30.0));
+    ui.run(0.1);
+    assert!(
+        state.get_untracked().offset.y > 50.0,
+        "keeps moving after the finger lifts"
+    );
+    ui.run(5.0);
+    assert_eq!(clicks.get(), 0, "a pan is not a tap");
+    assert!(!ui.needs_frame());
+}
+
+#[test]
+fn a_touch_cancel_ends_the_press_without_a_click() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, clicks) = clicker();
+    ui.touch(TouchPhase::Start, Point::new(20.0, 20.0));
+    ui.touch(TouchPhase::Cancel, Point::new(20.0, 20.0));
+    assert_eq!(clicks.get(), 0);
+}
+
+#[test]
+fn a_touch_on_a_drag_target_drags_it_instead_of_panning() {
+    let _rt = Runtime::new().enter();
+    let events = signal(Vec::<DragPhase>::new());
+    let state = signal(ScrollState::default());
+    let mut ui = TestUi::new(move || {
+        let handle = div()
+            .w_full()
+            .h(40.0)
+            .on_drag(move |drag| events.update(|events| events.push(drag.phase)));
+        let content = div().child(handle).child(div().h(400.0));
+        div().size_full().child(
+            scroll()
+                .w(100.0)
+                .h(100.0)
+                .scroll_state(state)
+                .child(content),
+        )
+    });
+    ui.touch(TouchPhase::Start, Point::new(20.0, 20.0));
+    ui.touch(TouchPhase::Move, Point::new(20.0, 5.0));
+    ui.touch(TouchPhase::End, Point::new(20.0, 5.0));
+    ui.advance(0.0);
+    assert_eq!(
+        events.get_untracked(),
+        [DragPhase::Start, DragPhase::Move, DragPhase::End]
+    );
+    assert_eq!(state.get_untracked().offset.y, 0.0);
+}
+
+#[test]
+fn each_pointer_listener_sees_its_own_local_position_and_size() {
+    let _rt = Runtime::new().enter();
+    let (outer, inner) = (signal(None), signal(None));
+    let mut ui = TestUi::new(move || {
+        let target = div()
+            .size(40.0)
+            .h(20.0)
+            .translate_x(30.0)
+            .on_pointer_down(move |event| inner.set(Some((event.local(), event.size()))));
+        div()
+            .w(100.0)
+            .h(60.0)
+            .p(10.0)
+            .on_pointer_down(move |event| outer.set(Some((event.local(), event.size()))))
+            .child(target)
+    });
+    ui.click(Point::new(45.0, 15.0));
+    assert_eq!(
+        inner.get_untracked(),
+        Some((Point::new(5.0, 5.0), Size::new(40.0, 20.0))),
+        "relative to the translated target"
+    );
+    assert_eq!(
+        outer.get_untracked(),
+        Some((Point::new(45.0, 15.0), Size::new(100.0, 60.0))),
+        "relative to the ancestor it bubbled to"
+    );
+}
+
+#[test]
+fn writes_wait_in_the_queue_until_flushed_and_lay_out_on_the_next_frame() {
+    let _rt = Runtime::new().enter();
+    let (width, label) = (signal(10.0_f32), signal("before".to_owned()));
+    let mut ui = TestUi::new(move || {
+        div()
+            .test_id("box")
+            .w(move || width.get())
+            .h(10.0)
+            .child(text(move || label.get()))
+    });
+    let laid_out = |ui: &TestUi| ui.bounds_of("box").map(|bounds| bounds.size.width);
+    width.set(20.0);
+    label.set("after".to_owned());
+    assert!(ui.needs_frame());
+    assert_eq!(laid_out(&ui), Some(10.0), "queries read the last frame");
+    assert_eq!(ui.text_of("box").as_deref(), Some("before"));
+    ui.flush();
+    assert_eq!(ui.text_of("box").as_deref(), Some("after"), "flushed");
+    assert_eq!(laid_out(&ui), Some(10.0), "a flush does not lay out");
+    assert!(ui.needs_frame());
+    assert!(ui.update());
+    assert_eq!(laid_out(&ui), Some(20.0));
+    assert!(!ui.needs_frame());
+}
+
+#[test]
+fn geometry_observers_feed_back_once_per_frame_and_the_rest_waits_for_the_next() {
+    let _rt = Runtime::new().enter();
+    let (first, second) = (signal(Size::ZERO), signal(Size::ZERO));
+    let mut ui = TestUi::new(move || {
+        let half = |size: Signal<Size>| move || size.get().width / 2.0;
+        div()
+            .flex()
+            .child(div().w(40.0).h(10.0).track_size(first))
+            .child(div().test_id("b").w(half(first)).h(10.0).track_size(second))
+            .child(div().test_id("c").w(half(second)).h(10.0))
+    });
+    let width = |ui: &TestUi, name| ui.bounds_of(name).map(|bounds| bounds.size.width);
+    assert_eq!(width(&ui, "b"), Some(20.0), "re-laid out in the same frame");
+    assert_eq!(width(&ui, "c"), Some(0.0), "a second feedback waits");
+    assert_eq!(ui.stats().relayouts, 1);
+    assert!(ui.needs_frame(), "and asks for the next frame");
+    ui.update();
+    assert_eq!(width(&ui, "c"), Some(10.0));
+    assert_eq!(ui.stats().relayouts, 1);
+    assert!(!ui.needs_frame());
+}
+
 fn clicker() -> (TestUi, Signal<u32>) {
     let clicks = signal(0u32);
     let ui = TestUi::new(|| {
@@ -631,3 +862,21 @@ fn clicker() -> (TestUi, Signal<u32>) {
 
 #[derive(Clone, Copy)]
 struct Refresh;
+
+fn touch_scroller() -> (TestUi, Signal<ScrollState>, Signal<u32>) {
+    let state = signal(ScrollState::default());
+    let clicks = signal(0u32);
+    let ui = TestUi::new(move || {
+        let content = div()
+            .h(1000.0)
+            .on_click(move |_| clicks.update(|c| *c += 1));
+        div().size_full().child(
+            scroll()
+                .w(100.0)
+                .h(100.0)
+                .scroll_state(state)
+                .child(content),
+        )
+    });
+    (ui, state, clicks)
+}

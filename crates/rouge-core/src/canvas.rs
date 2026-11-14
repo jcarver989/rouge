@@ -2,12 +2,12 @@ use crate::event::Modifiers;
 use crate::path::Path;
 use crate::prop::{IntoProp, Prop};
 use crate::styled;
-use crate::tree::ElementId;
-use crate::view::{BuildCx, Div, View, div, send};
+use crate::text::{TextLayout, TextStyle, TextSystem};
+use crate::tree::Kind;
+use crate::view::{BuildCx, Div, Patch, View, div};
 use rouge_macros::component;
 use rouge_reactive::{Scope, Signal, effect, run_in, signal, untrack};
 use rouge_render::{Color, ImageData, ImageQuad, Point, Quad, Rect, Size};
-use rouge_text::{TextLayout, TextStyle, TextSystem};
 use std::rc::Rc;
 
 pub(crate) type HitListener = Rc<dyn Fn(Option<TextHit>, Modifiers)>;
@@ -17,6 +17,13 @@ type MeasureFn = Rc<dyn Fn(&mut Measure<'_>, f32) -> f32>;
 pub(crate) struct CanvasMeasure {
     measure: MeasureFn,
     pub(crate) last: Option<Size>,
+}
+
+#[derive(Default)]
+pub(crate) struct CanvasData {
+    pub ops: Vec<PaintOp>,
+    pub measure: Option<CanvasMeasure>,
+    pub overflow: Option<Signal<f32>>,
 }
 
 impl CanvasMeasure {
@@ -31,9 +38,10 @@ pub struct Measure<'a> {
 
 impl Measure<'_> {
     pub fn text(&mut self, run: &TextRun) -> Rect {
-        let mut layout = self.system.layout(&run.content, &run.style);
-        layout.break_lines(run.wrap);
-        let (width, height) = layout.size();
+        let (width, height) = self
+            .system
+            .layout(&run.content, &run.style, run.wrap)
+            .size();
         let x = if run.right_aligned {
             run.origin.x - width
         } else {
@@ -124,7 +132,7 @@ pub struct Continuation {
 
 pub(crate) struct ShapedRun {
     pub(crate) run: TextRun,
-    pub(crate) layout: Option<Box<TextLayout>>,
+    pub(crate) layout: Option<TextLayout>,
 }
 
 impl ShapedRun {
@@ -139,7 +147,6 @@ impl ShapedRun {
         };
         layout
             .line_tops()
-            .into_iter()
             .skip(1)
             .map(|top| {
                 let origin = Point::new(continuation.x, self.run.origin.y + top);
@@ -159,10 +166,7 @@ impl ShapedRun {
     }
 
     pub(crate) fn bounds(&self) -> Rect {
-        let (width, height) = self
-            .layout
-            .as_ref()
-            .map_or((0.0, 0.0), |layout| layout.size());
+        let (width, height) = self.layout.as_ref().map_or((0.0, 0.0), TextLayout::size);
         Rect {
             origin: self.run.origin,
             size: Size::new(width, height),
@@ -275,6 +279,7 @@ impl Painter {
 pub struct Canvas {
     div: Div,
     draw: Box<dyn Fn(&mut Painter)>,
+    data: CanvasData,
 }
 
 impl Canvas {
@@ -285,7 +290,7 @@ impl Canvas {
 
     pub fn on_text_hover(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
         let owner = Scope::current();
-        self.div.spec.text_hover = Some(Rc::new(move |hit, modifiers| {
+        self.div.spec.extras().text_hover = Some(Rc::new(move |hit, modifiers| {
             run_in(owner, || f(hit, modifiers));
         }));
         self
@@ -293,7 +298,7 @@ impl Canvas {
 
     pub fn on_text_click(mut self, f: impl Fn(Option<TextHit>, Modifiers) + 'static) -> Self {
         let owner = Scope::current();
-        self.div.spec.text_click = Some(Rc::new(move |hit, modifiers| {
+        self.div.spec.extras().text_click = Some(Rc::new(move |hit, modifiers| {
             run_in(owner, || f(hit, modifiers));
         }));
         self
@@ -301,7 +306,7 @@ impl Canvas {
 
     pub fn measure(mut self, measure: impl Fn(&mut Measure<'_>, f32) -> f32 + 'static) -> Self {
         let owner = Scope::current();
-        self.div.spec.canvas_measure = Some(CanvasMeasure {
+        self.data.measure = Some(CanvasMeasure {
             measure: Rc::new(move |cx, width| {
                 run_in(owner, || untrack(|| measure(cx, width))).unwrap_or(0.0)
             }),
@@ -311,7 +316,7 @@ impl Canvas {
     }
 
     pub fn track_overflow(mut self, overflow: Signal<f32>) -> Self {
-        self.div.spec.overflow_observer = Some(overflow);
+        self.data.overflow = Some(overflow);
         self
     }
 }
@@ -321,19 +326,24 @@ pub fn canvas(draw: impl Fn(&mut Painter) + 'static) -> Canvas {
     Canvas {
         div: div(),
         draw: Box::new(draw),
+        data: CanvasData::default(),
     }
 }
 
 styled!(Canvas => div);
 
 impl View for Canvas {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let Canvas { mut div, draw } = self;
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let Canvas {
+            mut div,
+            draw,
+            data,
+        } = self;
         let size = signal(Size::default());
-        div.spec.size_observer = Some(size);
-        div.spec.canvas = Some(Vec::new());
-        let id = div.build(cx);
-        let patches = cx.patches.clone();
+        div.spec.extras().size_observer = Some(size);
+        div.spec.kind = Kind::Canvas(Box::new(data));
+        let id = div.mount(cx);
+        let queue = cx.queue.clone();
         effect(move || {
             let size = size.get();
             if size.width <= 0.0 || size.height <= 0.0 {
@@ -344,11 +354,8 @@ impl View for Canvas {
                 ops: Vec::new(),
             };
             draw(&mut painter);
-            send(&patches, move |cx| {
-                cx.tree.set_canvas(id, painter.ops, cx.text);
-            });
+            queue.push(Patch::Canvas(id, painter.ops));
         });
-        id
     }
 }
 
@@ -396,7 +403,7 @@ impl Icon {
 styled!(Icon => canvas);
 
 impl View for Icon {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let Icon {
             canvas,
             path,
@@ -426,7 +433,8 @@ impl View for Icon {
         Canvas {
             div: canvas,
             draw: Box::new(draw),
+            data: CanvasData::default(),
         }
-        .build(cx)
+        .build(cx);
     }
 }

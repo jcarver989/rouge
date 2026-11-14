@@ -1,47 +1,141 @@
-use crate::canvas::TextHit;
+use crate::animation::{Keyframes, LayerProp, LayoutTransition, Timing};
+use crate::canvas::{PaintOp, TextHit};
+use crate::clipboard::{ClipboardTarget, Pasted};
+use crate::compositor::{EffectSlot, MotionId, ScrollLinked, ScrollState};
 use crate::event::{
     Cursor, DragEvent, FileDropEvent, FocusEvent, ImeEvent, IntoChord, Key, KeyEvent, Modifiers,
     PointerEvent, ScrollEvent,
 };
 use crate::focus::FocusHandle;
-use crate::length::Length;
-use crate::motion::MotionProp;
-use crate::prop::{IntoEffect, IntoProp, Prop};
+use crate::motion::{MotionOp, MotionProp};
+use crate::prop::{AnyEffect, IntoProp, Prop, PropFrom};
 use crate::scroll::{Scrollable, scroll_key};
-use crate::style::{Dirty, Style, Styled};
+use crate::style::{Declaration, Dirty, StyleDelta, Styled};
 use crate::styled;
+use crate::text::{SpanStyle, TextAlign, TextStyle, TextSystem, WrapIndent};
 use crate::theme::Theme;
-use crate::tree::{ElementId, ElementSpec, Event, Interaction, On, TextData, Tree};
-use rouge_macros::component;
-use rouge_reactive::{Scope, Signal, effect, run_in};
-use rouge_render::{
-    BlendMode, Color, Effect, EffectInstance, EffectSlot, Keyframes, LayerCommand, LayerProp,
-    LayoutTransition, Mask, Rect, ScrollLinked, ScrollState, Size, Timing,
+use crate::tree::edit::EditOp;
+use crate::tree::{
+    ElementId, ElementSpec, Event, Interaction, Kind, Node, On, STATES, TextData, Tree,
 };
-use rouge_text::{SpanStyle, TextAlign, TextStyle, TextSystem, WrapIndent};
+use crate::window::Sent;
+use rouge_macros::component;
+use rouge_reactive::{Scope, Signal, effect, run_in, untrack};
+use rouge_render::{BlendMode, Color, EffectInstance, ImageData, Mask, Point, Rect, Size};
 use std::any::{Any, TypeId};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::mem::{replace, take};
 use std::ops::Range;
 use std::rc::Rc;
-use taffy::{Overflow, Point as Axes};
-use tokio::sync::mpsc::UnboundedSender;
+use taffy::Overflow;
 
-pub(crate) type Patch = Box<dyn FnOnce(&mut BuildCx<'_>)>;
-pub(crate) type Patches = UnboundedSender<Patch>;
-type Binding = Box<dyn FnOnce(&Patches, &mut ElementSpec, &Rc<Cell<Option<ElementId>>>)>;
+type Binding = Box<dyn FnOnce(&Queue, &mut ElementSpec, &Rc<Cell<Option<ElementId>>>)>;
 
-pub(crate) fn send(patches: &Patches, patch: impl FnOnce(&mut BuildCx<'_>) + 'static) {
-    let _ = patches.send(Box::new(patch));
+pub(crate) enum Patch {
+    Build(Box<dyn FnOnce(&mut BuildCx<'_>)>),
+    Style(ElementId, Declaration),
+    Variant(ElementId, usize, usize, Declaration),
+    Text(ElementId, Dirty, Box<dyn FnOnce(&mut TextData)>),
+    Content(ElementId, String),
+    RefreshText(ElementId),
+    Cursor(ElementId, Option<Cursor>),
+    Enabled(ElementId, bool),
+    LayerProp(ElementId, LayerProp, MotionProp, bool),
+    Effect(ElementId, EffectSlot, EffectInstance),
+    ScrollLink(ElementId, u64, ScrollLinked),
+    ScrollTo(ElementId, Point),
+    Image(ElementId, Option<ImageData>),
+    Canvas(ElementId, Vec<PaintOp>),
+    Edit(ElementId, EditOp),
+    Paste(ElementId, ClipboardTarget, Pasted),
+    Autofocus(ElementId),
+    Focus(u64, bool),
+    Motion(MotionId, MotionOp),
+}
+
+impl Patch {
+    pub(crate) fn apply(self, cx: &mut BuildCx<'_>) {
+        match self {
+            Patch::Build(build) => build(cx),
+            Patch::Style(id, declaration) => cx.tree.update_style(id, declaration),
+            Patch::Variant(id, slot, index, declaration) => {
+                cx.tree.update_variant(id, slot, index, declaration);
+            }
+            Patch::Text(id, dirty, set) => cx.tree.update_text(id, dirty, set),
+            Patch::Content(id, content) => cx.tree.set_text_content(id, content),
+            Patch::RefreshText(id) => cx.tree.refresh_text_subtree(id),
+            Patch::Cursor(id, cursor) => cx.tree.set_cursor(id, cursor),
+            Patch::Enabled(id, enabled) => cx.tree.set_disabled(id, !enabled),
+            Patch::LayerProp(id, prop, value, animate) => {
+                cx.tree.set_layer_prop(id, prop, value, animate);
+            }
+            Patch::Effect(id, slot, effect) => cx.tree.set_layer_effect(id, slot, effect),
+            Patch::ScrollLink(id, key, link) => cx.tree.set_scroll_link(id, key, link),
+            Patch::ScrollTo(id, offset) => cx.tree.scroll_to(id, offset),
+            Patch::Image(id, data) => cx.tree.set_image(id, data),
+            Patch::Canvas(id, ops) => cx.tree.set_canvas(id, ops, cx.text),
+            Patch::Edit(id, op) => cx.tree.edit(id, op, cx.text),
+            Patch::Paste(id, target, pasted) => cx.tree.paste(id, &target, pasted, cx.text),
+            Patch::Autofocus(id) => cx.tree.autofocus(id),
+            Patch::Focus(handle, focus) => cx.tree.focus_handle(handle, focus),
+            Patch::Motion(id, op) => cx.tree.motion(id, op),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Pending {
+    patches: VecDeque<Patch>,
+    sent: Vec<Sent>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct Queue(Rc<RefCell<Pending>>);
+
+impl Queue {
+    pub(crate) fn push(&self, patch: Patch) {
+        self.0.borrow_mut().patches.push_back(patch);
+    }
+
+    pub(crate) fn build(&self, build: impl FnOnce(&mut BuildCx<'_>) + 'static) {
+        self.push(Patch::Build(Box::new(build)));
+    }
+
+    pub(crate) fn pop(&self) -> Option<Patch> {
+        self.0.borrow_mut().patches.pop_front()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.borrow().patches.is_empty()
+    }
+
+    pub(crate) fn post(&self, sent: Sent) {
+        self.0.borrow_mut().sent.push(sent);
+    }
+
+    pub(crate) fn take_sent(&self) -> Vec<Sent> {
+        take(&mut self.0.borrow_mut().sent)
+    }
 }
 
 pub struct BuildCx<'a> {
     pub(crate) tree: &'a mut Tree,
-    pub(crate) patches: &'a Patches,
+    pub(crate) queue: &'a Queue,
     pub(crate) text: &'a mut TextSystem,
+    pub(crate) parent: Node,
+}
+
+impl BuildCx<'_> {
+    pub(crate) fn within(&mut self, parent: Node, build: impl FnOnce(&mut Self)) {
+        let outer = replace(&mut self.parent, parent);
+        build(self);
+        self.parent = outer;
+    }
 }
 
 pub trait View: 'static {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId;
+    fn build(self, cx: &mut BuildCx<'_>);
 
     fn into_any(self) -> AnyView
     where
@@ -51,11 +145,11 @@ pub trait View: 'static {
     }
 }
 
-pub struct AnyView(Box<dyn FnOnce(&mut BuildCx<'_>) -> ElementId>);
+pub struct AnyView(Box<dyn FnOnce(&mut BuildCx<'_>)>);
 
 impl View for AnyView {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        (self.0)(cx)
+    fn build(self, cx: &mut BuildCx<'_>) {
+        (self.0)(cx);
     }
 
     fn into_any(self) -> AnyView {
@@ -64,25 +158,21 @@ impl View for AnyView {
 }
 
 impl<T: View> View for Vec<T> {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let anchor = cx.tree.create_anchor();
-        let followers = self.into_iter().map(|view| view.build(cx)).collect();
-        cx.tree.set_followers(anchor, followers);
-        anchor
+    fn build(self, cx: &mut BuildCx<'_>) {
+        for view in self {
+            view.build(cx);
+        }
     }
 }
 
 impl View for () {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        cx.tree.create_anchor()
-    }
+    fn build(self, _: &mut BuildCx<'_>) {}
 }
 
 impl<T: View> View for Option<T> {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        match self {
-            Some(view) => view.build(cx),
-            None => cx.tree.create_anchor(),
+    fn build(self, cx: &mut BuildCx<'_>) {
+        if let Some(view) = self {
+            view.build(cx);
         }
     }
 }
@@ -141,9 +231,8 @@ pub fn div() -> Div {
 
 macro_rules! variants {
     ($($name:ident: $which:ident;)*) => {$(
-        pub fn $name(mut self, f: impl Fn(Style) -> Style + 'static) -> Self {
-            self.spec.variants[Interaction::$which as usize] = Some(Rc::new(f));
-            self
+        pub fn $name(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+            self.variant(Interaction::$which as usize, f(StyleDelta::default()))
         }
     )*};
 }
@@ -158,7 +247,7 @@ macro_rules! listeners {
                     run_in(owner, || f(event));
                 }
             };
-            self.spec.listeners[On::$on as usize].push(Rc::new(listener));
+            self.spec.extras().listeners.push((On::$on, Rc::new(listener)));
             self
         }
     )*};
@@ -174,22 +263,61 @@ macro_rules! layer_props {
 
 impl Div {
     pub fn preserve_focus(mut self) -> Self {
-        self.spec.preserve_focus = true;
+        self.spec.flags.preserve_focus = true;
         self
     }
 
     pub fn root_host(mut self) -> Self {
-        self.spec.root_host = true;
+        self.spec.flags.root_host = true;
         self
     }
 
     pub fn group(mut self, name: impl Into<String>) -> Self {
-        self.spec.group = Some(name.into());
+        self.spec.extras().group = Some(name.into());
+        self
+    }
+
+    pub fn group_hover(
+        mut self,
+        name: impl Into<String>,
+        f: impl FnOnce(StyleDelta) -> StyleDelta,
+    ) -> Self {
+        let groups = &mut self.spec.extras().groups;
+        groups.push((name.into(), Vec::new()));
+        let slot = STATES + groups.len() - 1;
+        self.variant(slot, f(StyleDelta::default()))
+    }
+
+    fn variant(mut self, slot: usize, delta: StyleDelta) -> Self {
+        let mut declarations = Vec::with_capacity(delta.0.len());
+        for (index, declaration) in delta.0.into_iter().enumerate() {
+            let compute = match declaration {
+                Prop::Static(declaration) => {
+                    declarations.push(declaration);
+                    continue;
+                }
+                Prop::Dynamic(compute) => compute,
+            };
+            declarations.push(untrack(&compute));
+            self = self.bind_prop(
+                Prop::Dynamic(compute),
+                move |spec, declaration| {
+                    let variant = spec.extras().variant_mut(slot);
+                    if let Some(entry) = variant.and_then(|variant| variant.get_mut(index)) {
+                        *entry = declaration;
+                    }
+                },
+                move |id, declaration| Some(Patch::Variant(id, slot, index, declaration)),
+            );
+        }
+        if let Some(variant) = self.spec.extras().variant_mut(slot) {
+            *variant = declarations;
+        }
         self
     }
 
     pub fn test_id(mut self, name: impl Into<String>) -> Self {
-        self.spec.test_id = Some(name.into());
+        self.spec.extras().test_id = Some(name.into());
         self
     }
 
@@ -197,23 +325,24 @@ impl Div {
         self,
         value: impl IntoProp<T, U>,
         init: impl FnOnce(&mut ElementSpec, T) + 'static,
-        apply: impl Fn(&mut Tree, ElementId, T) + 'static,
+        patch: impl Fn(ElementId, T) -> Patch + 'static,
     ) -> Self {
-        self.bind_prop(value.into_prop(), init, apply)
+        self.bind_prop(value.into_prop(), init, move |id, value| {
+            Some(patch(id, value))
+        })
     }
 
     fn bind_prop<T: 'static>(
         mut self,
         value: Prop<T>,
         init: impl FnOnce(&mut ElementSpec, T) + 'static,
-        apply: impl Fn(&mut Tree, ElementId, T) + 'static,
+        patch: impl Fn(ElementId, T) -> Option<Patch> + 'static,
     ) -> Self {
         match value {
             Prop::Static(value) => init(&mut self.spec, value),
             Prop::Dynamic(compute) => {
-                self.bindings.push(Box::new(move |patches, spec, element| {
-                    let (patches, apply, element) =
-                        (patches.clone(), Rc::new(apply), element.clone());
+                self.bindings.push(Box::new(move |queue, spec, element| {
+                    let (queue, element) = (queue.clone(), element.clone());
                     let initial = Rc::new(Cell::new(None));
                     effect({
                         let initial = initial.clone();
@@ -221,8 +350,9 @@ impl Div {
                             let value = compute();
                             match element.get() {
                                 Some(id) => {
-                                    let apply = apply.clone();
-                                    send(&patches, move |cx| apply(cx.tree, id, value));
+                                    if let Some(patch) = patch(id, value) {
+                                        queue.push(patch);
+                                    }
                                 }
                                 None => initial.set(Some(value)),
                             }
@@ -237,62 +367,40 @@ impl Div {
         self
     }
 
-    fn command(mut self, command: LayerCommand) -> Self {
-        self.spec
-            .layer
-            .get_or_insert_default()
-            .commands
-            .push(command);
-        self
-    }
-
-    fn layer_bind<T: 'static>(
-        self,
-        value: Prop<T>,
-        command: impl Fn(T, bool) -> Option<LayerCommand> + 'static,
-    ) -> Self {
-        let command = Rc::new(command);
-        let first = command.clone();
+    fn layer_prop<T>(self, prop: LayerProp, value: impl IntoProp<MotionProp, T>) -> Self {
+        let last = Rc::new(Cell::new(None));
+        let first = last.clone();
         self.layer().bind_prop(
-            value,
+            value.into_prop(),
             move |spec, value| {
-                let commands = &mut spec.layer.get_or_insert_default().commands;
-                commands.extend(first(value, false));
+                first.set(Some(value));
+                let layer = spec.layer.get_or_insert_default();
+                layer.props.push((prop, value));
             },
-            move |tree, id, value| {
-                if let Some(command) = command(value, true) {
-                    tree.layer_command(id, command);
-                }
+            move |id, value| {
+                let previous = last.replace(Some(value));
+                (previous != Some(value)).then_some(Patch::LayerProp(
+                    id,
+                    prop,
+                    value,
+                    previous.is_some(),
+                ))
             },
         )
     }
 
-    fn layer_prop<T>(self, prop: LayerProp, value: impl IntoProp<MotionProp, T>) -> Self {
-        let last = Cell::new(None);
-        self.layer_bind(value.into_prop(), move |value, dynamic| {
-            let previous = last.replace(Some(value));
-            (previous != Some(value)).then_some(match value {
-                MotionProp::Motion(motion) => LayerCommand::Bind {
-                    prop,
-                    motion: motion.id(),
-                },
-                MotionProp::Value(value) => LayerCommand::Set {
-                    prop,
-                    value,
-                    animate: dynamic && previous.is_some(),
-                },
-            })
-        })
-    }
-
-    fn apply_effect<T: Effect, U>(self, slot: EffectSlot, effect: impl IntoEffect<T, U>) -> Self {
-        self.layer_bind(effect.into_effect(), move |effect, animate| {
-            Some(LayerCommand::Effect {
-                slot,
-                effect: Some(EffectInstance::new(&effect)),
-                animate,
-            })
-        })
+    fn apply_effect<T: 'static, U>(self, slot: EffectSlot, effect: impl IntoProp<T, U>) -> Self
+    where
+        AnyEffect: PropFrom<T>,
+    {
+        self.layer().bind(
+            effect,
+            move |spec, effect| {
+                let layer = spec.layer.get_or_insert_default();
+                layer.effects.push((slot, AnyEffect::prop_from(effect).0));
+            },
+            move |id, effect| Patch::Effect(id, slot, AnyEffect::prop_from(effect).0),
+        )
     }
 
     pub fn scroll_linked<T>(
@@ -301,13 +409,15 @@ impl Div {
         link: impl IntoProp<ScrollLinked, T>,
     ) -> Self {
         let key = scroll_key(state);
-        self.layer_bind(link.into_prop(), move |link, _| {
-            Some(LayerCommand::ScrollLink(Some((key, link))))
-        })
+        self.layer().bind_prop(
+            link.into_prop(),
+            move |spec, link| spec.layer.get_or_insert_default().link = Some((key, link)),
+            move |id, link| Some(Patch::ScrollLink(id, key, link)),
+        )
     }
 
     pub(crate) fn scrollable(mut self) -> Self {
-        self.spec.scroll.get_or_insert_default();
+        self.spec.extras().scroll.get_or_insert_default();
         self
     }
 
@@ -409,22 +519,22 @@ impl Div {
         self.bind(
             enabled,
             |spec, enabled| spec.disabled = !enabled,
-            |tree, id, enabled| tree.set_disabled(id, !enabled),
+            Patch::Enabled,
         )
     }
 
     pub fn focusable(mut self) -> Self {
-        self.spec.focus.get_or_insert_default();
+        self.spec.extras().focus.get_or_insert_default();
         self
     }
 
     pub fn tab_index(mut self, index: i32) -> Self {
-        self.spec.focus.get_or_insert_default().tab_index = index;
+        self.spec.extras().focus.get_or_insert_default().tab_index = index;
         self
     }
 
     pub fn track_focus(mut self, handle: FocusHandle) -> Self {
-        self.spec.focus.get_or_insert_default().handle = Some(handle.binding());
+        self.spec.extras().focus.get_or_insert_default().handle = Some(handle.binding());
         self
     }
 
@@ -434,41 +544,38 @@ impl Div {
     }
 
     pub fn focus_scope(mut self) -> Self {
-        self.spec.focus_scope = true;
+        self.spec.flags.focus_scope = true;
         self
     }
 
     pub fn pass_through(mut self) -> Self {
-        self.spec.pass_through = true;
+        self.spec.flags.pass_through = true;
         self
     }
 
     pub fn cursor<U>(self, cursor: impl IntoProp<Option<Cursor>, U>) -> Self {
-        self.bind(
-            cursor,
-            |spec, cursor| spec.cursor = cursor,
-            Tree::set_cursor,
-        )
+        self.bind(cursor, |spec, cursor| spec.cursor = cursor, Patch::Cursor)
     }
 
     pub fn track_size(mut self, size: Signal<Size>) -> Self {
-        self.spec.size_observer = Some(size);
+        self.spec.extras().size_observer = Some(size);
         self
     }
 
     pub fn track_bounds(mut self, bounds: Signal<Rect>) -> Self {
-        self.spec.bounds_observer = Some(bounds);
+        self.spec.extras().bounds_observer = Some(bounds);
         self
     }
 
     pub fn track_paint_region(mut self, region: Signal<crate::PaintRegion>) -> Self {
-        self.spec.paint_region = Some(region);
+        self.spec.extras().paint_region = Some(region);
         self
     }
 
     #[track_caller]
     pub fn bind_key<T: Any>(mut self, chord: impl IntoChord, action: T) -> Self {
         self.spec
+            .extras()
             .bindings
             .push((chord.into_chord(), Rc::new(action)));
         self
@@ -483,6 +590,7 @@ impl Div {
             }
         };
         self.spec
+            .extras()
             .actions
             .push((TypeId::of::<T>(), Rc::new(handler)));
         self
@@ -493,103 +601,104 @@ impl Div {
         self
     }
 
-    pub fn rasterize(self) -> Self {
-        self.command(LayerCommand::Rasterize(true))
+    pub fn rasterize(mut self) -> Self {
+        self.spec.layer.get_or_insert_default().rasterize = true;
+        self
     }
 
-    pub fn effect<T: Effect, U>(mut self, effect: impl IntoEffect<T, U>) -> Self {
+    pub fn effect<T>(mut self, effect: impl IntoProp<AnyEffect, T>) -> Self {
         let slot = EffectSlot::Content(self.effects);
         self.effects += 1;
         self.apply_effect(slot, effect)
     }
 
-    pub fn backdrop<T: Effect, U>(self, effect: impl IntoEffect<T, U>) -> Self {
+    pub fn backdrop<T>(self, effect: impl IntoProp<AnyEffect, T>) -> Self {
         self.apply_effect(EffectSlot::Backdrop, effect)
     }
 
-    pub fn mask<U>(self, mask: impl IntoEffect<Mask, U>) -> Self {
+    pub fn mask<T>(self, mask: impl IntoProp<Mask, T>) -> Self {
         self.apply_effect(EffectSlot::Mask, mask)
     }
 
-    pub fn blend<U>(self, mode: impl IntoEffect<BlendMode, U>) -> Self {
+    pub fn blend<T>(self, mode: impl IntoProp<BlendMode, T>) -> Self {
         self.apply_effect(EffectSlot::Blend, mode)
     }
 
-    pub fn transition(self, timing: impl Into<Timing>) -> Self {
-        self.command(LayerCommand::Transition(Some(timing.into())))
+    pub fn transition(mut self, timing: impl Into<Timing>) -> Self {
+        self.spec.layer.get_or_insert_default().transition = Some(timing.into());
+        self
     }
 
-    pub fn layout_transition(self, transition: impl Into<LayoutTransition>) -> Self {
-        self.command(LayerCommand::LayoutTransition(Some(transition.into())))
+    pub fn layout_transition(mut self, transition: impl Into<LayoutTransition>) -> Self {
+        self.spec.layer.get_or_insert_default().layout_transition = Some(transition.into());
+        self
     }
 
-    pub fn animate(self, keyframes: Keyframes) -> Self {
-        self.command(LayerCommand::Animate(keyframes))
+    pub fn animate(mut self, keyframes: Keyframes) -> Self {
+        self.spec.layer.get_or_insert_default().keyframes = Some(keyframes);
+        self
     }
 }
 
 impl Scrollable for Div {
     fn scroll_state(mut self, state: Signal<ScrollState>) -> Self {
-        self.spec.scroll.get_or_insert_default().observer = Some(state);
+        self.spec.extras().scroll.get_or_insert_default().observer = Some(state);
         self.bind_prop(
             Prop::Dynamic(Box::new(move || state.get().offset)),
             |_, _| {},
-            Tree::scroll_to,
+            |id, offset| Some(Patch::ScrollTo(id, offset)),
         )
     }
 }
 
 impl Styled for Div {
-    fn style_mut(&mut self) -> &mut Style {
-        &mut self.spec.style
-    }
-
-    fn prop<T: 'static, U>(
-        self,
-        value: impl IntoProp<T, U>,
-        dirty: Dirty,
-        set: fn(&mut Style, T),
-    ) -> Self {
-        self.bind(
-            value,
-            move |spec, value| set(&mut spec.style, value),
-            move |tree, id, value| tree.update_style(id, dirty, |style| set(style, value)),
+    fn declare(self, declaration: Prop<Declaration>) -> Self {
+        self.bind_prop(
+            declaration,
+            |spec, declaration| spec.declare(&declaration),
+            |id, declaration| Some(Patch::Style(id, declaration)),
         )
     }
 }
 
 impl View for Div {
-    fn build(mut self, cx: &mut BuildCx<'_>) -> ElementId {
-        if let Some(text) = &mut self.spec.text {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        self.mount(cx);
+    }
+}
+
+impl Div {
+    pub(crate) fn mount(mut self, cx: &mut BuildCx<'_>) -> ElementId {
+        if let Some(text) = self.spec.kind.text_mut() {
             let theme = Theme::current();
             text.theme = Some(theme);
             self = self.bind_prop(
                 Prop::Dynamic(Box::new(move || {
-                    theme.text.get();
+                    theme.with(|palette| palette.text);
                 })),
                 |_, ()| {},
-                |tree, id, ()| tree.refresh_text_subtree(id),
+                |id, ()| Some(Patch::RefreshText(id)),
             );
         }
-        if self.spec.scroll.is_some() {
-            self.spec.style.layout.overflow = Axes {
-                x: Overflow::Scroll,
-                y: Overflow::Scroll,
-            };
+        let extras = self.spec.extras.as_deref();
+        if extras.is_some_and(|extras| extras.scroll.is_some()) {
+            self.spec.declare(&Declaration::Overflow(Overflow::Scroll));
         }
         let element = Rc::new(Cell::new(None));
         for bind in self.bindings {
-            bind(cx.patches, &mut self.spec, &element);
+            bind(cx.queue, &mut self.spec, &element);
         }
         let id = cx.tree.create_element(self.spec);
         element.set(Some(id));
         if self.autofocus {
-            send(cx.patches, move |cx| cx.tree.autofocus(id));
+            cx.queue.push(Patch::Autofocus(id));
         }
-        for child in self.children {
-            let child = child.build(cx);
-            cx.tree.append_child(id, child);
-        }
+        cx.within(Node::Element(id), |cx| {
+            for child in self.children {
+                child.build(cx);
+            }
+        });
+        cx.tree.append(cx.parent, id);
         id
     }
 }
@@ -598,10 +707,16 @@ pub struct Text(pub(crate) Div);
 
 #[component]
 pub fn text<U>(children: impl IntoProp<String, U>) -> Text {
-    Text(div().bind(
+    let mut div = div();
+    div.spec.kind = Kind::Text(Box::default());
+    Text(div.bind(
         children,
-        |spec, content| spec.text.get_or_insert_default().content = content,
-        Tree::set_text_content,
+        |spec, content| {
+            if let Some(text) = spec.kind.text_mut() {
+                text.content = content;
+            }
+        },
+        Patch::Content,
     ))
 }
 
@@ -627,7 +742,7 @@ impl Text {
         f: impl Fn(Option<usize>, Modifiers) + 'static,
     ) -> Self {
         let owner = Scope::current();
-        self.0.spec.text_hover = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
+        self.0.spec.extras().text_hover = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
             run_in(owner, || f(hit.map(|hit| hit.index), modifiers));
         }));
         self
@@ -642,7 +757,7 @@ impl Text {
         f: impl Fn(Option<usize>, Modifiers) + 'static,
     ) -> Self {
         let owner = Scope::current();
-        self.0.spec.text_click = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
+        self.0.spec.extras().text_click = Some(Rc::new(move |hit: Option<TextHit>, modifiers| {
             run_in(owner, || f(hit.map(|hit| hit.index), modifiers));
         }));
         self
@@ -656,17 +771,23 @@ impl Text {
     ) -> Self {
         Text(self.0.bind(
             value,
-            move |spec, value| set(spec.text.get_or_insert_default(), value),
-            move |tree, id, value| tree.update_text(id, dirty, |text| set(text, value)),
+            move |spec, value| {
+                if let Some(text) = spec.kind.text_mut() {
+                    set(text, value);
+                }
+            },
+            move |id, value| Patch::Text(id, dirty, Box::new(move |text| set(text, value))),
         ))
     }
 
     fn text_style(mut self, set: impl FnOnce(&mut TextStyle)) -> Self {
-        set(&mut self.0.spec.text.get_or_insert_default().style);
+        if let Some(text) = self.0.spec.kind.text_mut() {
+            set(&mut text.style);
+        }
         self
     }
 
-    pub fn text_size<U>(self, size: impl IntoProp<Length, U>) -> Self {
+    pub fn text_size<U>(self, size: impl IntoProp<f32, U>) -> Self {
         Styled::text_size(self, size)
     }
 
@@ -706,8 +827,7 @@ impl Text {
 styled!(Text => 0);
 
 impl View for Text {
-    fn build(mut self, cx: &mut BuildCx<'_>) -> ElementId {
-        self.0.spec.text.get_or_insert_default();
-        self.0.build(cx)
+    fn build(self, cx: &mut BuildCx<'_>) {
+        self.0.mount(cx);
     }
 }

@@ -1,9 +1,9 @@
 use super::heights::{Heights, VariableHeights};
 use super::{RowHeight, RowKey};
+use crate::compositor::ScrollState;
 use crate::prop::Prop;
-use crate::ui::root_font_size;
 use rouge_reactive::{Memo, Signal, batch, effect, memo, signal};
-use rouge_render::{ScrollState, Size};
+use rouge_render::Size;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -120,11 +120,10 @@ pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
 ) {
     let rows = rows.clone();
     let mut previous: Option<Rc<Keys<T>>> = None;
-    let font = root_font_size();
     effect(move || {
         let count = current_count.get();
         let keys = current_keys.map(|keys| keys.get());
-        let input = row_height.get().resolve(|| font.get());
+        let input = row_height.get();
         let minimum = if measured { 1.0 } else { 0.0 };
         let height = move |height: f32| {
             if height.is_finite() {
@@ -159,7 +158,7 @@ pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
             },
             _ => {
                 let heights = match input {
-                    RowHeight::Uniform(value) | RowHeight::Rem(value) => vec![height(value); count],
+                    RowHeight::Uniform(value) => vec![height(value); count],
                     RowHeight::Each(_) => estimates
                         .iter()
                         .map(|estimate| estimate.get_untracked().unwrap_or(minimum))
@@ -215,7 +214,7 @@ pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
     });
 }
 
-pub(super) type LayoutKey = (f32, f32, u64);
+pub(super) type LayoutKey = (f32, u64);
 
 pub(super) fn observe_measurements<T: Clone + Eq + Hash + 'static>(
     rows: &Rows,

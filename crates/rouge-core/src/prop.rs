@@ -1,7 +1,8 @@
 use crate::Cursor;
-use crate::length::{Length, Radii};
+use crate::length::Length;
 use rouge_reactive::{ReadSignal, Signal};
-use rouge_render::{Color, Corners, Effect};
+use rouge_render::{Color, Corners, EffectInstance, ShaderEffect};
+use std::borrow::Cow;
 
 pub enum Prop<T> {
     Static(T),
@@ -13,6 +14,15 @@ impl<T: Clone> Prop<T> {
         match self {
             Prop::Static(value) => value.clone(),
             Prop::Dynamic(compute) => compute(),
+        }
+    }
+}
+
+impl<T: 'static> Prop<T> {
+    pub fn map<U>(self, f: impl Fn(T) -> U + 'static) -> Prop<U> {
+        match self {
+            Prop::Static(value) => Prop::Static(f(value)),
+            Prop::Dynamic(compute) => Prop::Dynamic(Box::new(move || f(compute()))),
         }
     }
 }
@@ -35,13 +45,13 @@ impl<T> PropFrom<T> for T {
 
 impl PropFrom<f32> for Length {
     fn prop_from(value: f32) -> Self {
-        Length::design(value)
+        Length::Px(value)
     }
 }
 
 impl PropFrom<i32> for Length {
     fn prop_from(value: i32) -> Self {
-        Length::design(value as f32)
+        Length::Px(value as f32)
     }
 }
 
@@ -57,30 +67,44 @@ impl PropFrom<&str> for String {
     }
 }
 
+impl PropFrom<&'static str> for Cow<'static, str> {
+    fn prop_from(value: &'static str) -> Self {
+        Cow::Borrowed(value)
+    }
+}
+
+impl PropFrom<String> for Cow<'static, str> {
+    fn prop_from(value: String) -> Self {
+        Cow::Owned(value)
+    }
+}
+
 impl PropFrom<u32> for Color {
     fn prop_from(value: u32) -> Self {
         Color::rgb(value)
     }
 }
 
-impl PropFrom<f32> for Radii {
+impl PropFrom<f32> for Corners {
     fn prop_from(value: f32) -> Self {
-        Radii::all(Length::design(value))
+        Corners::all(value)
     }
 }
 
-impl PropFrom<Length> for Radii {
+impl PropFrom<Length> for Corners {
     fn prop_from(value: Length) -> Self {
-        Radii::all(value)
+        match value {
+            Length::Px(value) => Corners::all(value),
+            Length::Fraction(_) | Length::Auto => Corners::ZERO,
+        }
     }
 }
 
-impl PropFrom<Corners> for Radii {
-    fn prop_from(corners: Corners) -> Self {
-        Radii {
-            corners,
-            rem: false,
-        }
+pub struct AnyEffect(pub(crate) EffectInstance);
+
+impl<T: ShaderEffect> PropFrom<T> for AnyEffect {
+    fn prop_from(effect: T) -> Self {
+        AnyEffect(EffectInstance::new(&effect))
     }
 }
 
@@ -93,7 +117,6 @@ pub(crate) mod markers {
     pub struct Value;
     pub struct Func;
     pub struct Reactive;
-    pub struct Indexed;
     pub struct Same;
 }
 
@@ -124,33 +147,5 @@ impl<T: PropFrom<U>, U: Clone + 'static> IntoProp<T, markers::Reactive> for Sign
 impl<T> IntoProp<T, markers::Same> for Prop<T> {
     fn into_prop(self) -> Prop<T> {
         self
-    }
-}
-
-pub trait IntoEffect<T: Effect, U> {
-    fn into_effect(self) -> Prop<T>;
-}
-
-impl<T: Effect> IntoEffect<T, markers::Value> for T {
-    fn into_effect(self) -> Prop<T> {
-        Prop::Static(self)
-    }
-}
-
-impl<T: Effect, U: Fn() -> T + 'static> IntoEffect<T, markers::Func> for U {
-    fn into_effect(self) -> Prop<T> {
-        Prop::Dynamic(Box::new(self))
-    }
-}
-
-impl<T: Effect + Clone> IntoEffect<T, markers::Reactive> for ReadSignal<T> {
-    fn into_effect(self) -> Prop<T> {
-        Prop::Dynamic(Box::new(move || self.get()))
-    }
-}
-
-impl<T: Effect + Clone> IntoEffect<T, markers::Reactive> for Signal<T> {
-    fn into_effect(self) -> Prop<T> {
-        self.read_only().into_effect()
     }
 }

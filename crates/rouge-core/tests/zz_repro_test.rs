@@ -1,8 +1,8 @@
 use rouge_core::Scrollable;
 use rouge_core::testing::TestUi;
-use rouge_core::{Styled, div, scroll};
+use rouge_core::{ScrollState, Styled, div, scroll};
 use rouge_reactive::{Runtime, Signal, signal};
-use rouge_render::{Color, Point, ScrollState};
+use rouge_render::{Color, Point};
 
 #[test]
 fn repro_macos_flick_into_bottom_edge() {
@@ -84,7 +84,7 @@ fn proposed_release_with_finger_velocity_and_drop_momentum() {
         trace.push(state.get_untracked().offset.y.round());
     }
     let peak = trace.iter().copied().fold(f32::MIN, f32::max);
-    let settled = trace.iter().position(|v| *v == 200.0 && true).unwrap_or(0);
+    let settled = trace.iter().position(|v| *v == 200.0).unwrap_or(0);
     println!(
         "fixed: peak {peak} settled-frame {settled} needs_frame {}",
         ui.needs_frame()

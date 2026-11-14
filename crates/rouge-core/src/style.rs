@@ -1,32 +1,28 @@
-use crate::length::{Length, Radii, design_unit};
+use crate::length::Length;
 use crate::prop::{IntoProp, Prop};
-use crate::tree::Variant;
-use rouge_render::{Color, Point};
-use rouge_text::TextStyle;
-use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter, Result as FmtResult};
-use std::rc::Rc;
+use crate::text::TextStyle;
+use rouge_render::{Color, Corners, Point};
+use std::borrow::Cow;
 use taffy::{
     AlignItems, AlignSelf, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
     Point as Axes, Position, Style as Layout,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub enum Dirty {
+pub(crate) enum Dirty {
     #[default]
     None,
     Composite,
-    Backing,
     Paint,
     Layout,
 }
 
 impl Dirty {
-    pub fn needs_layout(self) -> bool {
+    pub(crate) fn needs_layout(self) -> bool {
         self == Dirty::Layout
     }
 
-    pub fn needs_paint(self) -> bool {
+    pub(crate) fn needs_paint(self) -> bool {
         self >= Dirty::Paint
     }
 }
@@ -67,57 +63,138 @@ impl BoxShadow {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct GroupStyles(pub(crate) Vec<(String, Variant)>);
+macro_rules! slots {
+    ($($slot:ident => $($field:ident).+;)*) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Slot { $($slot,)* }
 
-impl Debug for GroupStyles {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        f.debug_list()
-            .entries(self.0.iter().map(|(name, _)| name))
-            .finish()
-    }
+        fn set_length(layout: &mut Layout, slot: Slot, length: Length) {
+            match slot { $(Slot::$slot => layout.$($field).+ = length.into(),)* }
+        }
+    };
 }
 
-impl PartialEq for GroupStyles {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.len() == other.0.len()
-            && self
-                .0
-                .iter()
-                .zip(&other.0)
-                .all(|((name, style), (other_name, other_style))| {
-                    name == other_name && Rc::ptr_eq(style, other_style)
-                })
+slots! {
+    Width => size.width;
+    Height => size.height;
+    MinWidth => min_size.width;
+    MinHeight => min_size.height;
+    MaxWidth => max_size.width;
+    MaxHeight => max_size.height;
+    Basis => flex_basis;
+    GapX => gap.width;
+    GapY => gap.height;
+    PaddingTop => padding.top;
+    PaddingRight => padding.right;
+    PaddingBottom => padding.bottom;
+    PaddingLeft => padding.left;
+    MarginTop => margin.top;
+    MarginRight => margin.right;
+    MarginBottom => margin.bottom;
+    MarginLeft => margin.left;
+    Top => inset.top;
+    Right => inset.right;
+    Bottom => inset.bottom;
+    Left => inset.left;
+    BorderTop => border.top;
+    BorderRight => border.right;
+    BorderBottom => border.bottom;
+    BorderLeft => border.left;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Declaration {
+    Display(Display),
+    FlexDirection(FlexDirection),
+    FlexWrap(FlexWrap),
+    FlexGrow(f32),
+    FlexShrink(f32),
+    AlignItems(AlignItems),
+    AlignSelf(AlignSelf),
+    JustifyContent(JustifyContent),
+    Position(Position),
+    Overflow(Overflow),
+    AspectRatio(f32),
+    Length(&'static [Slot], Length),
+    TextColor(Color),
+    TextSize(f32),
+    Font(Cow<'static, str>),
+    FontWeight(f32),
+    Italic(bool),
+    LineHeight(f32),
+    Background(Color),
+    BorderColor(Color),
+    Rounded(Corners),
+    Shadows(Vec<BoxShadow>),
+    Invisible(bool),
+}
+
+impl Declaration {
+    pub(crate) fn is_layout(&self) -> bool {
+        !matches!(
+            self,
+            Declaration::TextColor(_)
+                | Declaration::TextSize(_)
+                | Declaration::Font(_)
+                | Declaration::FontWeight(_)
+                | Declaration::Italic(_)
+                | Declaration::LineHeight(_)
+                | Declaration::Background(_)
+                | Declaration::BorderColor(_)
+                | Declaration::Rounded(_)
+                | Declaration::Shadows(_)
+                | Declaration::Invisible(_)
+        )
+    }
+
+    pub(crate) fn lay_out(&self, layout: &mut Layout) {
+        match *self {
+            Declaration::Display(display) => layout.display = display,
+            Declaration::FlexDirection(direction) => layout.flex_direction = direction,
+            Declaration::FlexWrap(wrap) => layout.flex_wrap = wrap,
+            Declaration::FlexGrow(grow) => layout.flex_grow = grow,
+            Declaration::FlexShrink(shrink) => layout.flex_shrink = shrink,
+            Declaration::AlignItems(align) => layout.align_items = align,
+            Declaration::AlignSelf(align) => layout.align_self = Some(align),
+            Declaration::JustifyContent(justify) => layout.justify_content = justify,
+            Declaration::Position(position) => layout.position = position,
+            Declaration::Overflow(overflow) => {
+                layout.overflow = Axes {
+                    x: overflow,
+                    y: overflow,
+                };
+            }
+            Declaration::AspectRatio(ratio) => layout.aspect_ratio = Some(ratio),
+            Declaration::Length(slots, length) => {
+                for slot in slots {
+                    set_length(layout, *slot, length);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Style {
-    pub layout: Layout,
-    pub group_styles: GroupStyles,
-    pub rem_lengths: BTreeMap<&'static str, f32>,
+pub(crate) struct Style {
     pub text_color: Option<Color>,
-    pub text_size: Option<Length>,
-    pub text_font: Option<String>,
+    pub text_size: Option<f32>,
+    pub text_font: Option<Cow<'static, str>>,
     pub text_weight: Option<f32>,
     pub text_italic: Option<bool>,
     pub text_line_height: Option<f32>,
     pub background: Option<Color>,
     pub border_color: Color,
-    pub corner_radii: Radii,
+    pub corner_radii: Corners,
     pub shadows: Vec<BoxShadow>,
     pub invisible: bool,
+    pub hidden: bool,
+    pub clips: bool,
 }
 
 impl Default for Style {
     fn default() -> Self {
         Style {
-            layout: Layout {
-                display: Display::Block,
-                ..Default::default()
-            },
-            group_styles: GroupStyles::default(),
-            rem_lengths: BTreeMap::new(),
             text_color: None,
             text_size: None,
             text_font: None,
@@ -126,96 +203,52 @@ impl Default for Style {
             text_line_height: None,
             background: None,
             border_color: Color::BLACK,
-            corner_radii: Radii::default(),
+            corner_radii: Corners::ZERO,
             shadows: Vec::new(),
             invisible: false,
+            hidden: false,
+            clips: false,
         }
     }
 }
 
 impl Style {
+    pub(crate) fn apply(&mut self, declaration: &Declaration) {
+        match declaration {
+            Declaration::Display(display) => self.hidden = *display == Display::None,
+            Declaration::Overflow(overflow) => self.clips = *overflow != Overflow::Visible,
+            Declaration::TextColor(color) => self.text_color = Some(*color),
+            Declaration::TextSize(size) => self.text_size = Some(*size),
+            Declaration::Font(font) => self.text_font = Some(font.clone()),
+            Declaration::FontWeight(weight) => self.text_weight = Some(*weight),
+            Declaration::Italic(italic) => self.text_italic = Some(*italic),
+            Declaration::LineHeight(height) => self.text_line_height = Some(*height),
+            Declaration::Background(color) => self.background = Some(*color),
+            Declaration::BorderColor(color) => self.border_color = *color,
+            Declaration::Rounded(radii) => self.corner_radii = *radii,
+            Declaration::Shadows(shadows) => self.shadows.clone_from(shadows),
+            Declaration::Invisible(invisible) => self.invisible = *invisible,
+            _ => {}
+        }
+    }
+
     pub(crate) fn same_box(&self, other: &Self) -> bool {
-        self.layout == other.layout
-            && self.rem_lengths == other.rem_lengths
-            && self.background == other.background
+        self.background == other.background
             && self.border_color == other.border_color
             && self.corner_radii == other.corner_radii
             && self.shadows == other.shadows
             && self.invisible == other.invisible
-    }
-
-    pub(crate) fn resolved_layout(&self, root: f32) -> Layout {
-        let mut layout = self.layout.clone();
-        for field in LayoutLength::ALL {
-            if let Some(value) = self.rem_lengths.get(field.key()) {
-                field.assign(&mut layout, Length::Px(value * root));
-            }
-        }
-        layout
+            && self.hidden == other.hidden
+            && self.clips == other.clips
     }
 }
 
-macro_rules! layout_lengths {
-    ($apply:ident) => {
-        $apply! {
-            Width: w => size.width;
-            Height: h => size.height;
-            MinWidth: min_w => min_size.width;
-            MinHeight: min_h => min_size.height;
-            MaxWidth: max_w => max_size.width;
-            MaxHeight: max_h => max_size.height;
-            Basis: flex_basis => flex_basis;
-            GapX: gap_x => gap.width;
-            GapY: gap_y => gap.height;
-            PaddingTop: pt => padding.top;
-            PaddingRight: pr => padding.right;
-            PaddingBottom: pb => padding.bottom;
-            PaddingLeft: pl => padding.left;
-            MarginTop: mt => margin.top;
-            MarginRight: mr => margin.right;
-            MarginBottom: mb => margin.bottom;
-            MarginLeft: ml => margin.left;
-            InsetTop: top => inset.top;
-            InsetRight: right => inset.right;
-            InsetBottom: bottom => inset.bottom;
-            InsetLeft: left => inset.left;
-            BorderTop: border_t => border.top;
-            BorderRight: border_r => border.right;
-            BorderBottom: border_b => border.bottom;
-            BorderLeft: border_l => border.left;
-        }
-    };
+pub(crate) fn base_layout() -> Layout {
+    Layout {
+        display: Display::Block,
+        ..Layout::default()
+    }
 }
-
-macro_rules! length_fields {
-    ($($variant:ident: $setter:ident => $field:ident $(.$side:ident)?;)*) => {
-        #[derive(Clone, Copy)]
-        enum LayoutLength { $($variant,)* }
-
-        impl LayoutLength {
-            const ALL: &[Self] = &[$(Self::$variant,)*];
-
-            fn key(self) -> &'static str {
-                match self { $(Self::$variant => stringify!($field $(.$side)?),)* }
-            }
-
-            fn assign(self, layout: &mut Layout, value: Length) {
-                match self { $(Self::$variant => layout.$field $(.$side)? = value.into(),)* }
-            }
-
-            fn set(self, style: &mut Style, value: Length) {
-                if let Length::Rem(value) = value {
-                    style.rem_lengths.insert(self.key(), value);
-                } else {
-                    style.rem_lengths.remove(self.key());
-                }
-                self.assign(&mut style.layout, value);
-            }
-        }
-    };
-}
-
-layout_lengths!(length_fields);
 
 macro_rules! text_properties {
     ($($field:ident: $ty:ty),* $(,)?) => {
@@ -240,58 +273,41 @@ macro_rules! text_properties {
 
 text_properties! {
     text_color: Color,
-    text_size: Length,
-    text_font: String,
+    text_size: f32,
+    text_font: Cow<'static, str>,
     text_weight: f32,
     text_italic: bool,
     text_line_height: f32,
 }
 
 macro_rules! props {
-    ($($name:ident($ty:ty) [$dirty:ident] |$s:ident, $v:ident| $body:expr;)*) => {$(
-        fn $name<U>(self, value: impl IntoProp<$ty, U>) -> Self {
-            self.prop(value, Dirty::$dirty, |$s: &mut Style, $v: $ty| $body)
+    ($($name:ident($ty:ty) => $declaration:expr;)*) => {$(
+        fn $name<T>(self, value: impl IntoProp<$ty, T>) -> Self {
+            self.declare(value.into_prop().map($declaration))
         }
     )*};
 }
 
-macro_rules! length_setters {
-    ($($variant:ident: $setter:ident => $field:ident $(.$side:ident)?;)*) => {
-        props! { $($setter(Length) [Layout] |s, v| LayoutLength::$variant.set(s, v);)* }
-    };
-}
-
 macro_rules! lengths {
-    ($($setter:ident: $($field:ident),+;)*) => {
-        props! { $($setter(Length) [Layout] |s, v| { $(LayoutLength::$field.set(s, v);)+ };)* }
+    ($($name:ident: $($slot:ident),+;)*) => {
+        props! { $($name(Length) => |length| Declaration::Length(&[$(Slot::$slot),+], length);)* }
     };
 }
 
 macro_rules! flags {
-    ($($name:ident |$s:ident| $body:expr;)*) => {$(
-        fn $name(mut self) -> Self {
-            let $s = self.style_mut();
-            $body;
-            self
+    ($($name:ident => $($declaration:expr),+;)*) => {$(
+        fn $name(self) -> Self {
+            self$(.declare(Prop::Static($declaration)))+
         }
     )*};
 }
 
 #[macro_export]
 macro_rules! styled {
-    ($name:ident $(<$generic:ident>)? => $field:tt) => {
-        impl $(<$generic>)? $crate::Styled for $name $(<$generic>)? {
-            fn style_mut(&mut self) -> &mut $crate::Style {
-                $crate::Styled::style_mut(&mut self.$field)
-            }
-
-            fn prop<U: 'static, V>(
-                mut self,
-                value: impl $crate::IntoProp<U, V>,
-                dirty: $crate::Dirty,
-                set: fn(&mut $crate::Style, U),
-            ) -> Self {
-                self.$field = $crate::Styled::prop(self.$field, value, dirty, set);
+    ($name:ident $(<$($generic:ident),+>)? => $field:tt) => {
+        impl $(<$($generic),+>)? $crate::Styled for $name $(<$($generic),+>)? {
+            fn declare(mut self, declaration: $crate::Prop<$crate::Declaration>) -> Self {
+                self.$field = $crate::Styled::declare(self.$field, declaration);
                 self
             }
         }
@@ -299,73 +315,42 @@ macro_rules! styled {
 }
 
 pub trait Styled: Sized {
-    fn style_mut(&mut self) -> &mut Style;
-
-    fn prop<T: 'static, U>(
-        self,
-        value: impl IntoProp<T, U>,
-        dirty: Dirty,
-        set: fn(&mut Style, T),
-    ) -> Self;
-
-    fn style(mut self, style: Style) -> Self {
-        *self.style_mut() = style;
-        self
-    }
+    fn declare(self, declaration: Prop<Declaration>) -> Self;
 
     flags! {
-        flex |s| s.layout.display = Display::Flex;
-        block |s| s.layout.display = Display::Block;
-        grid |s| s.layout.display = Display::Grid;
-        row |s| s.layout.flex_direction = FlexDirection::Row;
-        col |s| s.layout.flex_direction = FlexDirection::Column;
-        flex_wrap |s| s.layout.flex_wrap = FlexWrap::Wrap;
-        flex_1 |s| {
-            LayoutLength::Basis.set(s, Length::Fraction(0.0));
-            s.layout.flex_grow = 1.0;
-            s.layout.flex_shrink = 1.0;
-        };
-        flex_none |s| {
-            s.layout.flex_grow = 0.0;
-            s.layout.flex_shrink = 0.0;
-        };
-        items_start |s| s.layout.align_items = AlignItems::FLEX_START;
-        items_center |s| s.layout.align_items = AlignItems::CENTER;
-        items_end |s| s.layout.align_items = AlignItems::FLEX_END;
-        items_stretch |s| s.layout.align_items = AlignItems::STRETCH;
-        justify_start |s| s.layout.justify_content = JustifyContent::FLEX_START;
-        justify_center |s| s.layout.justify_content = JustifyContent::CENTER;
-        justify_end |s| s.layout.justify_content = JustifyContent::FLEX_END;
-        justify_between |s| s.layout.justify_content = JustifyContent::SPACE_BETWEEN;
-        justify_around |s| s.layout.justify_content = JustifyContent::SPACE_AROUND;
-        justify_evenly |s| s.layout.justify_content = JustifyContent::SPACE_EVENLY;
-        self_start |s| s.layout.align_self = Some(AlignSelf::FLEX_START);
-        self_center |s| s.layout.align_self = Some(AlignSelf::CENTER);
-        self_end |s| s.layout.align_self = Some(AlignSelf::FLEX_END);
-        self_stretch |s| s.layout.align_self = Some(AlignSelf::STRETCH);
-        absolute |s| s.layout.position = Position::Absolute;
-        relative |s| s.layout.position = Position::Relative;
-        overflow_hidden |s| s.layout.overflow = Axes { x: Overflow::Hidden, y: Overflow::Hidden };
-        invisible |s| s.invisible = true;
-        visible |s| s.invisible = false;
-        w_full |s| LayoutLength::Width.set(s, Length::Fraction(1.0));
-        h_full |s| LayoutLength::Height.set(s, Length::Fraction(1.0));
-        size_full |s| {
-            LayoutLength::Width.set(s, Length::Fraction(1.0));
-            LayoutLength::Height.set(s, Length::Fraction(1.0));
-        };
-    }
-
-    fn group_hover(
-        mut self,
-        name: impl Into<String>,
-        f: impl Fn(Style) -> Style + 'static,
-    ) -> Self {
-        self.style_mut()
-            .group_styles
-            .0
-            .push((name.into(), Rc::new(f)));
-        self
+        flex => Declaration::Display(Display::Flex);
+        block => Declaration::Display(Display::Block);
+        grid => Declaration::Display(Display::Grid);
+        row => Declaration::FlexDirection(FlexDirection::Row);
+        col => Declaration::FlexDirection(FlexDirection::Column);
+        flex_wrap => Declaration::FlexWrap(FlexWrap::Wrap);
+        flex_1 => Declaration::Length(&[Slot::Basis], Length::Fraction(0.0)),
+            Declaration::FlexGrow(1.0),
+            Declaration::FlexShrink(1.0);
+        flex_none => Declaration::FlexGrow(0.0), Declaration::FlexShrink(0.0);
+        items_start => Declaration::AlignItems(AlignItems::FLEX_START);
+        items_center => Declaration::AlignItems(AlignItems::CENTER);
+        items_end => Declaration::AlignItems(AlignItems::FLEX_END);
+        items_stretch => Declaration::AlignItems(AlignItems::STRETCH);
+        justify_start => Declaration::JustifyContent(JustifyContent::FLEX_START);
+        justify_center => Declaration::JustifyContent(JustifyContent::CENTER);
+        justify_end => Declaration::JustifyContent(JustifyContent::FLEX_END);
+        justify_between => Declaration::JustifyContent(JustifyContent::SPACE_BETWEEN);
+        justify_around => Declaration::JustifyContent(JustifyContent::SPACE_AROUND);
+        justify_evenly => Declaration::JustifyContent(JustifyContent::SPACE_EVENLY);
+        self_start => Declaration::AlignSelf(AlignSelf::FLEX_START);
+        self_center => Declaration::AlignSelf(AlignSelf::CENTER);
+        self_end => Declaration::AlignSelf(AlignSelf::FLEX_END);
+        self_stretch => Declaration::AlignSelf(AlignSelf::STRETCH);
+        absolute => Declaration::Position(Position::Absolute);
+        relative => Declaration::Position(Position::Relative);
+        overflow_hidden => Declaration::Overflow(Overflow::Hidden);
+        invisible => Declaration::Invisible(true);
+        visible => Declaration::Invisible(false);
+        w_full => Declaration::Length(&[Slot::Width], Length::Fraction(1.0));
+        h_full => Declaration::Length(&[Slot::Height], Length::Fraction(1.0));
+        size_full => Declaration::Length(&[Slot::Width, Slot::Height], Length::Fraction(1.0));
+        italic => Declaration::Italic(true);
     }
 
     fn typography(self, typography: impl Into<Typography>) -> Self {
@@ -380,32 +365,48 @@ pub trait Styled: Sized {
         }
     }
 
-    fn italic(self) -> Self {
-        self.prop(true, Dirty::Layout, |style, value| {
-            style.text_italic = Some(value);
-        })
-    }
-
     props! {
-        text_color(Color) [Paint] |s, v| s.text_color = Some(v);
-        text_size(Length) [Layout] |s, v| s.text_size = Some(v);
-        font(String) [Layout] |s, v| s.text_font = Some(v);
-        font_weight(f32) [Layout] |s, v| s.text_weight = Some(v);
-        line_height(f32) [Layout] |s, v| s.text_line_height = Some(v);
-        aspect_ratio(f32) [Layout] |s, v| s.layout.aspect_ratio = Some(v);
-        flex_grow(f32) [Layout] |s, v| s.layout.flex_grow = v;
-        flex_shrink(f32) [Layout] |s, v| s.layout.flex_shrink = v;
-
-        border_color(Color) [Paint] |s, v| s.border_color = v;
-        bg(Color) [Backing] |s, v| s.background = Some(v);
-        rounded(Radii) [Backing] |s, v| s.corner_radii = v;
-        shadow(BoxShadow) [Paint] |s, v| s.shadows = vec![v];
-        shadows(Vec<BoxShadow>) [Paint] |s, v| s.shadows = v;
+        text_color(Color) => Declaration::TextColor;
+        text_size(f32) => Declaration::TextSize;
+        font(Cow<'static, str>) => Declaration::Font;
+        font_weight(f32) => Declaration::FontWeight;
+        line_height(f32) => Declaration::LineHeight;
+        aspect_ratio(f32) => Declaration::AspectRatio;
+        flex_grow(f32) => Declaration::FlexGrow;
+        flex_shrink(f32) => Declaration::FlexShrink;
+        border_color(Color) => Declaration::BorderColor;
+        bg(Color) => Declaration::Background;
+        rounded(Corners) => Declaration::Rounded;
+        shadow(BoxShadow) => |shadow| Declaration::Shadows(vec![shadow]);
+        shadows(Vec<BoxShadow>) => Declaration::Shadows;
     }
-
-    layout_lengths!(length_setters);
 
     lengths! {
+        w: Width;
+        h: Height;
+        min_w: MinWidth;
+        min_h: MinHeight;
+        max_w: MaxWidth;
+        max_h: MaxHeight;
+        flex_basis: Basis;
+        gap_x: GapX;
+        gap_y: GapY;
+        pt: PaddingTop;
+        pr: PaddingRight;
+        pb: PaddingBottom;
+        pl: PaddingLeft;
+        mt: MarginTop;
+        mr: MarginRight;
+        mb: MarginBottom;
+        ml: MarginLeft;
+        top: Top;
+        right: Right;
+        bottom: Bottom;
+        left: Left;
+        border_t: BorderTop;
+        border_r: BorderRight;
+        border_b: BorderBottom;
+        border_l: BorderLeft;
         size: Width, Height;
         gap: GapX, GapY;
         px: PaddingLeft, PaddingRight;
@@ -414,26 +415,17 @@ pub trait Styled: Sized {
         my: MarginTop, MarginBottom;
         p: PaddingTop, PaddingRight, PaddingBottom, PaddingLeft;
         m: MarginTop, MarginRight, MarginBottom, MarginLeft;
-        inset: InsetTop, InsetRight, InsetBottom, InsetLeft;
+        inset: Top, Right, Bottom, Left;
         border: BorderTop, BorderRight, BorderBottom, BorderLeft;
     }
 }
 
-impl Styled for Style {
-    fn style_mut(&mut self) -> &mut Style {
-        self
-    }
+#[derive(Default)]
+pub struct StyleDelta(pub(crate) Vec<Prop<Declaration>>);
 
-    fn prop<T: 'static, U>(
-        mut self,
-        value: impl IntoProp<T, U>,
-        _dirty: Dirty,
-        set: fn(&mut Style, T),
-    ) -> Self {
-        match value.into_prop() {
-            Prop::Static(value) => set(&mut self, value),
-            Prop::Dynamic(compute) => set(&mut self, compute()),
-        }
+impl Styled for StyleDelta {
+    fn declare(mut self, declaration: Prop<Declaration>) -> Self {
+        self.0.push(declaration);
         self
     }
 }
@@ -447,33 +439,15 @@ pub struct Typography {
 }
 
 impl Typography {
-    pub fn text_style(self, root_font_size: f32) -> TextStyle {
-        let scale = design_unit().map_or(1.0, |unit| root_font_size / unit);
+    pub fn text_style(self) -> TextStyle {
         let defaults = TextStyle::default();
         TextStyle {
             family: self.font.map_or(defaults.family.clone(), Into::into),
-            size: self.size * scale,
+            size: self.size,
             weight: self.weight,
             line_height: self.line_height,
             wrap: false,
             ..defaults
         }
     }
-}
-
-#[macro_export]
-macro_rules! styles {
-    ($vis:vis trait $name:ident { $($style:ident($target:ident) => $body:expr;)* }) => {
-        $vis trait $name: $crate::Styled {
-            $(
-                #[track_caller]
-                fn $style(self) -> Self {
-                    let $target = self;
-                    $body
-                }
-            )*
-        }
-
-        impl<T: $crate::Styled> $name for T {}
-    };
 }

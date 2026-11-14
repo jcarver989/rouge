@@ -1,13 +1,12 @@
+use crate::compositor::ScrollState;
 use crate::control::each;
-use crate::length::Length;
-use crate::prop::{IntoProp, Prop, PropFrom, markers};
-use crate::style::{Dirty, Style, Styled};
-use crate::tree::ElementId;
-use crate::ui::root_font_size;
+use crate::prop::{IntoProp, Prop, PropFrom};
+use crate::style::Styled;
+use crate::styled;
 use crate::view::{BuildCx, Div, View, div};
 use rouge_macros::component;
 use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal, untrack};
-use rouge_render::{Point, Rect, ScrollState, Size};
+use rouge_render::{Point, Rect, Size};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -42,38 +41,18 @@ pub trait Scrollable: View {
 #[derive(Clone)]
 pub enum RowHeight {
     Uniform(f32),
-    Rem(f32),
     Each(Rc<dyn Fn(usize) -> f32>),
-}
-
-impl RowHeight {
-    pub(crate) fn resolve(self, root: impl FnOnce() -> f32) -> Self {
-        match self {
-            RowHeight::Rem(value) => RowHeight::Uniform(value * root()),
-            other => other,
-        }
-    }
 }
 
 impl PropFrom<f32> for RowHeight {
     fn prop_from(value: f32) -> Self {
-        RowHeight::prop_from(Length::design(value))
+        RowHeight::Uniform(value)
     }
 }
 
-impl PropFrom<Length> for RowHeight {
-    fn prop_from(value: Length) -> Self {
-        match value {
-            Length::Rem(value) => RowHeight::Rem(value),
-            Length::Px(value) => RowHeight::Uniform(value),
-            Length::Fraction(_) | Length::Auto => RowHeight::Uniform(0.0),
-        }
-    }
-}
-
-impl<T: Fn(usize) -> f32 + 'static> IntoProp<RowHeight, markers::Indexed> for T {
-    fn into_prop(self) -> Prop<RowHeight> {
-        Prop::Static(RowHeight::Each(Rc::new(self)))
+impl<T: Fn(usize) -> f32 + 'static> PropFrom<T> for RowHeight {
+    fn prop_from(height: T) -> Self {
+        RowHeight::Each(Rc::new(height))
     }
 }
 
@@ -299,24 +278,10 @@ impl<T: View, U: Clone + Eq + Hash + 'static> Scrollable for VirtualList<T, U> {
     }
 }
 
-impl<T, U> Styled for VirtualList<T, U> {
-    fn style_mut(&mut self) -> &mut Style {
-        self.container.style_mut()
-    }
-
-    fn prop<V: 'static, W>(
-        mut self,
-        value: impl IntoProp<V, W>,
-        dirty: Dirty,
-        set: fn(&mut Style, V),
-    ) -> Self {
-        self.container = self.container.prop(value, dirty, set);
-        self
-    }
-}
+styled!(VirtualList<T, U> => container);
 
 impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let (row, overscan) = (self.row, self.overscan);
         let count = memo(self.count);
         let keys = self.identity.map(|identity| {
@@ -344,10 +309,9 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
             mounted.is_some(),
             configured,
         );
-        let layout = self.measure.map(|revision| {
-            let font = root_font_size();
-            memo(move || (width.get().width, font.get(), revision()))
-        });
+        let layout = self
+            .measure
+            .map(|revision| memo(move || (width.get().width, revision())));
         if let (Some(mounted), Some(layout)) = (mounted, layout) {
             observe_measurements(&rows, state, keys, configured, mounted, layout);
         }
@@ -420,7 +384,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
             .absolute()
             .left(0.0)
             .right(0.0)
-            .top(move || Length::Px(top()))
+            .top(top)
             .layer()
             .flex()
             .col()
@@ -448,7 +412,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                             }
                         });
                         container = container.min_h(1.0);
-                        container.spec.size_observer = Some(size);
+                        container = container.track_size(size);
                     } else {
                         let rows = row_heights.clone();
                         let height = memo(move || {
@@ -460,17 +424,17 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                                 }
                             })
                         });
-                        container = container.h(move || Length::Px(height.get()));
+                        container = container.h(move || height.get());
                     }
                     container.child(row(index))
                 },
             ));
         let mut content = div()
             .relative()
-            .h(move || Length::Px(rows.with(|heights| heights.top(heights.count()))))
+            .h(move || rows.with(|heights| heights.top(heights.count())))
             .child(window);
         if mounted.is_some() {
-            content.spec.size_observer = Some(width);
+            content = content.track_size(width);
         }
         let mut container = self.container;
         if let Some(handle) = handle {
@@ -480,7 +444,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
             });
             container = container.track_bounds(frame);
         }
-        container.scroll_state(state).child(content).build(cx)
+        container.scroll_state(state).child(content).build(cx);
     }
 }
 

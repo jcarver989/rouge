@@ -1,13 +1,13 @@
+use crate::animation::{Ease, Tween};
 use crate::event::{FileDropPhase, KeyEvent, PointerButton};
 use crate::theme::{Palette, Theme};
 use crate::ui::Ui;
 use crate::view::View;
 use crate::window::{Menu, WindowCommand};
 use rouge_render::headless::{Headless, Image};
-use rouge_render::{
-    Color, Ease, GpuError, Point, Rect, RenderStats, Size, Surfaces, Tween, Viewport,
-};
+use rouge_render::{Color, GpuError, Point, Rect, RenderStats, Size, Surfaces, Viewport};
 use rouge_theme::UiPalette;
+use std::borrow::Cow;
 use std::mem::take;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -49,7 +49,7 @@ const MAX_SCROLLS: usize = 100;
 pub struct TestUiBuilder {
     menus: Vec<Menu>,
     palette: Option<Palette>,
-    fonts: Vec<Vec<u8>>,
+    fonts: Vec<Cow<'static, [u8]>>,
     size: Size,
     scale: f32,
     clear: Color,
@@ -84,8 +84,11 @@ impl TestUiBuilder {
         self
     }
 
-    pub fn fonts(mut self, fonts: impl IntoIterator<Item = Vec<u8>>) -> Self {
-        self.fonts.extend(fonts);
+    pub fn fonts<T: Into<Cow<'static, [u8]>>>(
+        mut self,
+        fonts: impl IntoIterator<Item = T>,
+    ) -> Self {
+        self.fonts.extend(fonts.into_iter().map(Into::into));
         self
     }
 
@@ -114,11 +117,12 @@ impl TestUiBuilder {
             extra = Some(value);
             view
         });
-        ui.set_scale(self.scale);
+        ui.set_device_scale(self.scale);
         ui.bind_menus(&self.menus);
         let mut ui = TestUi {
             ui,
             size: self.size,
+            scale: self.scale,
             clear: self.clear,
             headless: None,
             clock: 0.0,
@@ -132,8 +136,9 @@ impl TestUiBuilder {
 pub struct TestUi {
     ui: Ui,
     size: Size,
+    scale: f32,
     clear: Color,
-    headless: Option<Headless>,
+    headless: Option<(Viewport, Headless)>,
     clock: f64,
     commands: Vec<WindowCommand>,
 }
@@ -148,20 +153,17 @@ impl TestUi {
     }
 
     fn headless(&mut self) -> Result<&mut Headless, TestError> {
-        if self.headless.is_none() {
-            let scale = self.ui.scale();
-            let mut headless = Headless::new(Viewport::new(
-                (self.size.width * scale) as u32,
-                (self.size.height * scale) as u32,
-                scale,
-            ))?;
-            self.ui.set_surfaces(headless.surfaces().registrar());
-            self.headless = Some(headless);
-        }
-        Ok(self
-            .headless
-            .as_mut()
-            .expect("the headless renderer exists"))
+        let viewport = Viewport::new(
+            (self.size.width * self.scale) as u32,
+            (self.size.height * self.scale) as u32,
+            self.ui.scale(),
+        );
+        let headless = match self.headless.take() {
+            Some((current, headless)) if current == viewport => headless,
+            Some((_, headless)) => Headless::with_gpu(headless.gpu().clone(), viewport),
+            None => Headless::new(viewport)?,
+        };
+        Ok(&mut self.headless.insert((viewport, headless)).1)
     }
 
     pub fn surfaces(&mut self) -> Result<&mut Surfaces, TestError> {
@@ -170,10 +172,11 @@ impl TestUi {
 
     fn present(&mut self) -> Result<(RenderStats, &Headless), TestError> {
         self.headless()?;
-        let headless = self
+        let (_, headless) = self
             .headless
             .as_mut()
             .expect("the headless renderer exists");
+        self.ui.sync_surfaces(headless.surfaces());
         headless.surfaces().latch(Instant::now());
         let frame = self.ui.frame();
         let stats = headless.render(self.clear, &frame.scene, frame.atlas);
@@ -188,7 +191,7 @@ impl TestUi {
     }
 
     pub fn wait(&self) -> Result<(), TestError> {
-        if let Some(headless) = &self.headless {
+        if let Some((_, headless)) = &self.headless {
             headless.wait()?;
         }
         Ok(())
