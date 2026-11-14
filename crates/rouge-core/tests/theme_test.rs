@@ -10,10 +10,10 @@ fn a_default_theme_is_provided_and_switching_it_repaints_bound_props_only() -> T
     let _rt = Runtime::new().enter();
     let (mut ui, theme) = TestUiBuilder::default().build_with(|| {
         let theme = Theme::current();
-        let root = div().size_full().bg(theme.elevated).rounded(8.0);
+        let root = div().size_full().bg(theme.elevated()).rounded(8.0);
         (root, theme)
     });
-    assert_eq!(theme.palette(), UiPalette::light().map(Color::from));
+    assert_eq!(theme.get_untracked(), UiPalette::light().map(Color::from));
     assert_near(ui.pixel(100, 50)?, [255, 255, 255, 255], "light surface");
     let (layouts, _) = ui.passes();
     theme.set(Palette {
@@ -23,7 +23,7 @@ fn a_default_theme_is_provided_and_switching_it_repaints_bound_props_only() -> T
     ui.advance(0.0);
     assert_near(ui.pixel(100, 50)?, [255, 0, 0, 255], "new surface colour");
     assert_eq!(ui.passes().0, layouts, "a theme switch needs no layout");
-    assert_eq!(theme.text.get_untracked(), UiPalette::dark().text.into());
+    assert_eq!(theme.get_untracked().text, UiPalette::dark().text.into());
     Ok(())
 }
 
@@ -52,7 +52,7 @@ fn a_shared_ui_palette_resolves_component_styles_with_its_alpha() {
         theme.selection_style(SelectionState::Focused).foreground,
         Color::from(ui.accent_foreground)
     );
-    assert_eq!(theme.canvas.get_untracked(), Color::from(ui.canvas));
+    assert_eq!(theme.get_untracked().canvas, Color::from(ui.canvas));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn a_subtree_can_provide_its_own_theme() {
     let _rt = Runtime::new().enter();
     let (_ui, seen) = TestUiBuilder::default().build_with(|| {
         Theme::provide(UiPalette::dark());
-        (div(), Theme::current().palette())
+        (div(), Theme::current().get_untracked())
     });
     assert_eq!(seen, UiPalette::dark().map(Color::from));
 }

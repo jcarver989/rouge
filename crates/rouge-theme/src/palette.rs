@@ -14,14 +14,6 @@ macro_rules! roles {
             pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> UiPalette<U> {
                 UiPalette { $($role: f(self.$role),)* }
             }
-
-            pub fn zip<U>(self, other: UiPalette<U>) -> UiPalette<(T, U)> {
-                UiPalette { $($role: (self.$role, other.$role),)* }
-            }
-
-            pub fn for_each(self, mut f: impl FnMut(T)) {
-                $(f(self.$role);)*
-            }
         }
     };
 }
