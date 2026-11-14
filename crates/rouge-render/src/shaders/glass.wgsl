@@ -47,11 +47,11 @@ fn effect(in: EffectInput) -> vec4<f32> {
     color = mix(vec3<f32>(dot(color, LUMA)), color, finish.y);
     color = mix(color, tint.rgb, tint.a);
 
-    let light = normalize(vec2<f32>(-0.6, -0.8));
+    let light = vec2<f32>(sin(pointer.z), -cos(pointer.z));
     let facing = dot(normal, light);
     let key = max(facing, 0.0);
     let fill = max(-facing, 0.0);
-    let glint = 0.15 + 0.85 * key * key + 0.6 * fill * fill;
+    let glint = 0.15 + 0.85 * key * key + pointer.w * fill * fill;
     let line = clamp(1.0 - depth / RIM_WIDTH, 0.0, 1.0);
     let bloom = rim * rim * rim;
     let sheen = line * glint + bloom * glint * 0.22 + bend * 0.12;

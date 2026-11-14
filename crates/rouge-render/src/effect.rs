@@ -3,6 +3,8 @@ use std::any::TypeId;
 use std::hash::{Hash, Hasher};
 
 const SHADOW_REACH: f32 = 28.0;
+/// From the upper left, so the top and left edges catch the light.
+const DIAGONAL_RIM_ANGLE: f32 = -0.643_501_1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Inputs(u8);
@@ -430,6 +432,8 @@ pub struct Glass {
     light: Point,
     light_strength: f32,
     light_reach: f32,
+    rim_angle: f32,
+    rim_fill: f32,
 }
 
 impl Default for Glass {
@@ -452,6 +456,8 @@ impl Glass {
             light: Point::new(0.0, 0.0),
             light_strength: 0.0,
             light_reach: 1.0,
+            rim_angle: DIAGONAL_RIM_ANGLE,
+            rim_fill: 0.6,
         }
     }
 
@@ -468,6 +474,8 @@ impl Glass {
             light: Point::new(0.0, 0.0),
             light_strength: 0.0,
             light_reach: 1.0,
+            rim_angle: DIAGONAL_RIM_ANGLE,
+            rim_fill: 0.6,
         }
     }
 
@@ -517,6 +525,14 @@ impl Glass {
         self.light_reach = reach;
         self
     }
+
+    /// Aims the light that catches the rim: `angle` is where it shines from, in radians clockwise
+    /// from straight up, and `fill` is how much of it bounces onto the opposite edge.
+    pub const fn rim_light(mut self, angle: f32, fill: f32) -> Self {
+        self.rim_angle = angle;
+        self.rim_fill = fill;
+        self
+    }
 }
 
 impl Effect for Glass {
@@ -536,6 +552,8 @@ impl Effect for Glass {
             self.light.y,
             self.light_strength,
             self.light_reach,
+            self.rim_angle,
+            self.rim_fill,
         ]);
         uniforms
     }

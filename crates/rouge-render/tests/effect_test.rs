@@ -201,6 +201,40 @@ fn a_light_brightens_the_rim_nearest_to_it_and_leaves_the_far_side_alone() -> Re
 }
 
 #[test]
+fn an_overhead_rim_light_lights_the_top_edge_and_leaves_the_bottom_unfilled() -> Result<(), GpuError>
+{
+    let draw = |glass: Glass| {
+        let backdrop = EffectDraw {
+            corner_radii: Corners::all(20.0),
+            ..EffectDraw::new(&glass, Rect::new(10.0, 10.0, 80.0, 80.0))
+        };
+        over(&quads([full(Color::BLACK)]), backdrop)
+    };
+    let lit = Glass::frosted(0.0).edge_width(1.5).highlight(1.0);
+    let (diagonal, overhead) = (draw(lit)?, draw(lit.rim_light(0.0, 0.0))?);
+
+    let (top, side, bottom) = (
+        overhead.pixel(50, 10)[0],
+        overhead.pixel(10, 50)[0],
+        overhead.pixel(50, 89)[0],
+    );
+    assert!(
+        top > side + 60,
+        "the top edge catches the light: {top} vs {side}"
+    );
+    assert!(
+        top > bottom + 60,
+        "the bottom edge stays dark: {top} vs {bottom}"
+    );
+    let filled = diagonal.pixel(50, 89)[0];
+    assert!(
+        filled > bottom + 30,
+        "without fill the bottom is darker than the default: {filled} vs {bottom}"
+    );
+    Ok(())
+}
+
+#[test]
 fn shadow_falls_outside_the_glass_and_never_darkens_it() -> Result<(), GpuError> {
     let draw = |glass: Glass| {
         let bounds = Rect::new(30.0, 30.0, 40.0, 40.0);
