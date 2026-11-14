@@ -1,16 +1,16 @@
 [package]
 name = "rouge-render"
-description = "wgpu renderer and compositor for Rouge."
+description = "wgpu renderer, effects and shared GPU surfaces for Rouge."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-rouge-interop.workspace = true
 rouge-theme.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
+rustc-hash.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 image.workspace = true
@@ -21,5 +21,15 @@ web-time.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.3"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
+objc2-io-surface = { version = "0.3.2", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2", "objc2-core-foundation"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "MTLTypes", "objc2-io-surface"] }
+
 [lints]
 workspace = true
+
+[[test]]
+name = "interop_io_surface_test"
+path = "tests/interop/io_surface_test.rs"

@@ -1,4 +1,4 @@
-use crate::InteropError;
+use super::InteropError;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString};

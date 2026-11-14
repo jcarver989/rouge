@@ -1,7 +1,7 @@
 #![cfg(target_os = "macos")]
 
 use pollster::block_on;
-use rouge_interop::{InteropError, IoSurface, import_io_surface};
+use rouge_render::interop::{InteropError, IoSurface, import_io_surface};
 use std::error::Error;
 use wgpu::{
     Device, DeviceDescriptor, Instance, InstanceDescriptor, RequestAdapterOptions, TextureFormat,
