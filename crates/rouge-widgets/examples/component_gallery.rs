@@ -30,7 +30,7 @@ fn gallery() -> impl View {
     let width = signal(16.0);
     let count = view! { <text caption muted>"2"</text> };
     size.bind(view! {
-        <div size_full flex col p=16.0 gap=12.0 bg=theme.canvas>
+        <div size_full flex col p=16.0 gap=12.0 bg=theme.canvas()>
             <text heading primary>"Shared Rouge components"</text>
             <controls size status/>
             <div flex gap=8.0 flex_1>

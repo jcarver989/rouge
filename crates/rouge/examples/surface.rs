@@ -1,8 +1,8 @@
 use rouge::AppError;
 use rouge::prelude::*;
 use rouge::render::{
-    BufferDesc, BufferRef, BufferSetId, Frame, SharedBuffer, Sharing, SurfaceConfig, SurfaceCx,
-    SurfaceEvent, SurfaceOptions, SurfaceProducer, surface_channel,
+    BufferDesc, BufferRef, BufferSetId, Frame, QueueMode, SharedBuffer, Sharing, SurfaceConfig,
+    SurfaceCx, SurfaceEvent, SurfaceProducer, surface_channel,
 };
 use std::collections::VecDeque;
 use std::thread::spawn;
@@ -44,7 +44,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 ";
 
 fn main() -> Result<(), AppError> {
-    let (producer, source) = surface_channel(SurfaceOptions::default());
+    let (producer, source) = surface_channel(QueueMode::Mailbox);
     spawn(move || Plasma::new(producer).run());
     let options = WindowOptions::default()
         .title("Surface")
@@ -210,10 +210,8 @@ impl Plasma {
             pass.draw(0..3, 0..1);
         }
         cx.queue().submit([encoder.finish()]);
-        let seq = self.config.map_or(0, |config| config.seq);
         let set = chain.set;
-        self.producer
-            .submit(Frame::new(BufferRef { set, index }).config(seq));
+        self.producer.submit(Frame::new(BufferRef { set, index }));
     }
 }
 

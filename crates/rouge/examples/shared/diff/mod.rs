@@ -168,7 +168,7 @@ pub(crate) fn diff_view(patch: Patch) -> AnyView {
         .size_full()
         .relative()
         .font(UI_FONT)
-        .text_size(rem(13.0 / 16.0))
+        .text_size(13.0)
         .text_color(TEXT)
         .bg(BASE)
         .child(diff_pane(review))
@@ -209,7 +209,7 @@ fn toolbar(review: Review) -> Div {
         .child(
             div()
                 .font(CODE_FONT)
-                .text_size(rem(0.75))
+                .text_size(12.0)
                 .child(code(in_view, MUTED)),
         )
         .child(show(
@@ -440,7 +440,7 @@ fn selection_hud(review: Review) -> Div {
         .child(
             clipped(code(describe, TEXT))
                 .font(CODE_FONT)
-                .text_size(rem(0.75)),
+                .text_size(12.0),
         )
         .child(label("click to clear", 12.0, MUTED))
 }
@@ -449,13 +449,13 @@ fn comment_editor(review: Review) -> Div {
     div()
         .test_id("diff-comment-editor")
         .absolute()
-        .bottom(rem(1.5))
-        .left(rem(1.0))
-        .right(rem(1.5))
+        .bottom(24.0)
+        .left(16.0)
+        .right(24.0)
         .flex()
         .col()
-        .gap(rem(0.5))
-        .p(rem(0.75))
+        .gap(8.0)
+        .p(12.0)
         .rounded(12.0)
         .bg(BASE)
         .border(1.0)
@@ -582,7 +582,7 @@ fn hunk_header(header: &str) -> Div {
         .overflow_hidden()
         .bg(HUNK)
         .font(CODE_FONT)
-        .text_size(rem(0.75))
+        .text_size(12.0)
         .child(code(header, ACCENT))
 }
 
@@ -591,7 +591,7 @@ fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div 
         .relative()
         .group("diff-line")
         .font(CODE_FONT)
-        .text_size(rem(0.75))
+        .text_size(12.0)
         .flex()
         .items_center()
         .flex_1()
@@ -639,7 +639,7 @@ fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div 
     let comment = div()
         .test_id(format!("{id}-comment"))
         .absolute()
-        .right(rem(0.25))
+        .right(4.0)
         .top(1.0)
         .size(20.0)
         .flex()
@@ -695,10 +695,10 @@ fn stats(added: usize, removed: usize) -> Div {
     };
     div()
         .font(CODE_FONT)
-        .text_size(rem(0.75))
+        .text_size(12.0)
         .flex()
         .flex_none()
-        .gap(rem(0.375))
+        .gap(6.0)
         .children(stat(added, '+', GREEN))
         .children(stat(removed, '−', RED))
 }
@@ -706,7 +706,7 @@ fn stats(added: usize, removed: usize) -> Div {
 fn status_code(status: Status) -> Text {
     code(status.code().to_string(), theme::status(status))
         .font(CODE_FONT)
-        .text_size(rem(0.75))
+        .text_size(12.0)
 }
 
 fn clipped(content: impl View) -> Div {
@@ -715,7 +715,7 @@ fn clipped(content: impl View) -> Div {
 
 fn label<T>(content: impl IntoProp<String, T>, size: f32, color: Color) -> Text {
     text(content)
-        .text_size(rem(size / 16.0))
+        .text_size(size)
         .color(color)
         .no_wrap()
         .flex_none()

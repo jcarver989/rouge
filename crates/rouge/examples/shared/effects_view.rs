@@ -1,5 +1,4 @@
 use rouge::prelude::*;
-use rouge::render::Effect;
 
 const BASE: u32 = 0x14151f;
 const SURFACE: u32 = 0x232536;
@@ -13,12 +12,12 @@ struct Ripple {
     strength: f32,
 }
 
-impl Effect for Ripple {
+impl ShaderEffect for Ripple {
     const WGSL: &'static str = include_str!("ripple.wgsl");
     const INPUTS: Inputs = Inputs::CONTENT;
 
-    fn uniforms(&self) -> Vec<f32> {
-        vec![self.frequency, self.strength]
+    fn uniforms(&self, uniforms: &mut [f32; 16]) {
+        uniforms[..2].copy_from_slice(&[self.frequency, self.strength]);
     }
 
     fn margin(&self) -> f32 {

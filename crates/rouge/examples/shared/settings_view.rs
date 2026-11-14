@@ -17,7 +17,7 @@ fn row(label: &'static str, children: impl View) -> impl View {
     let theme = Theme::current();
     view! {
         <div flex items_center justify_between gap=16.0 py=8.0>
-            <text color=theme.text>{label}</text>
+            <text color=theme.text()>{label}</text>
             {children}
         </div>
     }
@@ -27,8 +27,8 @@ fn row(label: &'static str, children: impl View) -> impl View {
 fn section(title: &'static str) -> Div {
     let theme = Theme::current();
     view! {
-        <div flex col p=16.0 rounded=12.0 bg=theme.elevated border=1.0 border_color=theme.border>
-            <text color=theme.text_muted text_size=12.0 bold>{title}</text>
+        <div flex col p=16.0 rounded=12.0 bg=theme.elevated() border=1.0 border_color=theme.border()>
+            <text color=theme.text_muted() text_size=12.0 bold>{title}</text>
         </div>
     }
 }
@@ -50,8 +50,8 @@ fn general(name: Signal<String>, notes: Signal<String>, saved: Signal<u32>) -> i
                 <row label="Language">
                     <select value=language options w=220.0/>
                 </row>
-                <text_area value=notes placeholder="Notes" w_full/>
-                <text color=theme.text_muted text_size=12.0>"Saved {saved} times (⌘S)"</text>
+                <text_input multiline value=notes placeholder="Notes" w_full/>
+                <text color=theme.text_muted() text_size=12.0>"Saved {saved} times (⌘S)"</text>
             </section>
             <section title="NOTIFICATIONS">
                 <row label="Allow notifications">
@@ -61,12 +61,12 @@ fn general(name: Signal<String>, notes: Signal<String>, saved: Signal<u32>) -> i
                     <div flex items_center gap=8.0>
                         <checkbox id="sounds" on_toggle={move || sounds.update(|on| *on = !*on)}
                                   state={move || if sounds.get() { CheckState::Checked } else { CheckState::Unchecked }}/>
-                        <text color=theme.text>"Enabled"</text>
+                        <text color=theme.text()>"Enabled"</text>
                     </div>
                 </row>
                 <row label="Volume">
                     <div flex items_center gap=8.0>
-                        <icon path=Path::svg(BELL) stroke=1.8 color=theme.text_muted size=18.0/>
+                        <icon path=Path::svg(BELL) stroke=1.8 color=theme.text_muted() size=18.0/>
                         <slider value=volume range={(0.0, 100.0)} step=5.0 w=180.0/>
                     </div>
                 </row>
@@ -100,7 +100,7 @@ fn appearance(dark: Signal<bool>) -> impl View {
     let swatch = move |index: usize| {
         view! {
             <div size=22.0 rounded=11.0 bg=swatches[index] border=2.0 cursor=Cursor::Pointer
-                 border_color={move || if accent.get() == index { theme.text.get() } else { Color::TRANSPARENT }}
+                 border_color={move || if accent.get() == index { theme.get().text } else { Color::TRANSPARENT }}
                  on_click={move |_| accent.set(index)}/>
         }
     };
@@ -151,7 +151,7 @@ fn about() -> impl View {
             <context_menu items=actions>
                 <section title="ABOUT">
                     <row label="Version">
-                        <text color=theme.text_muted>{status}</text>
+                        <text color=theme.text_muted()>{status}</text>
                     </row>
                     <div flex items_center gap=8.0 py=8.0>
                         <dynamic>
@@ -164,7 +164,7 @@ fn about() -> impl View {
                         <popover open=details
                                  trigger={view! { <button id="details" label="Details" on_click=toggle_details/> }}>
                             <div p=12.0 w=220.0>
-                                <text color=theme.text text_size=13.0>
+                                <text color=theme.text() text_size=13.0>
                                     "Rouge is a signal-driven, GPU-composited UI framework."
                                 </text>
                             </div>
@@ -173,7 +173,7 @@ fn about() -> impl View {
                         <button id="reset" label="Reset…" on_click={move || confirm.set(true)}/>
                     </div>
                     <separator/>
-                    <text color=theme.text_muted text_size=12.0 pt=8.0>
+                    <text color=theme.text_muted() text_size=12.0 pt=8.0>
                         "Right-click this card for more actions."
                     </text>
                     <show when={move || confirm.get()}>
@@ -206,7 +206,7 @@ pub(crate) fn settings() -> impl View {
         }
     };
     view! {
-        <div size_full bg=theme.canvas
+        <div size_full bg=theme.canvas()
              bind_key=(Chord::new(Key::character("s"), Modifiers::COMMAND), Save)
              on_action={move |_: &Save| saved.update(|count| *count += 1)}>
             <tabs selected size_full
