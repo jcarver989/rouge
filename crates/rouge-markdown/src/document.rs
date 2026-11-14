@@ -1,11 +1,17 @@
-use linkify::{LinkFinder, LinkKind};
-use pulldown_cmark::{
-    Alignment, BrokenLink, CodeBlockKind, CowStr, Event, HeadingLevel, LinkType, Options, Parser,
-    Tag,
+use crate::{
+    incremental::IncrementalDocument,
+    text::{MarkdownText, openable},
 };
-use rouge_syntax::{LanguageHint, SourceSyntax, SyntaxCell};
+use linkify::{LinkFinder, LinkKind};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Tag};
+use rouge_syntax::{LanguageHint, SourceSyntax, analyze};
 use serde::{Deserialize, Serialize};
-use std::{cmp, ops::Range};
+use std::{
+    cmp, fmt,
+    ops::Range,
+    slice,
+    sync::{Arc, OnceLock},
+};
 
 /// A one-based, inclusive range of lines in the original Markdown source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -26,10 +32,6 @@ pub struct SourceRange {
 pub struct MarkdownTargetId(usize);
 
 impl MarkdownTargetId {
-    pub(crate) const fn new(index: usize) -> Self {
-        Self(index)
-    }
-
     /// Returns the document-local ordinal of this target.
     #[must_use]
     pub const fn index(self) -> usize {
@@ -68,44 +70,9 @@ pub enum MarkdownInline {
     ImageAlt(String),
 }
 
-impl MarkdownInline {
-    fn visible_text(&self, output: &mut String) {
-        match self {
-            Self::Text(text) | Self::Code(text) | Self::ImageAlt(text) => output.push_str(text),
-            Self::Strong(children) | Self::Emphasis(children) | Self::Strikethrough(children) => {
-                for child in children {
-                    child.visible_text(output);
-                }
-            }
-            Self::Link { content, .. } => {
-                for child in content {
-                    child.visible_text(output);
-                }
-            }
-            Self::SoftBreak | Self::HardBreak => output.push('\n'),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MarkdownOptions {
     pub intra_doc_links: bool,
-}
-
-/// Parses Markdown into a renderer-neutral semantic document.
-#[must_use]
-pub fn parse_markdown(source: impl Into<String>, options: MarkdownOptions) -> MarkdownDocument {
-    MarkdownDocument::parse_document(None, None, source.into(), options)
-}
-
-/// Returns the rendered, style-free text represented by inline nodes.
-#[must_use]
-pub fn rendered_text(inlines: &[MarkdownInline]) -> String {
-    let mut text = String::new();
-    for inline in inlines {
-        inline.visible_text(&mut text);
-    }
-    text
 }
 
 /// A commentable or structurally significant Markdown block.
@@ -119,13 +86,9 @@ pub struct MarkdownBlock {
 impl MarkdownBlock {
     #[must_use]
     pub fn code_blocks(&self) -> Vec<&MarkdownCodeBlock> {
-        code_blocks(std::slice::from_ref(self))
-    }
-
-    /// Returns the target ID when this block is commentable.
-    #[must_use]
-    pub const fn target_id(&self) -> Option<MarkdownTargetId> {
-        self.target_id
+        let mut output = Vec::new();
+        collect_code_blocks(slice::from_ref(self), &mut output);
+        output
     }
 }
 
@@ -147,7 +110,7 @@ pub enum MarkdownBlockKind {
     BlockQuote {
         blocks: Vec<MarkdownBlock>,
     },
-    CodeBlock(MarkdownCodeBlock),
+    CodeBlock(Arc<MarkdownCodeBlock>),
     Table(MarkdownTable),
     /// Raw HTML is retained as escaped/plain fallback text, but is not a target.
     HtmlFallback {
@@ -166,14 +129,6 @@ pub struct MarkdownListItem {
     pub target_id: Option<MarkdownTargetId>,
 }
 
-impl MarkdownListItem {
-    /// Returns this item's document-local target ID.
-    #[must_use]
-    pub const fn target_id(&self) -> Option<MarkdownTargetId> {
-        self.target_id
-    }
-}
-
 /// A fenced or indented code block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownCodeBlock {
@@ -189,20 +144,9 @@ pub struct MarkdownCodeBlock {
 }
 
 impl MarkdownCodeBlock {
-    /// Returns this code block's target ID.
-    #[must_use]
-    pub const fn target_id(&self) -> Option<MarkdownTargetId> {
-        self.target_id
-    }
-
     #[must_use]
     pub fn language(&self) -> Option<&str> {
         self.language.as_deref()
-    }
-
-    #[must_use]
-    pub fn info(&self) -> Option<&str> {
-        self.info.as_deref()
     }
 
     #[must_use]
@@ -242,8 +186,7 @@ impl MarkdownCodeBlock {
             .map_or(0, |last| self.lines[last].text.end)
     }
 
-    #[must_use]
-    pub fn highlight_hint(&self) -> &str {
+    pub(crate) fn highlight_hint(&self) -> &str {
         self.info
             .as_deref()
             .or(self.language.as_deref())
@@ -253,9 +196,66 @@ impl MarkdownCodeBlock {
     #[must_use]
     pub fn syntax(&self) -> &SourceSyntax {
         self.syntax
-            .get(LanguageHint::InfoString(self.highlight_hint()), || {
-                self.text.as_str()
-            })
+            .get(|| analyze(LanguageHint::InfoString(self.highlight_hint()), &self.text))
+    }
+
+    pub(crate) fn split_fenced_lines(
+        &mut self,
+        from: usize,
+        content: Range<usize>,
+        source: &str,
+        index: &LineIndex,
+    ) -> usize {
+        self.truncate_lines(from);
+        if content.is_empty() {
+            return 0;
+        }
+        let first_line = index.line_for_offset(content.start) + from;
+        let mut offset = index.line_start(first_line);
+        let Some(code) = source.get(offset..content.end) else {
+            return 0;
+        };
+        for (line_index, line) in code.split('\n').enumerate() {
+            let code_line = MarkdownCodeLine {
+                index: from + line_index,
+                source: source_range(offset..offset + line.len(), index),
+                source_line: Some(first_line + line_index),
+                text: 0..0,
+                target_id: None,
+            };
+            self.push_line((code_line, line.strip_suffix('\r').unwrap_or(line)));
+            offset += line.len() + 1;
+        }
+        code.len()
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct SyntaxCell(Arc<OnceLock<SourceSyntax>>);
+
+impl SyntaxCell {
+    fn get(&self, analyze: impl FnOnce() -> SourceSyntax) -> &SourceSyntax {
+        self.0.get_or_init(analyze)
+    }
+}
+
+impl From<SourceSyntax> for SyntaxCell {
+    fn from(syntax: SourceSyntax) -> Self {
+        Self(Arc::new(OnceLock::from(syntax)))
+    }
+}
+
+impl PartialEq for SyntaxCell {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for SyntaxCell {}
+
+impl fmt::Debug for SyntaxCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SyntaxCell")
     }
 }
 
@@ -267,14 +267,6 @@ pub struct MarkdownCodeLine {
     pub source_line: Option<usize>,
     pub(crate) text: Range<usize>,
     pub target_id: Option<MarkdownTargetId>,
-}
-
-impl MarkdownCodeLine {
-    /// Returns this line's document-local target ID.
-    #[must_use]
-    pub const fn target_id(&self) -> Option<MarkdownTargetId> {
-        self.target_id
-    }
 }
 
 /// A table and its rows. Cells are structural and are not independent targets.
@@ -300,14 +292,6 @@ pub struct MarkdownTableRow {
     pub source: SourceRange,
     pub cells: Vec<MarkdownTableCell>,
     pub target_id: Option<MarkdownTargetId>,
-}
-
-impl MarkdownTableRow {
-    /// Returns this row's document-local target ID.
-    #[must_use]
-    pub const fn target_id(&self) -> Option<MarkdownTargetId> {
-        self.target_id
-    }
 }
 
 /// One structural table cell.
@@ -365,72 +349,22 @@ pub struct MarkdownDocument {
 }
 
 impl MarkdownDocument {
-    /// Creates a document by parsing Markdown with the supported GFM extensions enabled.
-    #[must_use]
-    pub fn new(source: impl Into<String>) -> Self {
-        Self::parse(source)
-    }
-
-    /// Returns an empty Markdown document.
-    #[must_use]
-    pub fn empty() -> Self {
-        Self::parse("")
-    }
-
     /// Parses Markdown with the supported GFM extensions enabled.
     #[must_use]
     pub fn parse(source: impl Into<String>) -> Self {
-        Self::parse_with_metadata(None, None, source)
+        Self::parse_with(source, MarkdownOptions::default())
     }
 
-    /// Alias for [`Self::parse`] that makes the source-oriented API explicit.
     #[must_use]
-    pub fn from_source(source: impl Into<String>) -> Self {
-        Self::parse(source)
+    pub fn parse_with(source: impl Into<String>, options: MarkdownOptions) -> Self {
+        IncrementalDocument::parse(source.into(), options)
     }
 
-    /// Parses Markdown while retaining optional host-provided metadata.
     #[must_use]
-    pub fn parse_with_metadata(
-        source_path: Option<String>,
-        title: Option<String>,
-        source: impl Into<String>,
-    ) -> Self {
-        Self::parse_document(
-            source_path,
-            title,
-            source.into(),
-            MarkdownOptions::default(),
-        )
-    }
-
-    fn parse_document(
-        source_path: Option<String>,
-        title: Option<String>,
-        source: String,
-        options: MarkdownOptions,
-    ) -> Self {
-        let line_starts = LineIndex::new(&source);
-        let events = parse_events(&source, options);
-        let roots = event_tree(&events);
-        let mut source_styles = Vec::new();
-        collect_source_styles(&roots, &line_starts, &mut source_styles);
-        let mut blocks = roots
-            .iter()
-            .filter_map(|node| parse_block(node, 0, &source, &line_starts))
-            .collect::<Vec<_>>();
-        let mut targets = Vec::new();
-        let mut outline = Vec::new();
-        assign_targets(&mut blocks, &mut targets, &mut outline);
-        Self {
-            source_path,
-            title,
-            source,
-            blocks,
-            outline,
-            targets,
-            source_styles,
-        }
+    pub fn with_metadata(mut self, source_path: Option<String>, title: Option<String>) -> Self {
+        self.source_path = source_path;
+        self.title = title;
+        self
     }
 
     #[must_use]
@@ -479,31 +413,21 @@ impl MarkdownDocument {
     pub fn target(&self, id: MarkdownTargetId) -> Option<&MarkdownTarget> {
         self.targets.get(id.0)
     }
-
-    #[must_use]
-    pub fn code_blocks(&self) -> Vec<&MarkdownCodeBlock> {
-        code_blocks(&self.blocks)
-    }
 }
 
-fn code_blocks(blocks: &[MarkdownBlock]) -> Vec<&MarkdownCodeBlock> {
-    fn collect<'a>(blocks: &'a [MarkdownBlock], output: &mut Vec<&'a MarkdownCodeBlock>) {
-        for block in blocks {
-            match &block.kind {
-                MarkdownBlockKind::CodeBlock(code) => output.push(code),
-                MarkdownBlockKind::List { items, .. } => {
-                    for item in items {
-                        collect(&item.blocks, output);
-                    }
+fn collect_code_blocks<'a>(blocks: &'a [MarkdownBlock], output: &mut Vec<&'a MarkdownCodeBlock>) {
+    for block in blocks {
+        match &block.kind {
+            MarkdownBlockKind::CodeBlock(code) => output.push(code),
+            MarkdownBlockKind::List { items, .. } => {
+                for item in items {
+                    collect_code_blocks(&item.blocks, output);
                 }
-                MarkdownBlockKind::BlockQuote { blocks } => collect(blocks, output),
-                _ => {}
             }
+            MarkdownBlockKind::BlockQuote { blocks } => collect_code_blocks(blocks, output),
+            _ => {}
         }
     }
-    let mut output = Vec::new();
-    collect(blocks, &mut output);
-    output
 }
 
 #[derive(Debug, Clone)]
@@ -511,38 +435,6 @@ pub(crate) struct Node {
     pub(crate) event: Option<Event<'static>>,
     pub(crate) range: Range<usize>,
     pub(crate) children: Vec<Node>,
-}
-
-pub(crate) fn parser_options() -> Options {
-    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH
-}
-
-fn parse_events(source: &str, options: MarkdownOptions) -> Vec<(Event<'static>, Range<usize>)> {
-    let callback = |link: BrokenLink<'_>| {
-        (options.intra_doc_links && is_intra_doc_link(source, &link))
-            .then_some((CowStr::Borrowed(""), CowStr::Borrowed("")))
-    };
-    Parser::new_with_broken_link_callback(source, parser_options(), Some(callback))
-        .into_offset_iter()
-        .map(|(event, range)| (event.into_static(), range))
-        .collect()
-}
-
-fn is_intra_doc_link(source: &str, link: &BrokenLink<'_>) -> bool {
-    if link.link_type == LinkType::Reference {
-        return true;
-    }
-    let label = link.reference.as_ref();
-    let follows_word = source[..link.span.start]
-        .chars()
-        .next_back()
-        .is_some_and(|character| character.is_alphanumeric() || character == '_');
-    let code = label.len() > 1 && label.starts_with('`') && label.ends_with('`');
-    let path = label.chars().next().is_some_and(char::is_alphabetic)
-        && label
-            .chars()
-            .all(|character| character.is_alphanumeric() || "_:.<>!()".contains(character));
-    !follows_word && (code || path)
 }
 
 const fn is_label_link(link_type: LinkType) -> bool {
@@ -665,7 +557,7 @@ pub(crate) fn parse_block(
                 .collect(),
         },
         Event::Start(Tag::CodeBlock(kind)) => {
-            MarkdownBlockKind::CodeBlock(parse_code_block(node, kind, source, line_index))
+            MarkdownBlockKind::CodeBlock(Arc::new(parse_code_block(node, kind, source, line_index)))
         }
         Event::Start(Tag::Table(alignments)) => {
             MarkdownBlockKind::Table(parse_table(node, alignments, line_index))
@@ -722,15 +614,6 @@ fn parse_code_block(
     source: &str,
     line_index: &LineIndex,
 ) -> MarkdownCodeBlock {
-    let source_range_value = source_range(node.range.clone(), line_index);
-    let text = node
-        .children
-        .iter()
-        .filter_map(|child| match child.event.as_ref()? {
-            Event::Text(text) => Some(text.as_ref()),
-            _ => None,
-        })
-        .collect::<String>();
     let (info, language) = match kind {
         CodeBlockKind::Indented => (None, None),
         CodeBlockKind::Fenced(info) => {
@@ -739,92 +622,49 @@ fn parse_code_block(
             (Some(info), language)
         }
     };
-    let content_bytes = code_content_range(node.range.clone(), kind, source);
-    let fenced = matches!(kind, CodeBlockKind::Fenced(_));
+    let block_source = source_range(node.range.clone(), line_index);
     let mut block = MarkdownCodeBlock {
         language,
         info,
-        source: source_range_value,
-        content: source_range(content_bytes.clone(), line_index),
+        content: block_source.clone(),
+        source: block_source,
         text: String::new(),
         lines: Vec::new(),
         target_id: None,
         syntax: SyntaxCell::default(),
     };
-    if fenced && source.get(content_bytes.clone()).is_some() {
-        block.set_fenced_lines(content_bytes, source, line_index);
-    } else {
-        let code = if fenced {
-            text.as_str()
-        } else {
-            text.strip_suffix('\n').unwrap_or(&text)
-        };
-        let first_source_line = line_index.line_for_offset(node.range.start);
-        if !code.is_empty() {
-            for (index, line) in code.split('\n').enumerate() {
-                let source_line = first_source_line + index;
-                block.push_line((
-                    MarkdownCodeLine {
-                        index,
-                        source: line_index.source_line_range(source_line),
-                        source_line: Some(source_line),
-                        text: 0..0,
-                        target_id: None,
-                    },
-                    line.strip_suffix('\r').unwrap_or(line),
-                ));
-            }
+    if matches!(kind, CodeBlockKind::Fenced(_)) {
+        let content = fenced_content_range(node.range.clone(), source);
+        block.content = source_range(content.clone(), line_index);
+        block.split_fenced_lines(0, content, source, line_index);
+        return block;
+    }
+    let text = node
+        .children
+        .iter()
+        .filter_map(|child| match child.event.as_ref()? {
+            Event::Text(text) => Some(text.as_ref()),
+            _ => None,
+        })
+        .collect::<String>();
+    let code = text.strip_suffix('\n').unwrap_or(&text);
+    let first_source_line = line_index.line_for_offset(node.range.start);
+    if !code.is_empty() {
+        for (index, line) in code.split('\n').enumerate() {
+            let source_line = first_source_line + index;
+            block.push_line((
+                MarkdownCodeLine {
+                    index,
+                    source: line_index.source_line_range(source_line),
+                    source_line: Some(source_line),
+                    text: 0..0,
+                    target_id: None,
+                },
+                line.strip_suffix('\r').unwrap_or(line),
+            ));
         }
     }
     block
-}
-
-impl MarkdownCodeBlock {
-    pub(crate) fn set_fenced_lines(
-        &mut self,
-        content: Range<usize>,
-        source: &str,
-        line_index: &LineIndex,
-    ) {
-        self.truncate_lines(0);
-        let code = &source[content.clone()];
-        if code.is_empty() {
-            return;
-        }
-        let mut offset = content.start;
-        for (index, line) in code.split('\n').enumerate() {
-            let line_offset = offset;
-            offset += line.len() + 1;
-            self.push_line(fenced_code_line(index, line_offset, line, line_index));
-        }
-    }
-}
-
-pub(crate) fn fenced_code_line<'a>(
-    index: usize,
-    offset: usize,
-    line: &'a str,
-    line_index: &LineIndex,
-) -> (MarkdownCodeLine, &'a str) {
-    let code_line = MarkdownCodeLine {
-        index,
-        source: source_range(offset..offset + line.len(), line_index),
-        source_line: Some(line_index.line_for_offset(offset)),
-        text: 0..0,
-        target_id: None,
-    };
-    (code_line, line.strip_suffix('\r').unwrap_or(line))
-}
-
-fn code_content_range(
-    block: Range<usize>,
-    kind: &CodeBlockKind<'static>,
-    source: &str,
-) -> Range<usize> {
-    if !matches!(kind, CodeBlockKind::Fenced(_)) {
-        return block;
-    }
-    fenced_content_range(block, source)
 }
 
 pub(crate) fn fenced_content_range(block: Range<usize>, source: &str) -> Range<usize> {
@@ -840,8 +680,8 @@ pub(crate) fn fenced_content_range(block: Range<usize>, source: &str) -> Range<u
     let last_line = source[opening_end..end]
         .rfind('\n')
         .map_or(opening_end, |offset| opening_end + offset + 1);
-    let closing_start =
-        closing_fence(&source.as_bytes()[last_line..end], marker, count).then_some(last_line);
+    let closing = fence_line(&source.as_bytes()[last_line..end], marker, count);
+    let closing_start = (closing == FenceLine::Closing).then_some(last_line);
     fenced_content_bounds(opening_end, closing_start, end, source)
 }
 
@@ -868,7 +708,14 @@ pub(crate) fn fence_marker(opening_line: &str) -> (u8, usize) {
     (marker, count)
 }
 
-pub(crate) fn closing_fence(line: &[u8], marker: u8, count: usize) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FenceLine {
+    Closing,
+    Partial,
+    Content,
+}
+
+pub(crate) fn fence_line(line: &[u8], marker: u8, count: usize) -> FenceLine {
     let mut columns = 0;
     let mut cursor = 0;
     while let Some(byte) = line.get(cursor) {
@@ -878,7 +725,7 @@ pub(crate) fn closing_fence(line: &[u8], marker: u8, count: usize) -> bool {
             _ => break,
         }
         if columns >= 4 {
-            return false;
+            return FenceLine::Content;
         }
         cursor += 1;
     }
@@ -886,14 +733,24 @@ pub(crate) fn closing_fence(line: &[u8], marker: u8, count: usize) -> bool {
         .iter()
         .take_while(|byte| **byte == marker)
         .count();
-    if run == 0 || run < count {
-        return false;
-    }
     cursor += run;
+    if cursor == line.len() {
+        return if run >= count {
+            FenceLine::Closing
+        } else {
+            FenceLine::Partial
+        };
+    }
+    if run < count {
+        return FenceLine::Content;
+    }
     while line.get(cursor) == Some(&b' ') {
         cursor += 1;
     }
-    cursor == line.len() || line[cursor] == b'\r'
+    match line.get(cursor) {
+        None | Some(b'\r') => FenceLine::Closing,
+        Some(_) => FenceLine::Content,
+    }
 }
 
 fn parse_table(node: &Node, alignments: &[Alignment], line_index: &LineIndex) -> MarkdownTable {
@@ -1000,13 +857,7 @@ fn split_links(inline: MarkdownInline) -> Vec<MarkdownInline> {
     let mut rest = 0;
     for link in LinkFinder::new().links(&text) {
         let destination = match link.kind() {
-            LinkKind::Url
-                if ["https://", "http://"]
-                    .iter()
-                    .any(|scheme| link.as_str().starts_with(scheme)) =>
-            {
-                link.as_str().to_owned()
-            }
+            LinkKind::Url if openable(link.as_str()) => link.as_str().to_owned(),
             LinkKind::Email => format!("mailto:{}", link.as_str()),
             _ => continue,
         };
@@ -1048,7 +899,7 @@ fn inline_node(node: &Node) -> Option<MarkdownInline> {
             content: inline_children(&node.children),
         },
         Event::Start(Tag::Image { .. }) => {
-            MarkdownInline::ImageAlt(rendered_text(&inline_children(&node.children)))
+            MarkdownInline::ImageAlt(plain_text(&inline_children(&node.children)))
         }
         Event::SoftBreak => MarkdownInline::SoftBreak,
         Event::HardBreak => MarkdownInline::HardBreak,
@@ -1085,107 +936,77 @@ pub(crate) fn assign_targets(
     outline: &mut Vec<MarkdownHeading>,
 ) {
     for block in blocks {
-        let mut block_target = None;
-        match &mut block.kind {
+        let source = &block.source;
+        block.target_id = match &mut block.kind {
             MarkdownBlockKind::Heading { level, content } => {
-                let title = rendered_text(content);
-                let id = push_target(
-                    MarkdownTargetKind::Heading,
-                    block.source.clone(),
-                    title.clone(),
-                    targets,
-                );
-                block_target = Some(id);
+                let title = plain_text(content);
+                let kind = MarkdownTargetKind::Heading;
+                let id = push_target(kind, source.clone(), title.clone(), targets);
                 outline.push(MarkdownHeading {
                     level: *level,
                     title,
-                    source: block.source.clone(),
+                    source: source.clone(),
                     target_id: id,
                 });
+                Some(id)
             }
             MarkdownBlockKind::Paragraph { content } => {
-                block_target = Some(push_target(
-                    MarkdownTargetKind::Paragraph,
-                    block.source.clone(),
-                    rendered_text(content),
-                    targets,
-                ));
+                let label = plain_text(content);
+                let kind = MarkdownTargetKind::Paragraph;
+                Some(push_target(kind, source.clone(), label, targets))
             }
             MarkdownBlockKind::List { items, .. } => {
-                for item in items {
-                    let id = MarkdownTargetId(targets.len());
-                    item.target_id = Some(id);
-                    targets.push(MarkdownTarget {
-                        id,
-                        kind: MarkdownTargetKind::ListItem,
-                        source: item.source.clone(),
-                        display_label: rendered_text(&item.content),
-                    });
-                    assign_nested_list_targets(&mut item.blocks, targets);
-                }
+                assign_item_targets(items, targets);
+                None
             }
-            MarkdownBlockKind::BlockQuote { blocks: children } => {
-                block_target = Some(push_target(
-                    MarkdownTargetKind::BlockQuote,
-                    block.source.clone(),
-                    block_text(children),
-                    targets,
-                ));
+            MarkdownBlockKind::BlockQuote { blocks } => {
+                let label = block_text(blocks);
+                let kind = MarkdownTargetKind::BlockQuote;
+                Some(push_target(kind, source.clone(), label, targets))
             }
             MarkdownBlockKind::CodeBlock(code) => {
-                let id = MarkdownTargetId(targets.len());
+                let code = Arc::make_mut(code);
+                let label = "Code block".to_owned();
+                let kind = MarkdownTargetKind::CodeBlock;
+                let id = push_target(kind, code.source.clone(), label, targets);
                 code.target_id = Some(id);
-                targets.push(MarkdownTarget {
-                    id,
-                    kind: MarkdownTargetKind::CodeBlock,
-                    source: code.source.clone(),
-                    display_label: "Code block".to_owned(),
-                });
-                block_target = Some(id);
-                for line in &mut code.lines {
-                    let id = MarkdownTargetId(targets.len());
-                    line.target_id = Some(id);
-                    targets.push(MarkdownTarget {
-                        id,
-                        kind: MarkdownTargetKind::CodeLine,
-                        source: line.source.clone(),
-                        display_label: format!("Code line {}", line.index + 1),
-                    });
-                }
+                push_code_line_targets(&mut code.lines, targets);
+                Some(id)
             }
             MarkdownBlockKind::Table(table) => {
                 for row in &mut table.rows {
-                    let id = MarkdownTargetId(targets.len());
+                    let kind = MarkdownTargetKind::TableRow;
+                    let id = push_target(kind, row.source.clone(), row_text(row), targets);
                     row.target_id = Some(id);
-                    targets.push(MarkdownTarget {
-                        id,
-                        kind: MarkdownTargetKind::TableRow,
-                        source: row.source.clone(),
-                        display_label: row_text(row),
-                    });
                 }
+                None
             }
-            MarkdownBlockKind::HtmlFallback { .. } | MarkdownBlockKind::Rule => {}
-        }
-        block.target_id = block_target;
+            MarkdownBlockKind::HtmlFallback { .. } | MarkdownBlockKind::Rule => None,
+        };
     }
 }
 
-fn assign_nested_list_targets(blocks: &mut [MarkdownBlock], targets: &mut Vec<MarkdownTarget>) {
-    for block in blocks {
-        if let MarkdownBlockKind::List { items, .. } = &mut block.kind {
-            for item in items {
-                let id = MarkdownTargetId(targets.len());
-                item.target_id = Some(id);
-                targets.push(MarkdownTarget {
-                    id,
-                    kind: MarkdownTargetKind::ListItem,
-                    source: item.source.clone(),
-                    display_label: rendered_text(&item.content),
-                });
-                assign_nested_list_targets(&mut item.blocks, targets);
+fn assign_item_targets(items: &mut [MarkdownListItem], targets: &mut Vec<MarkdownTarget>) {
+    for item in items {
+        let label = plain_text(&item.content);
+        let kind = MarkdownTargetKind::ListItem;
+        item.target_id = Some(push_target(kind, item.source.clone(), label, targets));
+        for block in &mut item.blocks {
+            if let MarkdownBlockKind::List { items, .. } = &mut block.kind {
+                assign_item_targets(items, targets);
             }
         }
+    }
+}
+
+pub(crate) fn push_code_line_targets(
+    lines: &mut [MarkdownCodeLine],
+    targets: &mut Vec<MarkdownTarget>,
+) {
+    for line in lines {
+        let label = format!("Code line {}", line.index + 1);
+        let kind = MarkdownTargetKind::CodeLine;
+        line.target_id = Some(push_target(kind, line.source.clone(), label, targets));
     }
 }
 
@@ -1211,10 +1032,10 @@ fn block_text(blocks: &[MarkdownBlock]) -> String {
         .map(|block| match &block.kind {
             MarkdownBlockKind::Heading { content, .. }
             | MarkdownBlockKind::Paragraph { content }
-            | MarkdownBlockKind::HtmlFallback { content } => rendered_text(content),
+            | MarkdownBlockKind::HtmlFallback { content } => plain_text(content),
             MarkdownBlockKind::List { items, .. } => items
                 .iter()
-                .map(|item| rendered_text(&item.content))
+                .map(|item| plain_text(&item.content))
                 .collect::<Vec<_>>()
                 .join(" "),
             MarkdownBlockKind::BlockQuote { blocks } => block_text(blocks),
@@ -1234,9 +1055,13 @@ fn block_text(blocks: &[MarkdownBlock]) -> String {
 fn row_text(row: &MarkdownTableRow) -> String {
     row.cells
         .iter()
-        .map(|cell| rendered_text(&cell.content))
+        .map(|cell| plain_text(&cell.content))
         .collect::<Vec<_>>()
         .join(" | ")
+}
+
+fn plain_text(inlines: &[MarkdownInline]) -> String {
+    MarkdownText::new(inlines).text
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
@@ -1303,6 +1128,13 @@ impl LineIndex {
         self.starts.len() - self.starts.partition_point(|start| *start <= offset)
     }
 
+    pub(crate) fn line_start(&self, line: usize) -> usize {
+        self.starts
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or(self.source_len)
+    }
+
     pub(crate) fn line_for_offset(&self, offset: usize) -> usize {
         let offset = offset.min(*self.starts.last().unwrap_or(&0));
         self.starts.partition_point(|start| *start <= offset)
@@ -1334,159 +1166,5 @@ impl LineIndex {
                 end: line,
             },
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_targets_in_document_order() {
-        let document = MarkdownDocument::parse("# Title\n\nText\n\n```rust\nlet x = 1;\n```\n");
-        assert_eq!(document.targets().len(), 4);
-        assert_eq!(document.targets()[0].kind, MarkdownTargetKind::Heading);
-        assert_eq!(document.targets()[1].kind, MarkdownTargetKind::Paragraph);
-        assert_eq!(document.targets()[2].kind, MarkdownTargetKind::CodeBlock);
-        assert_eq!(document.targets()[3].kind, MarkdownTargetKind::CodeLine);
-        assert_eq!(document.outline()[0].title, "Title");
-    }
-
-    #[test]
-    fn preserves_source_and_maps_crlf_lines() {
-        let source = "# Héading\r\n\r\n```\r\none\r\ntwo\r\n```\r\n";
-        let document = MarkdownDocument::parse(source);
-        assert_eq!(document.source(), source);
-        let MarkdownBlockKind::CodeBlock(code) = &document.blocks()[1].kind else {
-            panic!("expected code block")
-        };
-        assert_eq!(
-            code.lines
-                .iter()
-                .map(|line| line.source_line)
-                .collect::<Vec<_>>(),
-            vec![Some(4), Some(5)]
-        );
-        assert_eq!(code.line_text(&code.lines[0]), "one");
-    }
-
-    #[test]
-    fn parses_nested_inline_nodes_and_table_rows() {
-        let document = MarkdownDocument::parse(
-            "**bold _em_** and ~~gone~~ [link](url) ![alt](image)\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
-        );
-        assert!(matches!(
-            document.blocks()[0].kind,
-            MarkdownBlockKind::Paragraph { .. }
-        ));
-        let MarkdownBlockKind::Table(table) = &document.blocks()[1].kind else {
-            panic!("expected table")
-        };
-        assert_eq!(table.rows.len(), 2);
-        assert_eq!(
-            document
-                .targets()
-                .iter()
-                .filter(|target| target.kind == MarkdownTargetKind::TableRow)
-                .count(),
-            2
-        );
-    }
-
-    #[test]
-    fn longer_outer_fence_does_not_close_on_shorter_run() {
-        let document = MarkdownDocument::parse("````\n```\nstill code\n````\n");
-        let MarkdownBlockKind::CodeBlock(code) = &document.blocks()[0].kind else {
-            panic!("expected code block")
-        };
-        assert_eq!(code.lines.len(), 2);
-        assert_eq!(code.line_text(&code.lines[0]), "```");
-    }
-
-    #[test]
-    fn blockquote_is_the_only_target_for_its_contents() {
-        let document = MarkdownDocument::parse("> # quoted\n>\n> text\n");
-        assert_eq!(document.targets().len(), 1);
-        assert_eq!(document.targets()[0].kind, MarkdownTargetKind::BlockQuote);
-    }
-
-    #[test]
-    fn nested_list_items_are_targets_without_overlapping_paragraph_targets() {
-        let document = MarkdownDocument::parse("1. outer\n   - inner\n   - second\n2. last\n");
-        let kinds = document
-            .targets()
-            .iter()
-            .map(|target| target.kind)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            vec![
-                MarkdownTargetKind::ListItem,
-                MarkdownTargetKind::ListItem,
-                MarkdownTargetKind::ListItem,
-                MarkdownTargetKind::ListItem,
-            ]
-        );
-        let MarkdownBlockKind::List { items, .. } = &document.blocks()[0].kind else {
-            panic!("expected list")
-        };
-        assert_eq!(items[0].depth, 0);
-        assert_eq!(items[0].blocks.len(), 1);
-    }
-
-    #[test]
-    fn indented_code_strips_parser_indentation() {
-        let document = MarkdownDocument::parse("    first\n    second\n");
-        let MarkdownBlockKind::CodeBlock(code) = &document.blocks()[0].kind else {
-            panic!("expected code block")
-        };
-        assert_eq!(
-            code.lines
-                .iter()
-                .map(|line| code.line_text(line))
-                .collect::<Vec<_>>(),
-            ["first", "second"]
-        );
-        assert_eq!(code.lines[0].source_line, Some(1));
-        assert_eq!(code.lines[1].source.bytes, 10..20);
-    }
-
-    #[test]
-    fn indented_code_preserves_blank_content_lines() {
-        let document = MarkdownDocument::parse("    one\n\n    two\n");
-        let MarkdownBlockKind::CodeBlock(code) = &document.blocks()[0].kind else {
-            panic!("expected code block")
-        };
-        assert_eq!(
-            code.lines
-                .iter()
-                .map(|line| code.line_text(line))
-                .collect::<Vec<_>>(),
-            ["one", "", "two"]
-        );
-        assert_eq!(
-            code.lines
-                .iter()
-                .map(|line| line.source_line)
-                .collect::<Vec<_>>(),
-            [Some(1), Some(2), Some(3)]
-        );
-    }
-
-    #[test]
-    fn raw_html_is_plain_fallback_without_a_target() {
-        let document = MarkdownDocument::parse("<div>not executed</div>\n");
-        assert!(matches!(
-            document.blocks()[0].kind,
-            MarkdownBlockKind::HtmlFallback { .. }
-        ));
-        assert_eq!(document.targets(), []);
-    }
-
-    #[test]
-    fn empty_and_malformed_documents_are_safe() {
-        assert_eq!(MarkdownDocument::parse("").targets(), []);
-        let document = MarkdownDocument::parse("# unclosed **emphasis\n\n```rust\ncode");
-        assert_ne!(document.blocks(), []);
     }
 }

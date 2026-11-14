@@ -1,8 +1,9 @@
 use crate::{
-    document::MarkdownDocument,
+    document::{MarkdownDocument, MarkdownOptions},
     incremental::{IncrementalDocument, MarkdownParseStats},
 };
 use std::{
+    mem,
     ops::Range,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -64,12 +65,20 @@ impl MarkdownStream {
         Self::default()
     }
 
+    #[must_use]
+    pub fn with_options(options: MarkdownOptions) -> Self {
+        Self {
+            inner: IncrementalDocument::new(options),
+            ..Self::default()
+        }
+    }
+
     pub fn push(&mut self, chunk: &str) -> MarkdownStreamUpdate {
         if chunk.is_empty() && !self.finished {
             return self.unchanged();
         }
         let start = self.source().len();
-        let reset = std::mem::take(&mut self.finished);
+        let reset = mem::take(&mut self.finished);
         let mut first = (self.block_count(), 0);
         if !chunk.is_empty() {
             first = self.inner.append(chunk);
@@ -97,8 +106,10 @@ impl MarkdownStream {
         }
         self.finished = true;
         self.revision = self.revision.wrapping_add(1);
+        let first = self.inner.finish().unwrap_or((self.block_count(), 0));
+        self.record(first);
         let len = self.source().len();
-        self.update(len..len, self.block_count(), false)
+        self.update(len..len, first.0, false)
     }
 
     #[must_use]

@@ -1,4 +1,4 @@
-use rouge_markdown::{MarkdownBlockKind, MarkdownDocument, MarkdownStream};
+use rouge_markdown::{MarkdownBlockKind, MarkdownDocument, MarkdownOptions, MarkdownStream};
 use std::{error::Error, fmt::Write};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -73,6 +73,14 @@ const CORPUS: &[&str] = &[
     "> - quoted list\n> - two\n>\n> para\n",
     "1. a\n\n   b\n\n   ```\n   c\n   ```\n2. d\n",
     "```\n```\n```\n```\n",
+    "```\ncode\n \t```\nafter\n",
+    "```\ncode\n``` \t\nafter\n",
+    "```\ncode\r```\nafter\n",
+    "```\ncode\n```  \r\nafter\r\n",
+    "```\r\ncode\r\n\t```\r\n   ```\r\nx\r\n",
+    "~~~\ncode\n\t~~~\n   ~~~ \nx\n",
+    "```\n``\r\n```\r",
+    "```\n  `` \n```\n",
 ];
 
 #[test]
@@ -346,6 +354,32 @@ fn reference_prefix_copying_is_reported_separately() -> TestResult {
     assert_matches_one_shot(&stream)
 }
 
+#[test]
+fn intra_doc_links_stream_like_the_one_shot_parse() -> TestResult {
+    let options = MarkdownOptions {
+        intra_doc_links: true,
+    };
+    for source in [
+        "Uses [`Vec`] and [Path::new].\n\nThen [later] and a[b].\n\n[later]: https://example.com\n",
+        "[`Option`]\n\n```rust\nlet [a] = [1];\n```\n\nsee [crate::x]\n",
+    ] {
+        for chunk_chars in [1, 4, 64] {
+            let mut stream = MarkdownStream::with_options(options);
+            let characters = source.chars().collect::<Vec<_>>();
+            for chunk in characters.chunks(chunk_chars) {
+                stream.push(&chunk.iter().collect::<String>());
+                assert_eq!(
+                    stream.document(),
+                    &MarkdownDocument::parse_with(stream.source(), options),
+                    "{:?}",
+                    stream.source()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn assert_matches_one_shot(stream: &MarkdownStream) -> TestResult {
     let expected = MarkdownDocument::parse(stream.source());
     let actual = stream.document();
@@ -483,6 +517,9 @@ fn generate(seed: &mut u64) -> String {
         "``` \n",
         "e\u{301}界",
         "![i][x]",
+        "\t```\n",
+        "```\r",
+        "``` \t\n",
     ];
     let mut next = || {
         *seed ^= *seed << 13;

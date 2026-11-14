@@ -13,4 +13,4 @@ workspace = true
 linkify = "0.10.0"
 pulldown-cmark = "0.13.0"
 rouge-syntax.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }

@@ -1,5 +1,5 @@
-use rouge_markdown::MarkdownStream;
-use rouge_syntax::{analyze, thread_work};
+use rouge_markdown::{MarkdownBlock, MarkdownCodeBlock, MarkdownStream};
+use rouge_syntax::{SymbolTags, analyze, thread_work};
 use std::error::Error;
 
 #[test]
@@ -102,7 +102,7 @@ fn an_open_code_block_is_highlighted_as_it_streams_and_keeps_that_analysis_when_
     assert_eq!(stream.open_code_block(), Some(0));
     let parses = thread_work().parses();
     let expected = analyze("rust", code).highlights;
-    let streamed = &stream.document().code_blocks()[0].syntax().highlights;
+    let streamed = &first_code(&stream)?.syntax().highlights;
     assert_eq!(
         thread_work().parses() - parses,
         1,
@@ -115,14 +115,14 @@ fn an_open_code_block_is_highlighted_as_it_streams_and_keeps_that_analysis_when_
     stream.push("\n``");
     stream.push("`\n");
     assert_eq!(stream.open_code_block(), None);
-    let closed = &stream.document().code_blocks()[0].syntax().highlights;
+    let closed = &first_code(&stream)?.syntax().highlights;
     assert_eq!(
         thread_work().parses(),
         parses,
         "closing reuses the streamed analysis"
     );
     assert_eq!(closed.line_count(), 3);
-    assert_eq!(stream.document().code_blocks()[0].text(), code);
+    assert_eq!(first_code(&stream)?.text(), code);
     assert_eq!(
         closed.line(2).ok_or("line")?,
         expected.line(2).ok_or("line")?
@@ -140,4 +140,77 @@ fn changes_report_the_first_changed_line_of_the_open_code_block() {
     assert_eq!((changes.first_block, changes.first_line), (1, 1));
     stream.push("```\n\nAfter\n");
     assert_eq!(stream.changes_since(revision).first_block, 1);
+}
+
+#[test]
+fn finishing_an_open_code_block_completes_its_analysis_and_reports_the_change()
+-> Result<(), Box<dyn Error>> {
+    let mut stream = MarkdownStream::new();
+    stream.push("Intro\n\n```rust\nfn main() {}\n``");
+    assert_eq!(stream.open_code_block(), Some(1));
+    let open = first_code(&stream)?.syntax().clone();
+    assert_eq!(*open.symbols, SymbolTags::default());
+    let revision = stream.revision();
+    let finished = stream.finish();
+    assert_eq!(finished.changed_blocks, 1..2);
+    assert_eq!(stream.changes_since(revision).first_block, 1);
+    let code = first_code(&stream)?;
+    assert_eq!(code.text(), "fn main() {}\n``");
+    let expected = analyze("rust", code.text());
+    assert_eq!(code.syntax().symbols, expected.symbols);
+    assert_eq!(
+        code.syntax().highlights.line(1).ok_or("line")?,
+        expected.highlights.line(1).ok_or("line")?
+    );
+    stream.push("`\n\nAfter\n");
+    assert_eq!(stream.open_code_block(), None);
+    assert_eq!(first_code(&stream)?.text(), "fn main() {}");
+    assert_eq!(
+        first_code(&stream)?.syntax().symbols,
+        analyze("rust", "fn main() {}").symbols
+    );
+    Ok(())
+}
+
+#[test]
+fn finishing_without_new_highlights_reports_no_change_and_does_no_parsing()
+-> Result<(), Box<dyn Error>> {
+    let mut stream = MarkdownStream::new();
+    stream.push("```rust\nfn main() {}\n```");
+    assert_eq!(stream.open_code_block(), Some(0));
+    let revision = stream.revision();
+    let parses = thread_work().parses();
+    let finished = stream.finish();
+    assert_eq!(finished.changed_blocks, 1..1);
+    assert_eq!(stream.changes_since(revision).first_block, 1);
+    assert_eq!(
+        first_code(&stream)?.syntax().symbols,
+        analyze("rust", "fn main() {}").symbols
+    );
+    assert_eq!(
+        thread_work().parses() - parses,
+        1,
+        "only the reference is analyzed"
+    );
+    Ok(())
+}
+
+#[test]
+fn unchanged_blocks_before_the_reported_change_can_be_reused() {
+    let mut stream = MarkdownStream::new();
+    stream.push("# Title\n\nfirst\n\n- a\n");
+    let revision = stream.revision();
+    let before = stream.document().blocks().to_vec();
+    stream.push("- b\n\nlast");
+    let changes = stream.changes_since(revision);
+    assert!(!changes.replaced);
+    assert_eq!(changes.first_block, 2);
+    assert_eq!(&stream.document().blocks()[..2], &before[..2]);
+    assert_ne!(stream.document().blocks()[2], before[2]);
+}
+
+fn first_code(stream: &MarkdownStream) -> Result<&MarkdownCodeBlock, Box<dyn Error>> {
+    let blocks = stream.document().blocks().iter();
+    let mut code = blocks.flat_map(MarkdownBlock::code_blocks);
+    Ok(code.next().ok_or("no code block")?)
 }
