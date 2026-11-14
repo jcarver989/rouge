@@ -130,16 +130,12 @@ fn show_mounts_and_unmounts_in_place() {
             .child(show(move || visible.get(), || div().w(20.0).h(10.0)))
             .child(div().w(30.0).h(10.0))
     });
-    assert_eq!(
-        ui.stats().elements,
-        5,
-        "root + container + 2 boxes + anchor"
-    );
-    assert_eq!(row_widths(&mut ui), [10.0, 30.0], "anchor takes no space");
+    assert_eq!(ui.stats().elements, 4, "root + container + 2 boxes");
+    assert_eq!(row_widths(&mut ui), [10.0, 30.0]);
 
     visible.set(true);
     ui.update();
-    assert_eq!(ui.stats().elements, 6);
+    assert_eq!(ui.stats().elements, 5);
     assert_eq!(
         row_widths(&mut ui),
         [10.0, 20.0, 30.0],
@@ -148,7 +144,7 @@ fn show_mounts_and_unmounts_in_place() {
 
     visible.set(false);
     ui.update();
-    assert_eq!(ui.stats().elements, 5);
+    assert_eq!(ui.stats().elements, 4);
     assert_eq!(row_widths(&mut ui), [10.0, 30.0]);
 }
 
@@ -190,7 +186,7 @@ fn show_otherwise_swaps_branches() {
     on.set(false);
     ui.update();
     assert_eq!(row_widths(&mut ui), [70.0]);
-    assert_eq!(ui.stats().elements, 4);
+    assert_eq!(ui.stats().elements, 3);
 }
 
 #[test]
@@ -249,6 +245,7 @@ fn each_builds_disposes_moves_and_updates_only_the_rows_that_changed() {
     }
     assert_eq!(ui.stats().paints, paints + 1, "a kept row updates in place");
     items.set(vec![item(4, 40.0), item(1, 55.0), item(3, 30.0)]);
+    ui.flush();
     assert!(
         !ui.needs_frame(),
         "an identical list changes nothing at all"
@@ -257,11 +254,7 @@ fn each_builds_disposes_moves_and_updates_only_the_rows_that_changed() {
     items.set(Vec::new());
     ui.update();
     assert_eq!(row_widths(&mut ui), [5.0, 7.0]);
-    assert_eq!(
-        ui.stats().elements,
-        5,
-        "root + container + 2 static boxes + anchor"
-    );
+    assert_eq!(ui.stats().elements, 4, "root + container + 2 static boxes");
 }
 
 #[test]
@@ -300,11 +293,7 @@ fn nested_control_flow_keeps_order() {
     items.set(vec![item(2, 20.0)]);
     ui.update();
     assert_eq!(row_widths(&mut ui), [20.0]);
-    assert_eq!(
-        ui.stats().elements,
-        5,
-        "root + container + each anchor + row anchor + row content"
-    );
+    assert_eq!(ui.stats().elements, 3, "root + container + row content");
 }
 
 #[test]
@@ -329,7 +318,7 @@ fn each_inside_show_is_fully_removed() {
     visible.set(false);
     ui.update();
     assert_eq!(row_widths(&mut ui), Vec::<f32>::new());
-    assert_eq!(ui.stats().elements, 3, "root + container + show anchor");
+    assert_eq!(ui.stats().elements, 2, "root + container");
     visible.set(true);
     ui.update();
     assert_eq!(row_widths(&mut ui), [10.0, 20.0]);
@@ -356,7 +345,7 @@ fn dynamic_replaces_content_when_dependencies_change() {
     }
     assert_eq!(
         ui.stats().elements,
-        4,
+        3,
         "previous content is removed each time"
     );
 }
@@ -372,7 +361,7 @@ fn handlers_in_dynamic_content_work_and_can_unmount_themselves() {
     ui.click(Point::new(10.0, 10.0));
     assert!(!open.get_untracked());
     ui.update();
-    assert_eq!(ui.stats().elements, 3);
+    assert_eq!(ui.stats().elements, 2);
     ui.click(Point::new(10.0, 10.0));
 }
 
@@ -427,7 +416,7 @@ fn show_exit_disposes_immediately_but_keeps_painting_until_the_animation_ends() 
     visible.set(false);
     assert_eq!(disposed.get(), 1, "reactive state is gone right away");
     ui.advance(0.0);
-    assert_eq!(ui.stats().elements, 4, "and so is the element");
+    assert_eq!(ui.stats().elements, 3, "and so is the element");
     assert_eq!(
         row_widths(&mut ui),
         [30.0],
@@ -460,7 +449,7 @@ fn each_rows_enter_and_exit() -> TestResult {
 
     items.set(Vec::new());
     ui.advance(0.0);
-    assert_eq!(ui.stats().elements, 3, "root, container and anchor");
+    assert_eq!(ui.stats().elements, 2, "root and container");
     ui.run(0.5);
     assert_eq!(ui.first_x(RED, 5)?, 50, "the removed row is on its way out");
     ui.run(0.55);

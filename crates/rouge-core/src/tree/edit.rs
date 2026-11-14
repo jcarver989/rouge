@@ -1,9 +1,10 @@
+use super::content::laid_out;
 use super::{ElementId, TextData, Tree};
-use crate::clipboard::{Clipboard, ClipboardMedia, ClipboardTarget};
+use crate::clipboard::{Clipboard, ClipboardMedia, ClipboardTarget, PasteRequest, Pasted};
 use crate::style::Dirty;
+use crate::text::{Granularity, Movement, TextLayout, TextSelection, TextSystem};
 use rouge_reactive::{Signal, batch};
-use rouge_render::{Color, Compositor, Point, Rect, Size};
-use rouge_text::{Granularity, Movement, TextLayout, TextSelection, TextStyle, TextSystem};
+use rouge_render::{Color, Point, Rect, Size};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -36,7 +37,6 @@ pub(crate) enum EditOp {
     Cut,
     Paste,
     PasteText(String),
-    CutSelection,
 }
 
 #[derive(Clone)]
@@ -157,18 +157,6 @@ impl EditState {
     }
 }
 
-fn ensure<'a>(
-    layout: &'a mut Option<TextLayout>,
-    content: &str,
-    style: &TextStyle,
-    width: Option<f32>,
-    system: &mut TextSystem,
-) -> &'a TextLayout {
-    let layout = layout.get_or_insert_with(|| system.layout(content, style));
-    layout.break_lines(width);
-    layout
-}
-
 fn sanitize(text: String, multiline: bool) -> String {
     let keep = |c: &char| !c.is_control() || (multiline && *c == '\n');
     let text = if multiline {
@@ -191,7 +179,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
         ..
     } = text;
     let Some(edit) = edit.as_mut() else { return };
-    let current = ensure(layout, content, style, *wrap_width, system);
+    let current = laid_out(layout, content, style, *wrap_width, system);
     let mut selection = edit.current(current, content);
     let point = |local: Point| {
         (
@@ -232,7 +220,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
                 to.push(before.clone());
                 *content = snapshot.content;
                 *layout = None;
-                selection = ensure(layout, content, style, *wrap_width, system)
+                selection = laid_out(layout, content, style, *wrap_width, system)
                     .select(snapshot.anchor, snapshot.focus);
                 edit.compose = None;
                 edit.composition = None;
@@ -272,7 +260,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
             if let Some(snapshot) = edit.composition.take() {
                 *content = snapshot.content;
                 *layout = None;
-                selection = ensure(layout, content, style, *wrap_width, system)
+                selection = laid_out(layout, content, style, *wrap_width, system)
                     .select(snapshot.anchor, snapshot.focus);
                 edit.compose = None;
             }
@@ -290,14 +278,9 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
             clipboard.write(&content[selection.range()]);
             replace = Some((selection.range(), String::new()));
         }
-        EditOp::CutSelection => replace = Some((selection.range(), String::new())),
-        EditOp::Paste | EditOp::PasteText(_) => {
-            let pasted = match op {
-                EditOp::PasteText(text) => Some(text),
-                _ => clipboard.read(),
-            }
-            .map(|text| sanitize(text, edit.multiline));
-            replace = pasted
+        EditOp::Paste => {}
+        EditOp::PasteText(text) => {
+            replace = Some(sanitize(text, edit.multiline))
                 .filter(|text| !text.is_empty())
                 .map(|text| (selection.range(), text));
         }
@@ -308,7 +291,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
         let caret = caret.unwrap_or(range.start + with.len());
         content.replace_range(range, &with);
         *layout = None;
-        selection = ensure(layout, content, style, *wrap_width, system).select(caret, caret);
+        selection = laid_out(layout, content, style, *wrap_width, system).select(caret, caret);
         edit.compose = composing;
     }
     if (*content != before.content || compose_commit) && !history {
@@ -332,7 +315,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
     if let Some(signal) = edit.selection_signal.filter(|signal| signal.is_alive()) {
         signal.set_if_changed(selection.range());
     }
-    let current = ensure(layout, content, style, *wrap_width, system);
+    let current = laid_out(layout, content, style, *wrap_width, system);
     edit.scroll_to_caret(current, content, *content_size);
 }
 
@@ -340,7 +323,7 @@ impl Tree {
     pub(crate) fn caret_animating(&self, now: f64) -> bool {
         self.focused
             .and_then(|id| self.elements.get(id))
-            .and_then(|element| element.spec.text.as_ref())
+            .and_then(|element| element.kind.text())
             .and_then(|text| text.edit.as_ref())
             .is_some_and(|edit| now - edit.activity < 10.0)
     }
@@ -351,7 +334,7 @@ impl Tree {
         let Some(edit) = self
             .elements
             .get_mut(id)
-            .and_then(|element| element.spec.text.as_mut())
+            .and_then(|element| element.kind.text_mut())
             .and_then(|text| text.edit.as_mut())
         else {
             return;
@@ -368,23 +351,25 @@ impl Tree {
         let Some(element) = self.elements.get_mut(id) else {
             return;
         };
-        let Some(text) = element
-            .spec
-            .text
-            .as_mut()
-            .filter(|text| text.edit.is_some())
-        else {
+        let Some(text) = element.kind.text_mut().filter(|text| text.edit.is_some()) else {
             return;
         };
-        let on_paste = text.edit.as_ref().and_then(|edit| edit.on_paste.clone());
-        if let (EditOp::Paste, Some(on_paste)) = (&op, on_paste)
-            && let Some(media) = self.clipboard.read_media()
-        {
-            batch(|| on_paste(media));
+        if let EditOp::Paste = op {
+            let media = text
+                .edit
+                .as_ref()
+                .is_some_and(|edit| edit.on_paste.is_some());
+            let request = PasteRequest {
+                element: id,
+                target: ClipboardTarget(self.clipboard_target.clone()),
+                media,
+                queue: self.queue.clone(),
+            };
+            self.clipboard.read(request);
             return;
         }
         if let EditOp::Select(range) = &op {
-            let layout = ensure(
+            let layout = laid_out(
                 &mut text.layout,
                 &text.content,
                 &text.style,
@@ -430,7 +415,7 @@ impl Tree {
     }
 
     fn focused_text(&self) -> Option<&TextData> {
-        self.elements.get(self.focused?)?.spec.text.as_ref()
+        self.elements.get(self.focused?)?.kind.text()
     }
 
     pub(crate) fn is_composing(&self) -> bool {
@@ -439,42 +424,30 @@ impl Tree {
             .is_some_and(|edit| edit.composition.is_some())
     }
 
-    pub(crate) fn clipboard_target(&self) -> Option<ClipboardTarget> {
-        self.focused_text()?.edit.as_ref()?;
-        (!self.is_composing()).then(|| ClipboardTarget(self.clipboard_target.clone()))
-    }
-
-    pub(crate) fn clipboard_selection(
+    pub(crate) fn paste(
         &mut self,
-        system: &mut TextSystem,
-    ) -> Option<(ClipboardTarget, String)> {
-        let target = self.clipboard_target()?;
-        let text = self.elements.get_mut(self.focused?)?.spec.text.as_mut()?;
-        let edit = text.edit.as_ref()?;
-        let layout = ensure(
-            &mut text.layout,
-            &text.content,
-            &text.style,
-            text.wrap_width,
-            system,
-        );
-        let range = edit.current(layout, &text.content).range();
-        (!range.is_empty()).then(|| (target, text.content[range].to_owned()))
-    }
-
-    pub(crate) fn clipboard_edit(
-        &mut self,
+        id: ElementId,
         target: &ClipboardTarget,
-        op: EditOp,
+        pasted: Pasted,
         system: &mut TextSystem,
-    ) -> bool {
-        if let Some(id) = self.focused
-            && Rc::ptr_eq(&self.clipboard_target, &target.0)
+    ) {
+        if self.focused != Some(id)
+            || self.is_composing()
+            || !Rc::ptr_eq(&self.clipboard_target, &target.0)
         {
-            self.edit(id, op, system);
-            true
-        } else {
-            false
+            return;
+        }
+        match pasted {
+            Pasted::Text(text) => self.edit(id, EditOp::PasteText(text), system),
+            Pasted::Media(media) => {
+                let on_paste = self
+                    .focused_text()
+                    .and_then(|text| text.edit.as_ref())
+                    .and_then(|edit| edit.on_paste.clone());
+                if let Some(on_paste) = on_paste {
+                    batch(|| on_paste(media));
+                }
+            }
         }
     }
 
@@ -486,10 +459,10 @@ impl Tree {
         self.clipboard.write(text);
     }
 
-    pub(crate) fn caret_area(&self, compositor: &Compositor) -> Option<Rect> {
+    pub(crate) fn caret_area(&self) -> Option<Rect> {
         let id = self.focused?;
         let element = self.elements.get(id)?;
-        let text = element.spec.text.as_ref()?;
+        let text = element.kind.text()?;
         let (edit, layout) = (text.edit.as_ref()?, text.layout.as_ref()?);
         let caret = layout.caret(edit.current(layout, &text.content), CARET_WIDTH);
         let origin = element.bounds.origin
@@ -499,6 +472,6 @@ impl Tree {
             origin,
             size: Size::new(caret.width, caret.height),
         };
-        Some(self.to_window(compositor, id, rect))
+        Some(self.to_window(id, rect))
     }
 }

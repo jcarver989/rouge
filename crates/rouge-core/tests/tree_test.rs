@@ -6,7 +6,7 @@ use rouge_render::Item;
 #[test]
 fn elements_get_layers_only_when_they_use_compositor_features() {
     let _rt = Runtime::new().enter();
-    let mut ui = TestUi::canvas(|| {
+    let ui = TestUi::canvas(|| {
         div()
             .size_full()
             .child(div().size(10.0).bg(Color::RED))

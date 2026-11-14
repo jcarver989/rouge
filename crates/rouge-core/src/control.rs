@@ -1,8 +1,8 @@
-use crate::tree::{ElementId, Presence};
-use crate::view::{AnyView, BuildCx, View, send};
+use crate::animation::{Pose, Timing};
+use crate::tree::{FragmentId, Node, Presence};
+use crate::view::{AnyView, BuildCx, Queue, View};
 use rouge_macros::component;
 use rouge_reactive::{ReadSignal, Scope, Signal, effect, memo, on_cleanup, signal, untrack};
-use rouge_render::{Pose, Timing};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -34,29 +34,33 @@ where
 struct Dynamic(Box<dyn Fn() -> Option<AnyView>>, Presence);
 
 impl View for Dynamic {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let anchor = cx.tree.create_anchor();
-        let patches = cx.patches.clone();
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let fragment = cx.tree.fragment(cx.parent);
+        let queue = cx.queue.clone();
         let Dynamic(view, presence) = self;
+        remove_on_cleanup(&queue, fragment, presence);
         effect(move || {
             let Some(view) = view() else { return };
             let scope = Scope::new();
-            send(&patches, move |cx| {
+            queue.build(move |cx| {
                 if scope.is_alive() {
-                    let element = scope.run(|| view.build(cx));
-                    cx.tree.present(element, presence);
-                    cx.tree.set_followers(anchor, vec![element]);
+                    cx.within(Node::Fragment(fragment), |cx| scope.run(|| view.build(cx)));
+                    cx.tree.present(fragment, presence);
                 }
             });
-            let patches = patches.clone();
+            let queue = queue.clone();
             on_cleanup(move || {
-                send(&patches, move |cx| {
-                    cx.tree.clear_followers(anchor, presence.exit);
-                });
+                queue.build(move |cx| cx.tree.clear(fragment, presence.exit));
             });
         });
-        anchor
     }
+}
+
+fn remove_on_cleanup(queue: &Queue, fragment: FragmentId, presence: Presence) {
+    let queue = queue.clone();
+    on_cleanup(move || {
+        queue.build(move |cx| cx.tree.remove_fragment(fragment, presence.exit));
+    });
 }
 
 #[component]
@@ -67,16 +71,11 @@ pub fn overlay<T: View>(children: impl FnOnce() -> T + 'static) -> impl View {
 struct Overlay(Box<dyn FnOnce() -> AnyView>);
 
 impl View for Overlay {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let anchor = cx.tree.create_anchor();
+    fn build(self, cx: &mut BuildCx<'_>) {
         let root = cx.tree.overlay_root();
-        let slot = cx.tree.create_anchor();
-        cx.tree.append_child(root, slot);
-        let element = (self.0)().build(cx);
-        cx.tree.set_followers(slot, vec![element]);
-        let patches = cx.patches.clone();
-        on_cleanup(move || send(&patches, move |cx| cx.tree.remove(slot, None)));
-        anchor
+        let fragment = cx.tree.fragment(Node::Element(root));
+        cx.within(Node::Fragment(fragment), |cx| (self.0)().build(cx));
+        remove_on_cleanup(cx.queue, fragment, Presence::default());
     }
 }
 
@@ -118,7 +117,7 @@ impl Show {
 }
 
 impl View for Show {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let Show {
             when,
             then,
@@ -134,7 +133,7 @@ impl View for Show {
             };
             view.map(untrack)
         };
-        Dynamic(Box::new(branch), presence).build(cx)
+        Dynamic(Box::new(branch), presence).build(cx);
     }
 }
 
@@ -179,7 +178,7 @@ where
 struct Row<T> {
     scope: Scope,
     item: Signal<T>,
-    element: ElementId,
+    fragment: FragmentId,
 }
 
 impl<T, U> View for Each<T, U>
@@ -187,9 +186,9 @@ where
     T: PartialEq + 'static,
     U: Eq + Hash + Clone + 'static,
 {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
-        let anchor = cx.tree.create_anchor();
-        let patches = cx.patches.clone();
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let fragment = cx.tree.fragment(cx.parent);
+        let queue = cx.queue.clone();
         let Each {
             items,
             key,
@@ -198,17 +197,12 @@ where
         } = self;
         let rows_scope = Scope::new();
         let state = Rc::new((key, view, RefCell::new(HashMap::<U, Row<T>>::new())));
-        let cleanup = patches.clone();
-        on_cleanup(move || {
-            send(&cleanup, move |cx| {
-                cx.tree.clear_followers(anchor, presence.exit);
-            });
-        });
+        remove_on_cleanup(&queue, fragment, presence);
 
         effect(move || {
             let (items, state) = (items(), state.clone());
             let pending = Scope::new();
-            send(&patches, move |cx| {
+            queue.build(move |cx| {
                 if !pending.is_alive() || !rows_scope.is_alive() {
                     return;
                 }
@@ -227,21 +221,24 @@ where
                     }
                     if let Some(row) = rows.get(&k) {
                         row.item.set_if_changed(item);
-                        order.push(row.element);
+                        order.push(Node::Fragment(row.fragment));
                     } else {
                         let scope = rows_scope.child();
-                        let (item, element) = scope.run(|| {
+                        let row = cx.tree.detached_fragment();
+                        let item = scope.run(|| {
                             let item = signal(item);
-                            (item, view(item.read_only()).build(cx))
+                            let view = view(item.read_only());
+                            cx.within(Node::Fragment(row), |cx| view.build(cx));
+                            item
                         });
-                        cx.tree.present(element, presence);
-                        order.push(element);
+                        cx.tree.present(row, presence);
+                        order.push(Node::Fragment(row));
                         rows.insert(
                             k,
                             Row {
                                 scope,
                                 item,
-                                element,
+                                fragment: row,
                             },
                         );
                     }
@@ -249,14 +246,13 @@ where
                 rows.retain(|k, row| {
                     let keep = seen.contains(k);
                     if !keep {
-                        cx.tree.remove(row.element, presence.exit);
+                        cx.tree.remove_fragment(row.fragment, presence.exit);
                         row.scope.dispose();
                     }
                     keep
                 });
-                cx.tree.set_followers(anchor, order);
+                cx.tree.reorder(fragment, order);
             });
         });
-        anchor
     }
 }
