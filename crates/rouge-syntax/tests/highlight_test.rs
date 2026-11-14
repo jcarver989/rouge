@@ -6,10 +6,11 @@ use ast_grep_core::{
     tree_sitter::{LanguageExt, StrDoc, TSLanguage},
 };
 use rouge_syntax::{
-    DocumentHighlights, FontStyle, LanguageHint, MAX_SOURCE_BYTES, Rgba, SymbolTags, SyntaxError,
+    DocumentHighlights, FontStyle, LanguageHint, MAX_SOURCE_BYTES, SymbolTags, SyntaxError,
     SyntaxStyle, SyntaxTheme, analyze, thread_work,
 };
-use std::{fmt::Write, num::NonZeroU16, ops::Range};
+use rouge_theme::Rgba;
+use std::{fmt::Write, num::NonZeroU16, ops::Range, sync::Arc};
 use support::{SyntaxBuilder, TestResult, line};
 
 #[test]
@@ -115,6 +116,43 @@ fn paths_and_shebangs_resolve_before_the_first_parse() -> TestResult {
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn a_streamed_shebang_settles_the_language_once_its_line_completes() -> TestResult {
+    let source = "#!/usr/bin/env python3\nprint('hi')\n#!/bin/zsh\n";
+    let mut fixture = SyntaxBuilder::default().language("").build();
+    for chunk in [
+        "#!/usr/bin/env py",
+        "thon3",
+        "\nprint('hi')\n",
+        "#!/bin/zsh\n",
+    ] {
+        fixture.append(chunk)?;
+    }
+    fixture.assert_equivalent();
+    let expected = analyze("python", source).highlights;
+    assert_eq!(line(fixture.stream.highlights(), 1)?, line(&expected, 1)?);
+    assert_eq!(fixture.stream.work_stats().full_parses, 1);
+    Ok(())
+}
+
+#[test]
+fn stream_symbols_are_extracted_once_per_revision() -> TestResult {
+    let mut fixture = SyntaxBuilder::default().build();
+    fixture.append("fn first() {}\n")?;
+    let before = fixture.stream.syntax();
+    let again = fixture.stream.syntax();
+    assert!(Arc::ptr_eq(&before.symbols, &again.symbols));
+    assert_eq!(*before.symbols, *analyze("rust", "fn first() {}\n").symbols);
+    fixture.append("fn second() {}\n")?;
+    let after = fixture.stream.syntax();
+    assert!(!Arc::ptr_eq(&before.symbols, &after.symbols));
+    assert_eq!(
+        *after.symbols,
+        *analyze("rust", fixture.stream.source()).symbols
+    );
     Ok(())
 }
 
@@ -282,7 +320,7 @@ fn resolved(
 fn theme(foreground: Rgba) -> SyntaxTheme {
     let style = SyntaxStyle {
         foreground,
-        font_style: FontStyle::none(),
+        font_style: FontStyle::default(),
     };
     SyntaxTheme::new(
         ["keyword", "variable", "number", "tag"]

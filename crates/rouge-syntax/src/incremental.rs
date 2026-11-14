@@ -93,6 +93,9 @@ fn compile((name, spec): (&'static str, fn() -> Spec)) -> Option<SharedGrammar<G
         Cow::Borrowed(highlights)
     };
     let query_source = format!("{highlights}\n{injections}");
+    let queried_kinds = (0..language.node_kind_count())
+        .map(|_| OnceLock::new())
+        .collect();
     let highlights = Query::new(&language, &highlights).ok()?;
     let injections = Query::new(&language, injections).ok()?;
     let tags = TagsGrammar::new(name, &language).ok()?;
@@ -104,13 +107,19 @@ fn compile((name, spec): (&'static str, fn() -> Spec)) -> Option<SharedGrammar<G
         .iter()
         .map(|name| CaptureRole::of(name))
         .collect();
+    let error_prefix = !non_local
+        && !["ERROR", "(_ ", "(_\n"]
+            .iter()
+            .any(|pattern| query_source.contains(pattern));
     Some(SharedGrammar::new(Grammar {
         language,
         highlights,
         captures,
         injections,
         non_local,
+        error_prefix,
         query_source,
+        queried_kinds,
         tags,
     }))
 }
@@ -414,7 +423,9 @@ pub(crate) struct Grammar {
     captures: Box<[CaptureRole]>,
     injections: Query,
     non_local: bool,
+    error_prefix: bool,
     query_source: String,
+    queried_kinds: Box<[OnceLock<bool>]>,
     tags: Option<TagsGrammar>,
 }
 
@@ -429,11 +440,7 @@ impl Grammar {
         after: Node<'_>,
         stats: &mut SyntaxWorkStats,
     ) -> Option<usize> {
-        if self.non_local
-            || self.query_source.contains("ERROR")
-            || self.query_source.contains("(_ ")
-            || self.query_source.contains("(_\n")
-        {
+        if !self.error_prefix {
             return None;
         }
         let before = self.error_root(before)?;
@@ -453,11 +460,18 @@ impl Grammar {
     fn error_root<'a>(&self, node: Node<'a>) -> Option<Node<'a>> {
         if node.is_error() {
             Some(node)
-        } else if !self.query_source.contains(node.kind()) && node.child_count() == 1 {
+        } else if !self.queries_kind(node) && node.child_count() == 1 {
             node.child(0).filter(Node::is_error)
         } else {
             None
         }
+    }
+
+    fn queries_kind(&self, node: Node<'_>) -> bool {
+        let queried = || self.query_source.contains(node.kind());
+        self.queried_kinds
+            .get(usize::from(node.kind_id()))
+            .map_or_else(queried, |cell| *cell.get_or_init(queried))
     }
 }
 

@@ -2,11 +2,17 @@ use crate::{HighlightId, HighlightSpan};
 use crate::{
     SyntaxError,
     incremental::{AppendContext, IncrementalDocument, SyntaxWorkStats},
-    language::{LanguageHint, resolve_language},
+    language::{LanguageHint, resolve_hint, shebang_id},
     spans::flatten,
     symbols::SymbolTags,
 };
-use std::{cell::Cell, fmt, iter, ops::Range, slice, sync::Arc};
+use std::{
+    cell::Cell,
+    fmt, iter,
+    ops::Range,
+    slice,
+    sync::{Arc, OnceLock},
+};
 
 pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INJECTION_DEPTH: usize = 3;
@@ -36,12 +42,14 @@ pub fn analyze<'a>(language: impl Into<LanguageHint<'a>>, source: &str) -> Sourc
 
 #[derive(Debug, Clone, Default)]
 pub struct SyntaxStream {
-    hint: String,
+    hint: Option<&'static str>,
     source: String,
     revision: u64,
     highlights: Arc<DocumentHighlights>,
+    symbols: OnceLock<Arc<SymbolTags>>,
     document: Option<IncrementalDocument>,
     language: Option<&'static str>,
+    language_settled: bool,
     line_starts: Vec<usize>,
     work: SyntaxWorkStats,
 }
@@ -58,7 +66,7 @@ impl SyntaxStream {
     #[must_use]
     pub fn new<'a>(hint: impl Into<LanguageHint<'a>>) -> Self {
         Self {
-            hint: hint.into().as_str().to_owned(),
+            hint: resolve_hint(hint.into().as_str()),
             ..Self::default()
         }
     }
@@ -85,21 +93,20 @@ impl SyntaxStream {
 
     #[must_use]
     pub fn syntax(&self) -> SourceSyntax {
-        let symbols = self
-            .document
-            .as_ref()
-            .and_then(|document| {
+        let symbols = self.symbols.get_or_init(|| {
+            let symbols = self.document.as_ref().and_then(|document| {
                 Some(
                     document
                         .grammar()
                         .tags()?
                         .extract(document.tree()?, &self.source),
                 )
-            })
-            .unwrap_or_default();
+            });
+            Arc::new(symbols.unwrap_or_default())
+        });
         SourceSyntax {
             highlights: Arc::clone(&self.highlights),
-            symbols: Arc::new(symbols),
+            symbols: Arc::clone(symbols),
         }
     }
 
@@ -123,6 +130,7 @@ impl SyntaxStream {
         }
         let previous_len = self.source.len();
         let previous_lines = self.line_starts.len();
+        self.symbols = OnceLock::new();
         self.source.push_str(appended);
         if self.line_starts.is_empty() {
             self.line_starts.push(0);
@@ -145,6 +153,7 @@ impl SyntaxStream {
                 self.source.truncate(previous_len);
                 self.line_starts.truncate(previous_lines);
                 self.document = None;
+                self.language_settled = false;
                 return Err(error);
             }
         };
@@ -162,13 +171,17 @@ impl SyntaxStream {
         previous_len: usize,
         work: &mut SyntaxWorkStats,
     ) -> Result<usize, SyntaxError> {
-        let resolved = resolve_language(self.hint.as_str(), &self.source);
-        let language_changed = resolved != self.language;
-        if language_changed {
-            self.document = None;
-            self.language = resolved;
+        let mut language_changed = false;
+        if !self.language_settled {
+            let resolved = self.hint.or_else(|| shebang_id(&self.source));
+            self.language_settled = self.hint.is_some() || self.line_starts.len() > 1;
+            language_changed = resolved != self.language;
+            if language_changed {
+                self.document = None;
+                self.language = resolved;
+            }
         }
-        let Some(language) = resolved else {
+        let Some(language) = self.language else {
             return Ok(if language_changed { 0 } else { previous_len });
         };
         let document = match &mut self.document {

@@ -1,5 +1,7 @@
 //! Deterministic resolution of language hints to Arborium grammar IDs.
 
+use std::borrow::Cow;
+
 /// A structured language hint accepted by the highlighter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -33,19 +35,28 @@ pub fn resolve_language<'a>(
     hint: impl Into<LanguageHint<'a>>,
     source: &str,
 ) -> Option<&'static str> {
-    let hint = hint.into().as_str();
-    let normalized = hint.trim().replace('\\', "/").to_ascii_lowercase();
-    if normalized.is_empty() {
-        return shebang_id(source);
-    }
+    resolve_hint(hint.into().as_str()).or_else(|| shebang_id(source))
+}
 
+pub(crate) fn resolve_hint(hint: &str) -> Option<&'static str> {
+    let hint = hint.trim();
+    if hint.is_empty() {
+        return None;
+    }
+    let normalized = if hint
+        .bytes()
+        .any(|byte| byte == b'\\' || byte.is_ascii_uppercase())
+    {
+        Cow::Owned(hint.replace('\\', "/").to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(hint)
+    };
     let simple = normalized.rsplit('/').next().unwrap_or(&normalized);
     canonical_id(&normalized)
         .or_else(|| canonical_id(simple))
         .or_else(|| extension_id(simple))
         .or_else(|| special_file(simple))
         .or_else(|| fallback_id(&normalized))
-        .or_else(|| shebang_id(source))
 }
 
 fn canonical_id(hint: &str) -> Option<&'static str> {
@@ -165,7 +176,7 @@ fn fallback_id(path: &str) -> Option<&'static str> {
     })
 }
 
-fn shebang_id(source: &str) -> Option<&'static str> {
+pub(crate) fn shebang_id(source: &str) -> Option<&'static str> {
     let line = source.lines().next()?;
     if !line.starts_with("#!") {
         return None;

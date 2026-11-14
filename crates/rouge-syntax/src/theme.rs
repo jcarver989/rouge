@@ -13,22 +13,6 @@ pub struct FontStyle {
     pub underline: bool,
 }
 
-impl FontStyle {
-    #[must_use]
-    pub const fn none() -> Self {
-        Self {
-            bold: false,
-            italic: false,
-            underline: false,
-        }
-    }
-
-    #[must_use]
-    pub const fn is_plain(self) -> bool {
-        !self.bold && !self.italic && !self.underline
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HighlightId(u8);
 
