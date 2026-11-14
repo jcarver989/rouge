@@ -20,25 +20,42 @@ tokio-rt = [
 ]
 
 [dependencies]
-open = { version = "5", optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 rouge-reactive.workspace = true
 rouge-render.workspace = true
 rouge-core.workspace = true
-winit.workspace = true
 wgpu.workspace = true
-pollster.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-arboard.workspace = true
-image.workspace = true
 rouge-widgets.workspace = true
 rouge-markdown = { workspace = true, optional = true }
 rouge-syntax = { workspace = true, optional = true }
 tracing.workspace = true
-tracing-chrome = "0.7"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+web-time.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+open = { version = "5", optional = true }
+winit.workspace = true
+pollster.workspace = true
+arboard.workspace = true
+image.workspace = true
+tracing-chrome = "0.7"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+slotmap.workspace = true
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "AddEventListenerOptions", "Clipboard", "ClipboardEvent", "CompositionEvent", "CssStyleDeclaration",
+    "DataTransfer", "Document", "DomRect", "Element", "Event", "EventTarget", "HtmlCanvasElement",
+    "HtmlElement", "HtmlTextAreaElement", "InputEvent", "KeyboardEvent", "Location", "MediaQueryList",
+    "MediaQueryListEvent", "Navigator", "Performance", "PointerEvent", "ResizeObserver",
+    "ResizeObserverBoxOptions", "ResizeObserverEntry", "ResizeObserverOptions", "ResizeObserverSize",
+    "UrlSearchParams", "WheelEvent", "Window", "console",
+] }
 
 [lints]
 workspace = true
@@ -46,7 +63,25 @@ workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.19.3", default-features = false }
 
-[dev-dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rouge = { path = ".", features = ["tokio-rt"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+winit.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+gloo-timers = { version = "0.4", features = ["futures"] }
+wasm-bindgen-test = "0.3"
+web-sys = { version = "0.3", features = ["ClipboardEventInit", "DataTransfer", "MouseEventInit", "PointerEventInit"] }
+
+[[test]]
+name = "platform_web_test"
+path = "tests/platform/web_test.rs"
+
+[[test]]
+name = "platform_web_runtime_test"
+path = "tests/platform/web/runtime_test.rs"
+
+[[test]]
+name = "platform_web_host_test"
+path = "tests/platform/web/host_test.rs"

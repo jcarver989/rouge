@@ -37,6 +37,11 @@ impl BrowserRuntime {
     pub fn enter(&self) -> Entered {
         self.runtime.enter()
     }
+
+    pub(crate) fn waker(&self) -> impl Fn() + Send + Sync + 'static {
+        let id = self.id;
+        move || schedule(id)
+    }
 }
 
 impl Drop for BrowserRuntime {

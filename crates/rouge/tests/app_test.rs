@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use rouge::App;
 use rouge::core::testing::{TestResult, TestUiBuilder};
 use rouge::core::{Styled, WindowCommand, div};

@@ -1,9 +1,9 @@
 #![cfg(target_arch = "wasm32")]
 
 use gloo_timers::future::TimeoutFuture;
-use rouge_core::{Point, Rect, Size, Styled, Ui, div, image, text};
-use rouge_reactive::{poll_tasks, sleep, spawn};
-use rouge_web::BrowserRuntime;
+use rouge::core::{Point, Rect, Size, Styled, Ui, div, image, text};
+use rouge::platform::web::BrowserRuntime;
+use rouge::reactive::{poll_tasks, sleep, spawn};
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -62,8 +62,8 @@ async fn dropping_the_runtime_discards_a_queued_wake_and_cancels_a_timer() {
 fn bundled_font_shapes_on_the_first_ui_frame() {
     let runtime = BrowserRuntime::new(|| {});
     let _entered = runtime.enter();
-    let font = include_bytes!("fixtures/inter-subset.ttf");
-    let mut ui = Ui::with_fonts(Size::new(160.0, 40.0), [font.to_vec()], || {
+    let font = include_bytes!("../../fixtures/inter-subset.ttf");
+    let mut ui = Ui::with_fonts(Size::new(160.0, 40.0), [font.as_slice()], || {
         text("Rouge").font("Inter")
     });
     assert!(ui.update());
@@ -78,7 +78,7 @@ fn byte_backed_images_decode_without_a_native_worker() {
         div()
             .flex()
             .items_start()
-            .child(image(include_bytes!("fixtures/red.png").to_vec()).flex_none())
+            .child(image(include_bytes!("../../fixtures/red.png").to_vec()).flex_none())
     });
     assert!(ui.update());
     assert_eq!(

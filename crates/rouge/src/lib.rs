@@ -1,4 +1,5 @@
 mod app;
+mod driver;
 #[cfg(feature = "tokio-rt")]
 pub mod persist;
 pub mod platform;
@@ -27,13 +28,12 @@ pub mod prelude {
         ImageSource, ImeEvent, Inputs, Interactions, Key, KeyEvent, Keyframes, LayoutTransition,
         Length, Mask, Menu, MenuItem, Modifiers, Motion, Painter, Palette, Path, Point,
         PointerButton, PointerEvent, Pose, Rect, ResizeEdge, Rgba, RowKey, ScrollEvent,
-        ScrollState, Scrollable, Size, SpanStyle, Spring, Style, Styled, Surface, SurfaceError,
-        SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle, Theme, Tween, Typography,
-        UiPalette, Underline, View, VirtualListHandle, WindowHandle, appearance, auto, canvas,
-        component, div, dynamic, each, editable, focus_handle, icon, image, motion, overlay, pct,
-        px, rem, rich_text, root_font_size, scroll, set_design_unit, show, surface, switch, text,
-        use_binding, view, virtual_list, virtual_list_handle, window_focused, window_handle,
-        window_size,
+        ScrollState, Scrollable, ShaderEffect, Size, SpanStyle, Spring, StyleDelta, Styled,
+        Surface, SurfaceError, SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle, Theme,
+        Tween, Typography, UiPalette, Underline, View, VirtualListHandle, WindowHandle, appearance,
+        auto, canvas, component, div, dynamic, each, editable, focus_handle, icon, image, motion,
+        overlay, pct, px, rich_text, scroll, show, surface, switch, text, use_binding, view,
+        virtual_list, virtual_list_handle, window_focused, window_handle, window_size, zoom,
     };
     #[cfg(not(target_arch = "wasm32"))]
     pub use rouge_reactive::spawn_blocking;
@@ -47,7 +47,7 @@ pub mod prelude {
     pub use rouge_widgets::{
         ButtonVariant, CheckState, Hint, Material, MaterialExt, MenuFocus, ModalSize, Placement,
         RovingFocus, Side, button, checkbox, context_menu, menu_bar, modal, popover, progress,
-        radio, resizable_panel, scroll_view, select, separator, slider, spinner, tabs, text_area,
-        text_input, toggle, tooltip, window_chrome,
+        radio, resizable_panel, scroll_view, select, separator, slider, spinner, tabs, text_input,
+        toggle, tooltip, window_chrome,
     };
 }

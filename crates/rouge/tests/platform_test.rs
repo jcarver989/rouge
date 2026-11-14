@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use rouge::core::{Cursor, Key, Modifiers, Point, PointerButton, Size};
 use rouge::platform::{
     Wheel, WheelGesture, cursor_icon, logical_point, logical_size, modifiers, named_key,

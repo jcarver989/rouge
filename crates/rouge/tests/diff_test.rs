@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 #[path = "../examples/shared/diff/mod.rs"]
 mod diff;
 #[allow(dead_code)]
@@ -134,12 +136,12 @@ fn sample_rich_text_renders_and_empty_patch_has_no_list() -> TestResult {
 }
 
 #[test]
-fn rich_text_byte_hits_and_inherited_rem_typography_share_one_line() -> TestResult {
+fn rich_text_byte_hits_and_inherited_typography_share_one_line_under_zoom() -> TestResult {
     let _rt = Runtime::new().enter();
     let source = patch()?;
-    let (mut ui, size) = TestUiBuilder::default()
+    let (mut ui, zoom) = TestUiBuilder::default()
         .size(1280.0, 600.0)
-        .build_with(|| (diff_view(Patch::parse(&source)), root_font_size()));
+        .build_with(|| (diff_view(Patch::parse(&source)), zoom()));
     let id = "diff-line-Unified(0, 1)-New-text";
     let before = ui.bounds_of(id).ok_or("missing syntax line")?;
     let end = Point::new(before.origin.x + before.size.width - 1.0, before.center().y);
@@ -148,11 +150,12 @@ fn rich_text_byte_hits_and_inherited_rem_typography_share_one_line() -> TestResu
         "let old_0 = \"café\";".rfind(';'),
         "{before:?} {end:?}"
     );
-    size.set(20.0);
+    zoom.set(1.25);
     ui.advance(0.0);
-    let after = ui.bounds_of(id).ok_or("missing resized syntax line")?;
-    assert!(after.size.width > before.size.width * 1.2);
-    assert!(after.size.height > before.size.height);
+    assert_eq!(ui.scale(), 1.25);
+    let after = ui.bounds_of(id).ok_or("missing zoomed syntax line")?;
+    assert_eq!(after.size, before.size);
+    assert_eq!(ui.text_index_at(end), "let old_0 = \"café\";".rfind(';'));
     ui.render()?;
     Ok(())
 }

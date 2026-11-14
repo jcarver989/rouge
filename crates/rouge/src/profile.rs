@@ -1,51 +1,36 @@
+use crate::platform::warn;
 use rouge_core::{FrameStats, Ui};
 use rouge_render::Point;
-use std::env::var;
-use std::time::{Duration, Instant};
-use tracing::level_filters::LevelFilter;
+use std::time::Duration;
 use tracing::subscriber::set_global_default;
 use tracing::trace;
-use tracing_chrome::{ChromeLayerBuilder, FlushGuard};
-use tracing_subscriber::filter::Targets;
+use tracing_subscriber::Registry;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
-use tracing_subscriber::registry;
-use wgpu::PresentMode;
+use web_time::Instant;
 
 const BUDGET: Duration = Duration::from_micros(16_667);
 
-pub(crate) fn trace() -> Option<FlushGuard> {
-    let path = var("ROUGE_PROFILE").ok().filter(|path| !path.is_empty())?;
-    let (layer, guard) = ChromeLayerBuilder::new()
-        .file(&path)
-        .include_args(true)
-        .build();
-    let layer = layer.with_filter(
-        Targets::new()
-            .with_target("winit", LevelFilter::OFF)
-            .with_default(LevelFilter::TRACE),
-    );
-    if set_global_default(registry().with(layer)).is_err() {
-        eprintln!("rouge: ROUGE_PROFILE is ignored because a tracing subscriber is already set");
-        return None;
-    }
-    eprintln!("rouge profile: tracing to {path}");
-    Some(guard)
+#[derive(Clone, Debug)]
+pub(crate) struct ProfileSettings {
+    pub(crate) bench: Option<String>,
+    pub(crate) trace: Option<String>,
 }
 
-pub(crate) fn present_mode() -> Option<PresentMode> {
-    let mode = var("ROUGE_PRESENT_MODE").ok()?;
-    match mode.to_ascii_lowercase().as_str() {
-        "fifo" => Some(PresentMode::Fifo),
-        "fifo-relaxed" => Some(PresentMode::FifoRelaxed),
-        "mailbox" => Some(PresentMode::Mailbox),
-        "immediate" => Some(PresentMode::Immediate),
-        "auto-vsync" => Some(PresentMode::AutoVsync),
-        "auto-no-vsync" => Some(PresentMode::AutoNoVsync),
-        _ => {
-            eprintln!("rouge: unknown ROUGE_PRESENT_MODE `{mode}`");
-            None
+impl ProfileSettings {
+    pub(crate) fn read(setting: impl Fn(&str) -> Option<String>) -> Self {
+        ProfileSettings {
+            bench: setting("rouge_bench"),
+            trace: setting("rouge_profile"),
         }
     }
+}
+
+pub(crate) fn subscribe(layer: impl Layer<Registry> + Send + Sync + 'static) -> bool {
+    let subscribed = set_global_default(Registry::default().with(layer)).is_ok();
+    if !subscribed {
+        warn("profiling is ignored because a tracing subscriber is already set");
+    }
+    subscribed
 }
 
 struct Bench {
@@ -65,25 +50,20 @@ pub(crate) struct Profile {
 }
 
 impl Profile {
-    pub(crate) fn from_env(ui: &mut Ui, environment: String) -> Option<Profile> {
-        let bench = var("ROUGE_BENCH").ok().map(|spec| {
-            let mut parts = spec.strip_prefix("scroll:").unwrap_or_default().split(':');
-            let pixels = parts.next().and_then(|p| p.parse().ok());
-            let frames = parts.next().and_then(|f| f.parse().ok());
-            if pixels.is_none() || frames.is_none() {
-                eprintln!("rouge: ROUGE_BENCH must look like `scroll:<px per frame>:<frames>`");
-            }
-            Bench {
-                pixels: pixels.unwrap_or_default(),
-                remaining: frames.unwrap_or_default(),
-                direction: 1.0,
-            }
-        });
-        if bench.is_none() && var("ROUGE_PROFILE").is_err() {
-            return None;
+    pub(crate) fn new(
+        ui: &mut Ui,
+        settings: &ProfileSettings,
+        environment: String,
+    ) -> Result<Option<Profile>, String> {
+        let bench = match &settings.bench {
+            Some(spec) => Some(parse_bench(spec)?),
+            None => None,
+        };
+        if bench.is_none() && settings.trace.is_none() {
+            return Ok(None);
         }
         let stats = ui.stats();
-        Some(Profile {
+        Ok(Some(Profile {
             environment,
             bench,
             intervals: Vec::new(),
@@ -91,7 +71,7 @@ impl Profile {
             counting: true,
             previous: stats,
             first: stats,
-        })
+        }))
     }
 
     pub(crate) fn wants_frames(&self) -> bool {
@@ -156,5 +136,21 @@ impl Profile {
             self.environment,
             self.previous - self.first,
         )
+    }
+}
+
+fn parse_bench(spec: &str) -> Result<Bench, String> {
+    let mut parts = spec.strip_prefix("scroll:").unwrap_or_default().split(':');
+    let pixels = parts.next().and_then(|p| p.parse().ok());
+    let frames = parts.next().and_then(|f| f.parse().ok());
+    match (pixels, frames) {
+        (Some(pixels), Some(remaining)) => Ok(Bench {
+            pixels,
+            remaining,
+            direction: 1.0,
+        }),
+        _ => Err(format!(
+            "a bench must look like `scroll:<px per frame>:<frames>`, not `{spec}`"
+        )),
     }
 }

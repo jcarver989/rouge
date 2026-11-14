@@ -1,57 +1,27 @@
-#[cfg(target_os = "macos")]
-use crate::platform::native_menu::NativeMenus;
-use crate::platform::{
-    Wheel, WheelGesture, appearance as platform_appearance, cursor_icon, logical_point,
-    logical_size, menu_root, modifiers, named_key, pointer_button, window_commands,
-};
-use crate::profile::{Profile, present_mode, trace};
-use arboard::Clipboard as SystemClipboard;
-use image::codecs::png::PngEncoder;
-use image::{ExtendedColorType, ImageEncoder};
-use pollster::block_on;
+use crate::platform;
 use rouge_core::{
-    AnyView, Appearance, Clipboard, ClipboardMedia, Cursor, Decorations, FileDropPhase, ImeEvent,
-    Key, KeyEvent, Menu, Modifiers, Ui, View, appearance, window_handle,
+    AnyView, Appearance, Decorations, Menu, View, appearance as current_appearance, window_handle,
 };
-#[cfg(feature = "tokio-rt")]
-use rouge_reactive::set_tokio;
-use rouge_reactive::{ReadSignal, Runtime};
-use rouge_render::{Color, Gpu, GpuError, Point, Rect, Renderer, Size, Surfaces, Viewport};
-use rouge_widgets::window_chrome;
-use std::collections::HashMap;
-use std::env::var;
-use std::mem::take;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use rouge_reactive::ReadSignal;
+use rouge_render::{Color, GpuError, Size};
+use std::borrow::Cow;
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle;
-use tracing::trace_span;
-use tracing_chrome::FlushGuard;
-use wgpu::{
-    CreateSurfaceError, CurrentSurfaceTexture, Instance, InstanceDescriptor, PresentMode, Surface,
-    SurfaceConfiguration, TextureViewDescriptor,
-};
-use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalPosition, LogicalSize, PhysicalSize};
+use wgpu::CreateSurfaceError;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::error::{EventLoopError, OsError};
-use winit::event::{
-    ElementState, Ime, KeyEvent as WinitKeyEvent, MouseScrollDelta, TouchPhase, WindowEvent,
-};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::{Key as WinitKey, SmolStr};
-use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{Window, WindowId};
 
 #[derive(Clone, Debug)]
 pub struct WindowOptions {
-    title: String,
-    size: Size,
-    background: Color,
-    resizable: bool,
-    min_size: Option<Size>,
-    maximized: bool,
-    decorations: Decorations,
+    pub(crate) title: String,
+    pub(crate) size: Size,
+    pub(crate) background: Color,
+    pub(crate) resizable: bool,
+    pub(crate) min_size: Option<Size>,
+    pub(crate) maximized: bool,
+    pub(crate) decorations: Decorations,
+    pub(crate) canvas: Option<String>,
 }
 
 impl Default for WindowOptions {
@@ -64,6 +34,7 @@ impl Default for WindowOptions {
             min_size: None,
             maximized: false,
             decorations: Decorations::Server,
+            canvas: None,
         }
     }
 }
@@ -73,10 +44,12 @@ impl WindowOptions {
         self.min_size = Some(Size::new(width, height));
         self
     }
+
     pub fn maximized(mut self, maximized: bool) -> Self {
         self.maximized = maximized;
         self
     }
+
     pub fn decorations(mut self, decorations: Decorations) -> Self {
         self.decorations = decorations;
         self
@@ -101,14 +74,24 @@ impl WindowOptions {
         self.resizable = resizable;
         self
     }
+
+    pub fn canvas(mut self, id: impl Into<String>) -> Self {
+        self.canvas = Some(id.into());
+        self
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("event loop error: {0}")]
     EventLoop(#[from] EventLoopError),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("failed to create window: {0}")]
     Window(#[from] OsError),
+    #[cfg(target_arch = "wasm32")]
+    #[error("browser operation failed: {0}")]
+    Browser(String),
     #[error("failed to create rendering surface: {0}")]
     Surface(#[from] CreateSurfaceError),
     #[error("the GPU adapter cannot present to the window surface")]
@@ -120,24 +103,26 @@ pub enum AppError {
     Gpu(#[from] GpuError),
 }
 
-type RootFn = Box<dyn FnOnce() -> AnyView>;
+pub(crate) type RootFn = Box<dyn FnOnce() -> AnyView>;
 
 #[derive(Default)]
 pub struct App {
-    windows: Vec<(WindowOptions, RootFn)>,
-    menus: Vec<Menu>,
-    fonts: Vec<Vec<u8>>,
+    pub(crate) windows: Vec<(WindowOptions, RootFn)>,
+    pub(crate) menus: Vec<Menu>,
+    pub(crate) fonts: Vec<Cow<'static, [u8]>>,
     #[cfg(feature = "tokio-rt")]
-    tokio: Option<Handle>,
+    pub(crate) tokio: Option<Handle>,
 }
 
 impl App {
     pub fn appearance() -> ReadSignal<Appearance> {
-        appearance()
+        current_appearance()
     }
+
     pub fn quit() {
         window_handle().quit();
     }
+
     pub fn menus(mut self, menus: Vec<Menu>) -> Self {
         self.menus = menus;
         self
@@ -147,8 +132,11 @@ impl App {
         App::default()
     }
 
-    pub fn fonts(mut self, fonts: impl IntoIterator<Item = Vec<u8>>) -> Self {
-        self.fonts.extend(fonts);
+    pub fn fonts<T: Into<Cow<'static, [u8]>>>(
+        mut self,
+        fonts: impl IntoIterator<Item = T>,
+    ) -> Self {
+        self.fonts.extend(fonts.into_iter().map(Into::into));
         self
     }
 
@@ -168,564 +156,7 @@ impl App {
         self
     }
 
-    pub fn run(mut self) -> Result<(), AppError> {
-        let has = |menus: &[Menu], title: &str| menus.iter().any(|menu| menu.title == title);
-        if !has(&self.menus, "Edit") {
-            self.menus.insert(self.menus.len().min(1), Menu::edit());
-        }
-        if !has(&self.menus, "Window") {
-            self.menus.push(Menu::window());
-        }
-        let event_loop = EventLoop::new()?;
-        let proxy = event_loop.create_proxy();
-        #[cfg(target_os = "macos")]
-        let native_menus = NativeMenus::new(self.menus.clone(), proxy.clone())?;
-        let runtime = Runtime::with_waker(move || {
-            let _ = proxy.send_event(());
-        });
-        let _entered = runtime.enter();
-        #[cfg(feature = "tokio-rt")]
-        if let Some(handle) = self.tokio {
-            set_tokio(handle);
-        }
-        event_loop.set_control_flow(ControlFlow::Wait);
-        let waker = event_loop.create_proxy();
-        let mut runner = Runner {
-            #[cfg(target_os = "macos")]
-            native_menus,
-            waker,
-            shared: None,
-            _trace: trace(),
-            pending: self.windows,
-            menus: self.menus,
-            fonts: self.fonts,
-            windows: HashMap::new(),
-            error: None,
-            exit_after_frames: var("ROUGE_EXIT_AFTER_FRAMES")
-                .ok()
-                .and_then(|v| v.parse().ok()),
-        };
-        event_loop.run_app(&mut runner)?;
-        runner.error.map_or(Ok(()), Err)
-    }
-}
-
-struct Runner {
-    #[cfg(target_os = "macos")]
-    native_menus: NativeMenus,
-    waker: EventLoopProxy<()>,
-    shared: Option<Shared>,
-    _trace: Option<FlushGuard>,
-    pending: Vec<(WindowOptions, RootFn)>,
-    menus: Vec<Menu>,
-    fonts: Vec<Vec<u8>>,
-    windows: HashMap<WindowId, WindowState>,
-    error: Option<AppError>,
-    exit_after_frames: Option<u64>,
-}
-
-struct Shared {
-    instance: Instance,
-    gpu: Gpu,
-    surfaces: Surfaces,
-}
-
-impl Shared {
-    fn new(
-        event_loop: &ActiveEventLoop,
-        window: &Arc<Window>,
-        waker: EventLoopProxy<()>,
-    ) -> Result<(Shared, Surface<'static>), AppError> {
-        let display = Box::new(event_loop.owned_display_handle());
-        let instance = Instance::new(InstanceDescriptor::new_with_display_handle_from_env(
-            display,
-        ));
-        let surface = instance.create_surface(window.clone())?;
-        let gpu = block_on(Gpu::new(instance.clone(), Some(&surface)))?;
-        let surfaces = Surfaces::new(&gpu).with_waker(move || {
-            let _ = waker.send_event(());
-        });
-        let shared = Shared {
-            instance,
-            gpu,
-            surfaces,
-        };
-        Ok((shared, surface))
-    }
-}
-
-struct WindowState {
-    window: Arc<Window>,
-    surface: Surface<'static>,
-    config: SurfaceConfiguration,
-    gpu: Gpu,
-    renderer: Renderer,
-    ui: Ui,
-    background: Color,
-    frames: u64,
-    occluded: bool,
-    wheel: Wheel,
-    modifiers: Modifiers,
-    cursor: Cursor,
-    ime: bool,
-    ime_area: Option<Rect>,
-    profile: Option<Profile>,
-}
-
-struct SystemClipboardAdapter(Option<SystemClipboard>);
-
-impl Clipboard for SystemClipboardAdapter {
-    fn read(&mut self) -> Option<String> {
-        self.0.as_mut()?.get_text().ok()
-    }
-
-    fn write(&mut self, text: &str) {
-        if let Some(clipboard) = &mut self.0 {
-            let _ = clipboard.set_text(text);
-        }
-    }
-
-    fn read_media(&mut self) -> Option<ClipboardMedia> {
-        let clipboard = self.0.as_mut()?;
-        if let Some(files) = clipboard
-            .get()
-            .file_list()
-            .ok()
-            .filter(|files| !files.is_empty())
-        {
-            return Some(ClipboardMedia::Files(files));
-        }
-        let image = clipboard.get_image().ok()?;
-        let (width, height) = (
-            u32::try_from(image.width).ok()?,
-            u32::try_from(image.height).ok()?,
-        );
-        let mut png = Vec::new();
-        PngEncoder::new(&mut png)
-            .write_image(&image.bytes, width, height, ExtendedColorType::Rgba8)
-            .ok()?;
-        Some(ClipboardMedia::Png(png))
-    }
-}
-
-impl WindowState {
-    fn new(
-        event_loop: &ActiveEventLoop,
-        shared: &mut Option<Shared>,
-        waker: &EventLoopProxy<()>,
-        options: WindowOptions,
-        root: RootFn,
-        menus: Vec<Menu>,
-        fonts: &[Vec<u8>],
-    ) -> Result<WindowState, AppError> {
-        let mut attributes = Window::default_attributes()
-            .with_title(options.title.clone())
-            .with_maximized(options.maximized)
-            .with_decorations(options.decorations == Decorations::Server)
-            .with_resizable(options.resizable)
-            .with_inner_size(LogicalSize::new(options.size.width, options.size.height));
-        if let Some(size) = options.min_size {
-            attributes = attributes.with_min_inner_size(LogicalSize::new(size.width, size.height));
-        }
-        let window = Arc::new(event_loop.create_window(attributes)?);
-
-        let surface = if let Some(shared) = shared {
-            shared.instance.create_surface(window.clone())?
-        } else {
-            let (created, surface) = Shared::new(event_loop, &window, waker.clone())?;
-            *shared = Some(created);
-            surface
-        };
-        let shared = shared.as_mut().expect("the shared GPU was created");
-        let gpu = shared.gpu.clone();
-
-        let physical = window.inner_size();
-        let scale = window.scale_factor() as f32;
-        let formats = surface.get_capabilities(&gpu.adapter).formats;
-        let linear = formats.iter().copied().find(|format| !format.is_srgb());
-        let mut config = surface
-            .get_default_config(&gpu.adapter, physical.width.max(1), physical.height.max(1))
-            .ok_or(AppError::UnsupportedSurface)?;
-        let format = linear.unwrap_or(config.format);
-        config.format = format;
-        config.present_mode = PresentMode::AutoVsync;
-        if let Some(mode) = present_mode() {
-            let supported = surface.get_capabilities(&gpu.adapter).present_modes;
-            if supported.contains(&mode)
-                || matches!(mode, PresentMode::AutoVsync | PresentMode::AutoNoVsync)
-            {
-                config.present_mode = mode;
-            } else {
-                eprintln!("rouge: present mode {mode:?} is not supported here ({supported:?})");
-            }
-        }
-        surface.configure(&gpu.device, &config);
-
-        let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
-        let chrome = options.decorations == Decorations::Client || !window.is_decorated();
-        let shortcuts = menus.clone();
-        let mut ui = Ui::with_fonts(
-            logical_size(physical, scale),
-            fonts.iter().cloned(),
-            move || {
-                let handle = window_handle();
-                handle.set_title(options.title);
-                let root = menu_root(menus, root());
-                if chrome {
-                    window_chrome(handle.title(), root).into_any()
-                } else {
-                    root
-                }
-            },
-        );
-        ui.set_appearance(platform_appearance(window.theme()));
-        ui.set_scale(scale);
-        ui.set_clipboard(SystemClipboardAdapter(SystemClipboard::new().ok()));
-        ui.bind_menus(&shortcuts);
-        ui.set_surfaces(shared.surfaces.registrar());
-        let environment = format!(
-            "{:?}\n{:?} {}x{} at scale {scale}",
-            gpu.adapter.get_info(),
-            config.present_mode,
-            config.width,
-            config.height,
-        );
-        let profile = Profile::from_env(&mut ui, environment);
-        Ok(WindowState {
-            window,
-            surface,
-            config,
-            gpu,
-            renderer,
-            ui,
-            background: options.background,
-            frames: 0,
-            occluded: false,
-            wheel: Wheel::default(),
-            modifiers: Modifiers::NONE,
-            cursor: Cursor::Default,
-            ime: false,
-            ime_area: None,
-            profile,
-        })
-    }
-
-    fn key(&mut self, event: WinitKeyEvent) {
-        let key = match event.key_without_modifiers() {
-            WinitKey::Named(named) => named_key(named),
-            WinitKey::Character(text) => Key::character(&text),
-            _ => Key::Other,
-        };
-        let mut key_event = KeyEvent::new(key).with_modifiers(self.modifiers);
-        key_event.text = event.text.as_ref().map(SmolStr::to_string);
-        key_event.repeat = event.repeat;
-        match event.state {
-            ElementState::Pressed => self.ui.key_down(key_event),
-            ElementState::Released => self.ui.key_up(key_event),
-        };
-    }
-
-    fn sync_platform(&mut self) {
-        let cursor = self.ui.cursor();
-        if cursor != self.cursor {
-            self.cursor = cursor;
-            self.window.set_cursor(cursor_icon(cursor));
-        }
-        let ime = self.ui.accepts_text();
-        if ime != self.ime {
-            self.ime = ime;
-            self.window.set_ime_allowed(ime);
-        }
-        let area = self.ui.text_cursor_area().filter(|_| ime);
-        if area == self.ime_area {
-            return;
-        }
-        self.ime_area = area;
-        if let Some(area) = area {
-            let position = LogicalPosition::new(area.origin.x, area.origin.y);
-            self.window.set_ime_cursor_area(
-                position,
-                LogicalSize::new(area.size.width, area.size.height),
-            );
-        }
-    }
-
-    fn resize(&mut self, physical: PhysicalSize<u32>) {
-        if physical.width == 0 || physical.height == 0 {
-            return;
-        }
-        self.config.width = physical.width;
-        self.config.height = physical.height;
-        self.surface.configure(&self.gpu.device, &self.config);
-        self.ui.set_size(logical_size(physical, self.ui.scale()));
-        self.window.request_redraw();
-    }
-
-    fn wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
-        match self
-            .wheel
-            .input(delta, phase, self.ui.scale(), Instant::now())
-        {
-            WheelGesture::Scroll(by) => {
-                self.ui.scroll(by);
-            }
-            WheelGesture::Drag(by) => self.ui.scroll_drag(by),
-            WheelGesture::Release(by) => {
-                if by != Point::ZERO {
-                    self.ui.scroll_drag(by);
-                }
-                self.ui.scroll_release();
-            }
-            WheelGesture::Coast => {}
-        }
-    }
-
-    fn refresh_interval(&self) -> Duration {
-        let millihertz = self
-            .window
-            .current_monitor()
-            .and_then(|monitor| monitor.refresh_rate_millihertz())
-            .filter(|rate| *rate > 0)
-            .unwrap_or(60_000);
-        Duration::from_secs_f64(1000.0 / f64::from(millihertz))
-    }
-
-    fn redraw(&mut self, surfaces: &mut Surfaces) {
-        if let Some(profile) = &mut self.profile {
-            let size = logical_size(self.window.inner_size(), self.ui.scale());
-            profile.before_update(
-                &mut self.ui,
-                Point::new(size.width / 2.0, size.height / 2.0),
-            );
-        }
-        self.ui.update();
-        let acquired = {
-            let _acquire = trace_span!("acquire").entered();
-            self.surface.get_current_texture()
-        };
-        let frame = match acquired {
-            CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
-                frame
-            }
-            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.gpu.device, &self.config);
-                self.window.request_redraw();
-                return;
-            }
-            CurrentSurfaceTexture::Timeout => {
-                self.window.request_redraw();
-                return;
-            }
-            _ => return,
-        };
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
-        let viewport = Viewport::new(self.config.width, self.config.height, self.ui.scale());
-        let interval = self.refresh_interval();
-        surfaces.latch(Instant::now() + interval / 2);
-        let ui_frame = self.ui.frame();
-        {
-            let _encode = trace_span!("encode").entered();
-            self.renderer.render(
-                &view,
-                viewport,
-                self.background,
-                &ui_frame.scene,
-                ui_frame.atlas,
-                surfaces,
-            );
-        }
-        {
-            let _present = trace_span!("present").entered();
-            self.window.pre_present_notify();
-            self.gpu.queue.present(frame);
-        }
-        surfaces.presented(Instant::now(), interval);
-        surfaces.maintain();
-        if let Some(profile) = &mut self.profile {
-            profile.after_frame(&mut self.ui);
-        }
-        self.frames += 1;
-    }
-}
-
-impl Drop for WindowState {
-    fn drop(&mut self) {
-        if let Some(profile) = &self.profile {
-            eprintln!("{}", profile.summary());
-        }
-    }
-}
-
-impl ApplicationHandler for Runner {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        for (options, root) in take(&mut self.pending) {
-            let created = WindowState::new(
-                event_loop,
-                &mut self.shared,
-                &self.waker,
-                options,
-                root,
-                self.menus.clone(),
-                &self.fonts,
-            );
-            match created {
-                Ok(state) => {
-                    self.windows.insert(state.window.id(), state);
-                }
-                Err(error) => {
-                    self.error = Some(error);
-                    event_loop.exit();
-                    return;
-                }
-            }
-        }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let open = self.windows.len();
-        self.windows
-            .retain(|_, state| !state.profile.as_ref().is_some_and(Profile::finished));
-        if open > 0 && self.windows.is_empty() {
-            event_loop.exit();
-            return;
-        }
-        let surfaced = self.shared.as_mut().is_some_and(|shared| {
-            let changed = shared.surfaces.latch(Instant::now());
-            shared.surfaces.maintain();
-            changed || shared.surfaces.needs_frame()
-        });
-        for state in self.windows.values_mut() {
-            let bench = state.profile.as_ref().is_some_and(Profile::wants_frames);
-            let surface = surfaced && state.ui.has_surfaces();
-            if !state.occluded && (state.ui.needs_frame() || bench || surface) {
-                state.window.request_redraw();
-            }
-        }
-        let deadline = self
-            .shared
-            .as_ref()
-            .and_then(|shared| shared.surfaces.next_deadline());
-        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
-        self.process_window_commands(event_loop);
-    }
-
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
-        #[cfg(target_os = "macos")]
-        {
-            let ui = self
-                .windows
-                .values_mut()
-                .find(|state| state.window.has_focus())
-                .map(|state| &mut state.ui);
-            if self.native_menus.dispatch(ui) {
-                self.windows.clear();
-                event_loop.exit();
-            }
-        }
-        self.process_window_commands(event_loop);
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let Some(state) = self.windows.get_mut(&id) else {
-            return;
-        };
-        let _event = trace_span!("event", ?event).entered();
-        match event {
-            WindowEvent::CloseRequested => {
-                self.windows.remove(&id);
-                if self.windows.is_empty() {
-                    event_loop.exit();
-                }
-            }
-            WindowEvent::ThemeChanged(theme) => {
-                state.ui.set_appearance(platform_appearance(Some(theme)));
-            }
-            WindowEvent::Focused(focused) => state.ui.set_focused(focused),
-            WindowEvent::HoveredFile(path) => {
-                state.ui.file_drop(FileDropPhase::Hover, vec![path]);
-            }
-            WindowEvent::HoveredFileCancelled => {
-                state.ui.file_drop(FileDropPhase::Leave, Vec::new());
-            }
-            WindowEvent::DroppedFile(path) => {
-                state.ui.file_drop(FileDropPhase::Drop, vec![path]);
-            }
-            WindowEvent::Resized(size) => state.resize(size),
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                state.ui.set_scale(scale_factor as f32);
-                state.resize(state.window.inner_size());
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                let position = logical_point(position, state.ui.scale());
-                state.ui.pointer_moved(position);
-            }
-            WindowEvent::CursorLeft { .. } => state.ui.pointer_left(),
-            WindowEvent::MouseInput {
-                state: pressed,
-                button,
-                ..
-            } => match pressed {
-                ElementState::Pressed => state.ui.pointer_down(pointer_button(button)),
-                ElementState::Released => state.ui.pointer_up(pointer_button(button)),
-            },
-            WindowEvent::MouseWheel { delta, phase, .. } => state.wheel(delta, phase),
-            WindowEvent::ModifiersChanged(changed) => {
-                state.modifiers = modifiers(changed.state());
-                state.ui.set_modifiers(state.modifiers);
-            }
-            WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } => state.key(event),
-            WindowEvent::Ime(Ime::Preedit(text, cursor)) => {
-                state.ui.ime(ImeEvent::Preedit { text, cursor });
-            }
-            WindowEvent::Ime(Ime::Commit(text)) => state.ui.ime(ImeEvent::Commit(text)),
-            WindowEvent::Occluded(occluded) => {
-                state.occluded = occluded;
-                state.ui.set_visible(!occluded);
-                if !occluded {
-                    state.window.request_redraw();
-                }
-            }
-            WindowEvent::RedrawRequested => {
-                if !state.occluded
-                    && let Some(shared) = &mut self.shared
-                {
-                    state.redraw(&mut shared.surfaces);
-                }
-                if self.exit_after_frames.is_some_and(|n| state.frames >= n) {
-                    self.windows.clear();
-                    event_loop.exit();
-                }
-            }
-            _ => {}
-        }
-        if let Some(state) = self.windows.get_mut(&id) {
-            state.sync_platform();
-        }
-        self.process_window_commands(event_loop);
-    }
-}
-
-impl Runner {
-    fn process_window_commands(&mut self, event_loop: &ActiveEventLoop) {
-        let mut closing = Vec::new();
-        let mut quit = false;
-        for (id, state) in &mut self.windows {
-            let (close, exit) = window_commands(&state.window, &mut state.ui);
-            if close {
-                closing.push(*id);
-            }
-            quit |= exit;
-        }
-        for id in closing {
-            self.windows.remove(&id);
-        }
-        if quit || self.windows.is_empty() {
-            self.windows.clear();
-            event_loop.exit();
-        }
+    pub fn run(self) -> Result<(), AppError> {
+        platform::run(self)
     }
 }

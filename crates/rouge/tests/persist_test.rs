@@ -1,4 +1,4 @@
-#![cfg(feature = "tokio-rt")]
+#![cfg(all(feature = "tokio-rt", not(target_arch = "wasm32")))]
 
 use rouge::persist::{Store, read, write};
 use std::collections::BTreeMap;
