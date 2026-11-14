@@ -1,70 +1,92 @@
 # Rouge: High-Level Design
 
-A signal-driven, GPU-composited UI framework for Rust on macOS and Linux.
+A signal-driven, GPU-composited UI framework for Rust, targeting macOS, Linux and the browser.
 
-Status: draft v1, partially implemented. See [section 21](#21-implementation-status) for what exists and where the code differs from this document. "Rouge" is a working name taken from the workspace directory.
+This document describes the design as the code implements it. Where a design is planned but not built, it says so; the [last section](#21-not-built-yet) lists everything not built yet. "Rouge" is a working name taken from the workspace directory.
 
 ---
 
 ## 1. Summary
 
-Rouge is a general-purpose native UI toolkit built on four ideas:
+Rouge is a general-purpose UI toolkit built on five ideas:
 
-1. **Fine-grained signals.** Component functions run once. Every reactive prop is its own small effect that patches exactly one property of one retained node. There is no re-render, no diffing, and no manual caching.
-2. **A declarative builder API with no macros.** gpui-style chains (`div().flex().gap(8.).child(...)`), laid out by taffy.
-3. **One renderer on wgpu.** No per-OS drawing code. A custom instanced SDF renderer feeds a layer compositor that we fully control.
-4. **A real compositor.** Layers, backdrop effects (liquid glass), custom WGSL effects, and animations that tick inside the compositor without touching the reactive graph, layout, or paint.
+1. **Fine-grained signals.** Component functions run once. Every reactive prop is its own small effect that patches exactly one property of one retained element. There is no re-render, no diffing and no manual caching.
+2. **A builder API, with JSX-style markup on top.** gpui-style chains (`div().flex().gap(8.0).child(...)`) laid out by taffy. The `view!` macro and `#[component]` attribute expand to the same builder calls, so both styles are first-class.
+3. **One renderer on wgpu.** No per-OS drawing code. A custom instanced SDF renderer, written to fit WebGL2's limits, draws whatever the compositor hands it.
+4. **A real compositor.** Layers, backdrop effects (liquid glass), custom WGSL effects, foreign GPU surfaces and animations that tick inside the compositor without touching the reactive graph, layout or paint.
+5. **One driver, two hosts.** A native host on winit and a custom browser host both drive the same frame loop.
 
-The performance contract: a signal change costs work proportional to what actually changed, a compositor animation frame costs almost nothing on the CPU, and an idle app produces zero frames.
+The performance contract: a signal change costs work proportional to what changed, a compositor animation frame costs almost nothing on the CPU, and an idle app produces zero frames.
 
 ## 2. Goals and non-goals
 
 ### Goals
 
-- Signals with automatic dependency tracking (Svelte 5 / Solid model).
-- High-level builder API, plain Rust functions as components, no proc macros required.
-- macOS and Linux (Wayland and X11) from one codebase, with all drawing through wgpu.
-- Compositing and effects as first-class features: blur, backdrop blur, glass/refraction, shadows, masks, blend modes, user-supplied WGSL.
-- 120Hz target: 8.3ms frame budget, under 2ms CPU for compositor-only animation frames.
+- Signals with automatic dependency tracking (the Solid / Svelte 5 model).
+- A typed builder API with plain Rust functions as components, plus `view!` markup and `#[component]` for people coming from JSX. Both are supported; the builder is the underlying API.
+- macOS, Linux (Wayland and X11) and the browser (wasm32 with WebGPU, and WebGL2's feature set) from one codebase, with all drawing through wgpu.
+- Compositing and effects as first-class features: blur, backdrop blur, glass and refraction, shadows, masks, blend modes, user-supplied WGSL, zero-copy foreign GPU content.
+- 120Hz: an 8.3ms frame budget, under 2ms CPU for compositor-only frames.
 - Fully idle when nothing changes.
-- v1 ships a core widget set and dev tooling.
+- A complete component set (`rouge-widgets`) built only on the public API.
 
-### Non-goals for v1
+### Non-goals
 
-- Windows, web, and mobile. Nothing in the design blocks them, but they are not targeted.
-- Accessibility (AccessKit) and multi-window / native chrome. Both are designed for (section 17) and scheduled after v1.
-- A software renderer or guaranteed GL fallback. Metal (through wgpu) on macOS and Vulkan on Linux are required; GL is best-effort.
-- A dedicated render thread. The UI/compositor boundary is shaped so one can be added later (section 9.5).
+- Windows and mobile. Nothing in the design blocks them, but they are not targeted.
 - Native-looking platform widgets. Rouge draws everything itself.
-- System web views (WKWebView, WebKitGTK) as child windows. They cannot be composited: no glass over them, no overlays above them, no compositor transforms. Embedded web content goes through surfaces (section 9.6) and Servo (section 15).
-- Open-web compatibility. The web view targets content the app author controls. Arbitrary third-party sites are best-effort and bounded by Servo.
-- Any per-frame CPU copy of surface pixels, including as a fallback (section 9.6).
+- A software renderer.
+- System web views (WKWebView, WebKitGTK) as child windows. They cannot be composited: no glass over them, no overlays above them, no compositor transforms. Embedded web content is planned through surfaces and Servo (section 20).
+- Any per-frame CPU copy of surface pixels, including as a fallback (section 12).
 
 ### A note on "avoiding Metal"
 
-wgpu on macOS runs on Metal underneath. What we avoid is writing or maintaining any Metal-specific code: all shaders are WGSL and all GPU calls go through wgpu.
+wgpu on macOS runs on Metal. What Rouge avoids is Metal-specific code: all shaders are WGSL and all GPU calls go through wgpu. The one exception is importing externally produced GPU memory (an IOSurface) as a wgpu texture for surfaces. That code lives in `rouge_render::interop`, the only module that allows `unsafe`; it creates and imports textures and never issues draw calls.
 
-There is one deliberate exception: importing externally produced GPU memory (an IOSurface on macOS, a DMA-BUF on Linux) as a wgpu texture for surfaces. That code is a few hundred lines per OS, lives in the `rouge-interop` crate, creates and imports textures only, and never issues draw calls.
+## 3. Decisions
 
-## 3. Decisions at a glance
+### 3.1 At a glance
 
 | Area | Decision |
 |---|---|
-| Scope | General-purpose toolkit |
+| Scope | General-purpose toolkit for macOS, Linux and the browser |
 | Reactivity | Fine-grained, run-once components, no diffing |
-| Signal model | `Copy` handles into a scope-owned arena; graph lives on the UI thread |
-| API | Plain functions returning `impl View`; tailwind-style typed utility chains |
+| Signal model | `Copy` handles into a runtime-owned arena; a single-threaded graph on the UI thread |
+| API | Builder chains on functions returning `impl View`; `view!` and `#[component]` expand to the same calls |
+| Tree updates | Binding effects push typed patches onto one queue; `Ui::step` applies them |
+| Lengths | Logical pixels only; a per-window zoom multiplies the device scale |
 | Layout | taffy (flexbox, grid, block) |
-| Renderer | Custom wgpu renderer: instanced SDF primitives, glyph atlas |
-| Compositor | Retained layer tree, on the UI thread in v1 |
-| Animation | Compositor-driven by default; signal-driven fallback for layout properties |
-| Effects | Built-in set plus an `Effect` trait for custom WGSL |
-| Text | Parley (layout, shaping, fallback) with swash/skrifa rasterization |
-| Foreign content | Surfaces: a buffer queue from producers to an app-wide registry; frames composited as layers, shared zero-copy, never read back |
-| Web view | Servo, rendering straight into a shared GPU buffer, in an optional crate |
-| Platform | winit behind an internal `Platform` trait, plus small per-OS shims |
-| Perf target | 120Hz, modern GPUs, no software fallback |
-| v1 extras | Core widget set, dev tooling |
+| Styling | Typed declarations; state variants are recorded style deltas; no cascade except inherited text properties |
+| Theme | One `Signal<Palette>` over the renderer-neutral `rouge_theme::UiPalette`; each role is a memo |
+| Text | Parley shaping and swash rasterization in `rouge_core::text`; a shaping cache keyed without colours |
+| Compositor | A retained layer tree in `rouge-core`, owned by the element tree and called directly |
+| Renderer | `rouge-render`: one instanced SDF pipeline, paged uniform records, no storage buffers (WebGL2-compatible) |
+| Animation | Compositor-driven springs, tweens, keyframes and motion values; layout is never animated per frame by default |
+| Effects | Built-ins plus the `ShaderEffect` trait for custom WGSL with up to 16 uniforms |
+| Foreign content | Surfaces: a buffer queue from producers to a registry, shared zero-copy, never read back |
+| Platform | One `Driver`; a winit host on native and a custom DOM host in the browser |
+| Web view | Planned: Servo rendering into a shared buffer, in an optional crate |
+| Performance | 120Hz on modern GPUs; idle is zero frames |
+
+### 3.2 Protected decisions
+
+These are deliberate. Do not remove or "simplify" them away.
+
+| Decision | Why | Do not |
+|---|---|---|
+| **The browser (wasm32 + WebGPU/WebGL2) is a supported target.** | Rouge apps ship to the web from the same code. The renderer is written to WebGL2's limits so the browser can use either backend. | Treat the browser as optional, add features to the renderer that need storage buffers or compute, or let the browser host fall behind native. |
+| **The browser host is custom** (`crates/rouge/src/platform/web/`), not winit's web backend, and shares `Driver` with native. | Text input needs a hidden textarea placed at the caret to receive IME composition, and clipboard needs the DOM's native `copy`, `cut` and `paste` events (which need no permission). winit's web backend provides neither. | Remove the browser host, or port it to winit. |
+| **`view!` and `#[component]` are a first-class, supported API.** | Users coming from JSX expect markup. Both macros expand to builder calls, so there is still one underlying API and nothing is lost by mixing styles. | Remove the macros, or describe Rouge as macro-free. The builder remains the API the macros target. |
+| **`rouge-theme`, `rouge-syntax`, `rouge-markdown` and `rouge-reactive` are standalone crates.** | A terminal frontend in a sibling app depends on them. None depends on `rouge-core`, wgpu or any windowing crate. | Merge them into `rouge-core`, or give them UI or GPU dependencies. |
+
+### 3.3 Rules that hold everywhere
+
+- Components run once. A signal read in a component body (outside a closure) is read once and never tracked.
+- Only `Ui` mutates the element tree: building views through a `BuildCx`, applying patches and handling input. Reactive effects, including binding effects and control-flow helpers, never touch the tree; they push patches.
+- A dynamic prop computes its first value during build, so mounting an element costs one write and no follow-up patch.
+- A change confined to compositor properties sets no layout or paint work.
+- No surface pixel ever passes through CPU memory on the frame path.
+- `unsafe` is denied workspace-wide except in `rouge_render::interop`.
+- Each crate offers one way to do a thing: incremental and full parsing share one path, as do incremental and full highlighting (section 16).
 
 ## 4. Architecture
 
@@ -72,47 +94,53 @@ There is one deliberate exception: importing externally produced GPU memory (an 
 
 | Crate | Responsibility |
 |---|---|
-| `rouge` | Facade and prelude. What apps depend on. |
-| `rouge-reactive` | Signals, memos, effects, scopes, batching. No UI dependencies; usable standalone. |
-| `rouge-core` | Element tree, styles, taffy integration, events, focus, view builders, control flow. |
-| `rouge-text` | Parley integration, glyph rasterization, text measurement, editing primitives. |
-| `rouge-render` | wgpu device management, primitive pipelines, atlases, layer compositor, effects, animation engine, surface registry and protocol. |
-| `rouge-interop` | Shared GPU memory for surfaces: IOSurface and DMA-BUF allocation and zero-copy import into wgpu. The only crate that allows `unsafe`. |
-| `rouge-platform` | `Platform` trait, winit implementation, clipboard, cursor, IME, frame scheduling. |
-| `rouge-widgets` | The component set: bundled fonts, rem-based tokens, typography, icons, buttons, inputs, menus, pickers, modals, panels. Built only on the public API. |
-| `rouge-devtools` | Inspector overlay, frame HUD, signal graph view, hot reload support. |
-| `rouge-webview` | Servo embedding as a surface source. Optional; nothing else depends on it. |
+| `rouge` | Facade and prelude. `App`, `WindowOptions`, the shared `Driver`, and the platform hosts: `platform::native` (winit) and `platform::web` (custom browser host). Optional `persist` (debounced JSON settings, with `tokio-rt`). |
+| `rouge-core` | Element tree (`src/tree/*`), styles, layout through taffy, events, focus, keymap, view builders, control flow through fragments, the compositor and animation engine, text (`rouge_core::text`, on Parley), theme, `Ui`, and `testing::TestUi`. |
+| `rouge-render` | GPU only: `Gpu`, `Renderer`, draw lists, the glyph atlas, image cache, effects and their shaders, the surface registry and protocol, `headless`, `testing::TestSurface`, and `interop` (IOSurface allocation and import). |
+| `rouge-reactive` | Signals, memos, effects, scopes, batching, context, tasks, resources, an optional Tokio bridge. No UI dependencies. |
+| `rouge-macros` | `view!` and `#[component]`. |
+| `rouge-widgets` | The component set: tokens, typography, bundled fonts, icons, materials, controls, menus, pickers, panels; optional Markdown and syntax views. Built only on the public API. |
+| `rouge-theme` | Renderer-neutral colours, `UiPalette` and `MarkdownPalette`, semantic control states, picker state and fuzzy matching. |
+| `rouge-syntax` | Tree-sitter highlighting and symbol tags, incremental by appending. |
+| `rouge-markdown` | Renderer-neutral Markdown documents and append streams. |
 
-### 4.2 Data flow
+There is no `rouge-text`, `rouge-interop`, `rouge-web` or `rouge-platform` crate: text lives in `rouge-core`, interop in `rouge-render`, and both hosts in `rouge`. `rouge-devtools` and `rouge-webview` are planned and do not exist.
 
-```
- signal.set()
-     |
-     v
- reactive graph  --(binding effects run)-->  element tree (retained)
-                                                 |  dirty flags per node:
-                                                 |  LAYOUT / PAINT / COMPOSITE
-                                                 v
-                          +----------- frame (only if something is dirty) -----------+
-                          |  1. flush effects                                        |
-                          |  2. layout     (taffy, dirty subtrees only)              |
-                          |  3. paint      (rebuild draw lists of dirty layers only) |
-                          |  4. commit     (layer property + draw list deltas)       |
-                          |  5. composite  (tick animations, draw layers, effects)   |
-                          |  6. present                                              |
-                          +----------------------------------------------------------+
-```
+### 4.2 The frame
 
-The key property is that each stage is skipped when its inputs are clean:
+Every window owns one `Ui`: an element tree, the compositor it owns, a text system, a paint cache with the glyph atlas, and a patch queue. `Ui` is the platform-independent boundary that hosts and tests drive.
 
-| Change | Reactive | Layout | Paint | Composite |
+**Patches.** A binding effect runs in the reactive graph, which cannot borrow the tree, so it pushes a typed `Patch` (style, variant, text, content, layer property, effect, scroll, image, canvas, edit, focus, motion, or a `Build` closure for structural changes) onto the window's queue: a single-threaded `Rc<RefCell<VecDeque>>`. `Ui` applies patches in FIFO order. There is no separate commit or command buffer: applying a patch mutates the tree, and the tree calls its compositor directly.
+
+**`Ui::step`** is one linear function, run by `Ui::update` (wall clock) or `Ui::update_at` (a test clock):
+
+1. Advance the caret blink phase; repaint the caret only when the phase flips.
+2. **Flush**: poll ready tasks, then apply every queued patch inside one batch in the window's root scope, settle focus, apply a changed zoom; repeat until the queue is empty. Publish the effective key bindings.
+3. **Animate**: if the compositor is animating, tick it by the time since the last tick.
+4. **Publish**: copy compositor motion values into their signals, and publish geometry observers (`track_size`, `track_bounds`, `track_paint_region`, editor selections, scroll states). These writes run effects, which push patches.
+5. Flush.
+6. **Layout**, if anything is layout-dirty: taffy, then resolve element bounds into layer-relative frames, then refresh hover under the unchanged pointer.
+7. Publish, then flush.
+8. **Layout again**: the one feedback re-layout per frame (counted as `FrameStats::relayouts`), for observers whose writes changed layout.
+9. Publish. Patches this produces wait for the next frame; `needs_frame` stays true while the queue is non-empty.
+10. **Paint**: rebuild the draw lists of dirty layers and hand them to the compositor.
+11. **Place surfaces**: compute each surface element's placement and queue changes for the registry.
+
+Input methods (`pointer_moved`, `key_down`, `scroll`, `touch`, ...) flush before and after dispatching, and handlers run inside a batch, so a handler's writes land as one set of patches.
+
+**`Driver::draw`** (`crates/rouge/src/driver.rs`) is the host side of a frame, shared by both hosts: `ui.update()`, acquire the swapchain texture, `ui.sync_surfaces(&mut surfaces)`, latch surfaces for the predicted present time, `ui.frame()` (the compositor's scene for this frame plus the atlas), `Renderer::render`, present, then `surfaces.presented(...)` and `surfaces.maintain()`.
+
+### 4.3 What a change costs
+
+| Change | Reactive work | Layout | Paint | Composite |
 |---|---|---|---|---|
-| Compositor animation tick (transform, opacity, effect uniform) | no | no | no | yes |
-| Scroll | no (unless virtualized range changes) | no | no | yes |
-| Surface presents a new frame (web view repaint, video frame) | no | no | no | yes |
-| Background color signal changes | one effect | no | one layer | yes |
-| Text content signal changes | one effect | subtree | one layer | yes |
-| Nothing | no | no | no | no frame |
+| Compositor animation tick (transform, opacity, a layer's background or radius, effect values) | none | no | no | yes |
+| Scroll (wheel, drag, fling) | publishes the scroll state if observed | no, unless a virtual list's range changes | no | yes |
+| A surface presents a frame | none | no | no | yes |
+| Background colour of an element without a layer | one binding effect | no | its layer | yes |
+| Text content | one binding effect | the leaf and its ancestors | its layer | yes |
+| Theme switch | one memo per role; effects only for roles that changed | no | affected layers | yes |
+| Nothing | none | no | no | no frame |
 
 ## 5. Reactivity (`rouge-reactive`)
 
@@ -120,68 +148,68 @@ The key property is that each stage is skipped when its inputs are clean:
 
 ```rust
 let count = signal(0);                          // Signal<i32>, Copy
-let double = memo(move || count.get() * 2);     // Memo<i32>, Copy, lazy + cached
+let double = memo(move || count.get() * 2);     // Memo<i32> (a ReadSignal), lazy and cached
 effect(move || println!("{}", double.get()));   // re-runs when double changes
 
 count.set(1);
 count.update(|c| *c += 1);
-count.with(|c| ...);          // borrow without cloning
+count.with(|c| *c > 0);       // borrow without cloning
 count.get_untracked();        // read without subscribing
 batch(|| { a.set(1); b.set(2); });  // one flush
 ```
 
-- `Signal<T>`, `Memo<T>`, `ReadSignal<T>`, and `WriteSignal<T>` are `Copy` generational ids into an arena. No `clone()` when moving into closures.
-- Dependency tracking is automatic and dynamic: dependencies are re-collected on each run of a memo or effect.
-- `T: 'static`. `get()` requires `T: Clone`; `with()` does not.
-- `signal.select(|state| part)` is a memo over one part of a larger value: dependents re-run only when that part changes.
-- `stored(value)` returns `Stored<T>`, a `Copy` scope-owned handle like a signal that never subscribes its readers. It lets application handles that bundle state stay `Copy`.
-- `Callback<Args = ()>` is a `Copy`, scope-owned event handler. It converts from `Fn()` (`Callback`) or `Fn(T)` (`Callback<(T,)>`) closures, defaults to a no-op, and does nothing once its scope is disposed. It runs untracked with the scope that created it as the owner, so signals and tasks it creates live as long as that scope. A closure converted into a one-argument callback needs its parameter type written out.
-- `watch(source, |value, previous| ...)` runs a handler whenever a memo over `source` changes, starting immediately with `previous` as `None`. The handler is untracked and owned by the enclosing scope, so tasks it spawns are not cancelled by the next change.
-- `emitter::<T>()` returns a `Copy` `Emitter<T>`. `subscribe` registers a listener owned by the current scope, which stops hearing events once that scope is disposed; `emit` calls every live listener.
-- `interval(period)` returns a `ReadSignal<u64>` that ticks every period while its scope is alive.
-- `Scope::current()` captures the current owner, and `run_in(owner, f)` runs code later with it as the owner, skipping the call once it is disposed.
+- `Signal<T>` and `ReadSignal<T>` (`Memo<T>` is an alias) are `Copy` ids into a slotmap arena. `Signal` derefs to `ReadSignal`. `get` needs `T: Clone`; `with` does not. `set_if_changed` writes only when the value differs.
+- Dependencies are collected dynamically on every run of a memo or effect.
+- `signal.select(|state| part)` is a memo over one part of a larger value.
+- `stored(value)` returns a `Copy`, scope-owned `Stored<T>` that never subscribes readers, so handles that bundle state stay `Copy`.
+- `Callback<Args = ()>` is a `Copy`, scope-owned handler converted from `Fn()` or `Fn(T)` (as `Callback<(T,)>`). It defaults to a no-op, does nothing once its scope is disposed, and runs untracked with its creating scope as owner.
+- `watch(source, |value, previous| ...)` runs a handler when a memo over `source` changes, starting immediately with `previous` as `None`.
+- `emitter::<T>()` returns a `Copy` `Emitter<T>` whose scope-owned listeners hear `emit`.
+- `interval(period)` returns a `ReadSignal<u64>` that ticks while its scope lives; `sleep(duration)` is a future.
+- `Scope::current()` captures the owner, and `run_in(owner, f)` runs code later under it, skipping the call once it is disposed.
 
-### 5.2 Propagation algorithm
+### 5.2 Propagation
 
-Push-pull with graph coloring (the approach used by Reactively and Leptos):
+Push-pull with graph colouring (the approach of Reactively and Leptos):
 
-1. A write marks direct dependents *dirty* and transitive dependents *check*.
-2. Effects reachable from the write are queued.
-3. On flush, each queued effect pulls its sources; a memo recomputes only if a source actually changed value (`PartialEq` short-circuit).
+1. A write marks direct subscribers *dirty* and transitive subscribers *check*, and queues reachable effects.
+2. On flush, each queued effect pulls its sources; a memo recomputes only if a source actually changed (`PartialEq`).
+3. A rerun keeps the dependencies it reads again and unlinks only those it dropped. Subscribers and children are insertion-ordered sets, so unlinking is constant time.
 
-This is glitch-free (no effect sees an inconsistent state) and each node runs at most once per flush.
+This is glitch-free and runs each node at most once per flush.
 
 ### 5.3 Scheduling
 
-- Inside a batch, writes do not run effects; they flush when the outermost batch ends. Event handlers run inside a batch, so a handler's writes flush together.
-- Outside a batch, a write flushes immediately after it. Writes made by an effect or memo while it runs are deferred until it finishes.
-- Either way, effects have always run before the next layout.
-- A write during flush is queued into the same flush, with a loop limit that panics in debug builds and reports the cycle.
+- Inside a batch, writes do not run effects; they flush when the outermost batch ends.
+- Outside a batch, a write flushes immediately. A write made while an effect or memo runs is deferred until it finishes.
+- A flush that does not settle in 1,000 rounds fails a debug assertion naming the cause and stops.
+- Effects always run before the next layout (section 4.2).
 
 ### 5.4 Ownership and disposal
 
-- Every signal, memo, and effect is owned by the **scope** that was current when it was created.
-- Scopes form a tree mirroring the UI structure: app root, component, each branch of `show`, each row of `each`.
-- Disposing a scope frees its nodes, runs `on_cleanup` callbacks, and removes its elements.
-- Using a disposed handle panics in debug with the creation location (`#[track_caller]`), and `try_get` / `try_set` are available. In release it is a no-op for writes and a panic for reads.
+- Every signal, memo, effect, task and scope is owned by the scope that was current when it was created. Scopes form a tree mirroring the UI: window root, component, each `show` branch, each `each` row.
+- Disposing a scope frees its nodes, runs `on_cleanup` callbacks, cancels its tasks and removes its elements.
+- Using a disposed handle panics in debug builds with its creation site (`#[track_caller]`). In release, writes are ignored and reads panic. `try_get`, `try_set` and `try_update` never panic.
 - State that must outlive the place it was created is created in an ancestor scope and passed down, or provided through context.
 
-### 5.5 Threading and async
+### 5.5 Runtime, threading and async
 
-- The graph is single-threaded and lives on the UI thread. Handles are `!Send`.
-- The graph is owned by an explicit `Runtime`. `runtime.enter()` returns a guard that makes it current on the calling thread; signals, effects and scopes panic when none is entered. Dropping the runtime disposes everything it owns. `App` creates one and enters it for the duration of `run()`; headless users of `Ui` create and enter their own.
-- `spawn(async { ... })` runs a future on the UI-thread executor, so it can touch signals directly between awaits.
-- `spawn_blocking(|| work)` runs synchronous work off the UI thread and returns a `Task` for the result: on Tokio's blocking pool when a Tokio runtime is set, otherwise on a new OS thread.
-- `resource(move || id.get(), |id| async move { fetch(id).await })` gives an async-derived signal with loading/ready/error state, re-fetching when its source changes and cancelling stale requests. `refetch` while a fetch is running lets it finish and then fetches once more, however many times it was called.
-- `signal.sender()` returns a `Send` handle whose `set` posts to the UI thread, for integration with foreign threads and channels.
+- The graph is single-threaded and owned by an explicit `Runtime`. `runtime.enter()` returns a guard that makes it current on the thread; reactive calls panic when none is entered. Dropping the runtime disposes everything. The native `App` creates one runtime for all windows; in the browser each mounted canvas has its own; tests create and enter their own.
+- `spawn(future)` runs a future on the runtime's UI-thread executor, so it can touch signals between awaits. It returns a `Task<T>` that can be awaited for `Result<T, TaskError>`. A task belongs to the scope that spawned it: dropping the handle does not cancel it unless `cancel_on_drop()` was called.
+- `spawn_blocking(work)` (native only) runs synchronous work off the UI thread: on Tokio's blocking pool when a Tokio handle is set, otherwise on a new OS thread.
+- With the `tokio-rt` feature, `set_tokio(handle)` (or `App::tokio`) enables `spawn_tokio(future)`. Cancelling the task or disposing its scope aborts the Tokio future.
+- `resource(source, fetch)` gives an async-derived value with `get`, `loading` and `refetch`. It refetches when `source` changes; the previous fetch's task is disposed with the effect run that spawned it.
+- `signal.sender()` returns a `Send` handle whose writes are posted to the UI thread.
 
 ### 5.6 Context
 
-`provide(value)` and `use_context::<T>()` look up the scope tree. Used for theme, focus manager, window handle, and app services.
+`provide_context(value)`, `use_context::<T>()` and `expect_context::<T>()` look up the scope tree. `Ui` provides the window handle, window size, zoom, theme and keymap at the root.
 
 ## 6. View API (`rouge-core`)
 
 ### 6.1 Example
+
+The builder:
 
 ```rust
 use rouge::prelude::*;
@@ -193,295 +221,329 @@ fn counter() -> impl View {
     div()
         .flex()
         .col()
-        .gap(12.)
-        .p(16.)
-        .rounded(12.)
-        .backdrop(Glass::new().blur(24.).refraction(0.4))
+        .gap(12.0)
+        .p(16.0)
+        .rounded(12.0)
+        .backdrop(Glass::new().blur(24.0).refraction(0.4))
         .child(
             text(move || format!("Count: {}", count.get()))
-                .size(18.)
-                .color(theme.text),
+                .text_size(18.0)
+                .color(theme.text()),
         )
         .child(view! {
             <button id="increment" label="Increment" on_click={move || count.update(|c| *c += 1)}/>
         })
-        .child(show(
-            move || count.get() > 5,
-            || text("That's a lot").color(Color::RED),
-        ))
+        .child(show(move || count.get() > 5, || text("That's a lot").color(Color::RED)))
 }
 
-fn main() {
-    App::new().window(WindowOptions::default(), counter).run();
+fn main() -> Result<(), rouge::AppError> {
+    App::new().window(WindowOptions::default(), counter).run()
 }
 ```
 
-### 6.2 Components
+The same view in markup:
 
-- A component is a function that returns `impl View`. It runs exactly once, inside its own scope.
-- Props are plain function arguments. `#[component]` makes the function usable as a tag in `view!`, where each attribute naming a parameter becomes that argument and every other attribute is a method call on the returned view.
-- Parameters may be left out of a tag when they have a fallback: an `Option<T>` parameter becomes `None` (and a given value is wrapped in `Some`), and `#[prop(default)]` uses `Default::default()`. A bare attribute naming a defaulted `bool` parameter sets it to `true`; for any other parameter a bare attribute is shorthand for a same-named variable.
-- `#[prop(into)]` converts the given value with `Into`, and `#[prop(reactive)]` accepts a value, signal or closure for a `Prop<T>` parameter.
-- `name?=option` passes an `Option` straight to an optional parameter, or calls a method only when the option is `Some`. `when:method=condition` and `when:method=(condition, argument)` call a method only when the condition holds.
-- Builder structs that implement `View` remain the right shape for views that hand out a handle before they are built.
-- Reactive props are passed as signals or closures: `fn avatar(user: Signal<User>, size: impl IntoProp<f32>)`.
-- `AnyView` provides type erasure for heterogeneous children and recursive components.
+```rust
+#[component]
+fn counter() -> impl View {
+    let count = signal(0);
+    let theme = Theme::current();
+    view! {
+        <div flex col gap=12.0 p=16.0 rounded=12.0 backdrop={Glass::new().blur(24.0).refraction(0.4)}>
+            <text text_size=18.0 color={theme.text()}>"Count: {count}"</text>
+            <button id="increment" label="Increment" on_click={move || count.update(|c| *c += 1)}/>
+            <show when={move || count.get() > 5}>
+                <text color=Color::RED>"That's a lot"</text>
+            </show>
+        </div>
+    }
+}
+```
+
+### 6.2 Components and `view!`
+
+- A component is a function returning `impl View`. It runs once, inside its own scope. Props are function arguments.
+- `#[component]` makes a function usable as a `view!` tag. Each attribute naming a parameter becomes that argument; every other attribute is a method call on the returned value. A parameter named `children` receives the tag's children (lazily, as a closure, when its type is a closure).
+- Parameters can be omitted when they have a fallback: `Option<T>` becomes `None` (a given value is wrapped in `Some`), and `#[prop(default)]` uses `Default::default()`. `#[prop(into)]` converts with `Into`; `#[prop(reactive)]` accepts a value, signal or closure for a `Prop<T>`.
+- A bare attribute that names a parameter passes the same-named variable, or `true` for a defaulted `bool`; one that names no parameter calls a zero-argument method (`flex`, `col`).
+- `name?=option` passes an `Option` to an optional parameter, or calls a method only when it is `Some`. `when:method=condition` and `when:method=(condition, argument)` call a method conditionally. `hover:bg=value` (any variant namespace) groups calls into `.hover(|s| s.bg(value))`. `let:name` names the argument a lazy child closure receives (`<each ... let:item>`).
+- A string literal child with `{holes}` becomes a reactive `format!` closure. Inside `view!`, an `if` or `match` child erases its arms to `AnyView`; an `if` without `else` is an optional child.
+- Builder structs that implement `View` remain the right shape for views that hand out a handle before they are built. `AnyView` erases types for heterogeneous children and recursion.
 
 ### 6.3 Reactive props
 
-Every style and content method takes `impl IntoProp<T>`, implemented for:
+Every style and content method takes `impl IntoProp<T, M>`, implemented for a plain value (static: written once, no effect), `Signal<T>`, `ReadSignal<T>`/`Memo<T>`, closures `Fn() -> T`, and `Prop<T>`. The marker parameter `M` keeps the closure and value impls coherent and is invisible at call sites. Conversions go through `PropFrom` (so `f32` and `i32` become pixel lengths, `u32` hex becomes a colour, `&str` becomes `String`, and any `ShaderEffect` becomes an `AnyEffect`); a blanket `Into` bound made bare float literals ambiguous.
 
-- a plain `T` (static: written once, no effect created),
-- `Signal<T>`, `Memo<T>`, `ReadSignal<T>`,
-- closures `Fn() -> T`.
-
-A reactive prop creates one **binding effect** that writes the new value into the node and sets the narrowest dirty flag for that property (section 7.2). Static props cost nothing at runtime beyond the initial write.
-
-Coherence for the closure blanket impl alongside value impls is a known Rust friction point. If it cannot be expressed cleanly for all `T`, the fallback is a marker-type parameter (`IntoProp<T, M>`), which is invisible at call sites.
+A reactive prop creates one binding effect. Its first run happens during build and writes the initial value into the element spec; later runs push a patch.
 
 ### 6.4 Styling
 
-- Typed tailwind-style methods: `.flex()`, `.grid()`, `.w(px(200.))`, `.w_full()`, `.px(4.)`, `.gap(8.)`, `.rounded(8.)`, `.bg(color)`, `.border(1., color)`, `.shadow(Shadow::md())`, `.opacity(0.8)`.
-- State variants take a closure over a style refinement: `.hover(|s| s.bg(theme.surface_hover))`, `.active(...)`, `.focus(...)`, `.focus_visible(...)`, `.disabled(...)`.
-- `Style` is a first-class value: build it, store it, merge it with `.style(my_style)`. Widgets expose named style slots this way.
-- Theme is a struct of signals provided through context, so a theme switch updates only the bound properties. It wraps the renderer-neutral `rouge_theme::UiPalette`, which lists the colour roles once and is shared with terminal frontends: `Theme` is `UiPalette<Signal<Color>>` behind `Deref`, `Theme::provide`, `new` and `set` accept a palette of `Rgba` or `Color`, and `get`/`palette` return a `Palette` (`UiPalette<Color>`). `UiPalette::light()` and `dark()` are the built-in palettes; `control_style`, `selection_style` and `notice_style` resolve component states from it. Metrics are not theme roles: radii, sizes and spacing are `rouge_widgets::tokens`, and type sizes are typography presets.
-- `theme! { pub struct Brand from BrandPalette { ink: Color, ... } }` declares an application's own tokens: a palette of plain values and a `Copy` struct of signals with `provide`, `current`, `set`, `get` and `palette`.
-- `set_design_unit(Some(16.0))` makes every bare number passed to a length, radius or row-height prop a design unit that scales with the root font size (`8.0` becomes `0.5rem`). Values that are already pixels, such as measured bounds, must then be passed as `px(value)`.
-- `Typography` is a preset of font, size, line height and weight applied with `.typography(preset)`. `styles! { pub trait Shorthands { caption(target) => target.typography(CAPTION); } }` declares an application's own zero-argument style methods, usable as bare attributes in `view!`.
-- `.on_press(f)` makes an element a button: focusable, pointer cursor, and activated by click, Enter or Space, consuming the event. `.track_interaction(signal)` reports hover, press and focus as one `Interactions` value for styling that state variants cannot express, such as recolouring a child.
-- There is no cascade and no selector engine.
+- Typed tailwind-style methods on the `Styled` trait: `.flex()`, `.grid()`, `.w(200.0)`, `.w_full()`, `.px(4.0)`, `.gap(8.0)`, `.rounded(8.0)`, `.bg(color)`, `.border(1.0)`, `.border_color(color)`, `.shadow(BoxShadow::md())`, `.overflow_hidden()`, `.invisible()`. Every method records a `Declaration` through `Styled::declare(Prop<Declaration>)`. Layout declarations go to taffy.
+- **Lengths are logical pixels.** Bare numbers and `px(value)` mean the same thing; `pct(value)` is a percentage of the parent; `auto()` lets layout decide. Text sizes and radii are pixel numbers; line height is a multiple of the font size. There is no rem and no design unit.
+- **Zoom.** `zoom() -> Signal<f32>` (default 1) is a per-window zoom like browser zoom. `Ui::scale()` is the device scale times the zoom; the logical window (`window_size()`) is the platform size divided by the zoom; painting happens at the combined scale so text and paths stay crisp. Layout, hit testing and pointer positions are in the zoomed logical space; hosts divide physical pointer positions by `Ui::scale()` and multiply the IME caret area by it. `rouge_widgets::InterfaceSize` drives the zoom from a user-facing size.
+- **State variants are recorded deltas.** `.hover(|s| s.bg(theme.surface_hover()))`, `.active`, `.focus`, `.focus_visible`, `.disabled` and `Div::group_hover(name, ...)` run their closure once at build against a `StyleDelta` recorder and store a sparse list of declarations, applied over the base style while the state holds. Reactive values inside a variant stay live. An element keeps a boxed copy of its base taffy style only if a variant changes layout. `.group(name)` names the ancestor whose hover a `group_hover` follows.
+- **Inherited text properties** are the only cascade: `text_color`, `text_size`, `font`, `font_weight`, `italic` and `line_height` can be set on any element, and each text leaf resolves each field from the nearest declaration, then the theme's text colour or the defaults. A colour change repaints inheriting leaves without layout; a typography change clears only affected leaf layouts.
+- **Theme** is one `Signal<Palette>` provided through context (`Palette = UiPalette<Color>`). `Theme` derefs to `ReadSignal<Palette>`, and each role is a method returning a memo (`theme.accent()`), so a theme switch updates only properties whose role changed. `Theme::provide`, `new` and `set` accept a palette of `Rgba` or `Color`; `control_style`, `selection_style` and `notice_style` resolve component states. `Ui` provides `UiPalette::light()` at the root. Metrics are not theme roles: they are `rouge_widgets::tokens` constants and typography presets.
+- `Typography` is a preset of font, size, line height and weight applied with `.typography(preset)`. Application shorthands are a plain extension trait over `Styled` with a blanket impl (as `rouge_widgets::UiStyles` provides `.body()`, `.caption()`), usable as bare attributes in `view!`.
+- `.on_press(f)` makes an element a button: focusable, pointer cursor, activated by click, Enter or Space. `.track_interaction(signal)` reports hover, press and focus as one `Interactions` value for styling variants cannot express.
+- `styled!` forwards `Styled` to a wrapped element; it is a helper for the workspace's own view types, not an application API.
 
-### 6.5 Control flow
+### 6.5 Control flow and fragments
 
-Because components run once, structure changes go through reactive helpers, each managing child scopes:
+Components run once, so structure changes go through helpers that each manage child scopes:
 
-- `show(cond, || view)` and `show_else(cond, || a, || b)`: mount and dispose a branch.
-- `each(items, |item| key, |item| view)`: keyed list. Reconciliation is by key over the *data*, so rows are moved, created, or disposed; surviving rows are untouched. Each row receives its item as a signal so in-place updates stay fine-grained.
-- `switch(key, |key| view)`: re-mounts when the memoized key changes. Only the key is tracked; the view is built untracked, so reads made while constructing it never rebuild it.
-- `dynamic(move || -> AnyView)`: escape hatch that re-runs a closure and replaces its subtree.
+- `show(when, || view)` mounts and disposes a branch; `.otherwise(|| view)` adds an else branch.
+- `each(items, |item| key, |item| view)` is a keyed list. Reconciliation is by key over the data: rows are moved, created or disposed, and surviving rows are untouched. Each row receives its item as a `ReadSignal` so in-place updates stay fine-grained.
+- `switch(on, |value| view)` remounts when the memoized value changes; the view is built untracked.
+- `dynamic(|| view)` re-runs a closure and replaces its subtree. Reusing the same `FocusHandle`, `VirtualListHandle` or scroll-state signal across replacements restores focus, caret, selection, history and scroll offset.
+- `overlay(|| view)` portals content to the window's overlay root.
 
-Plain Rust `if` and `for` work for structure that is static after construction.
-
-`()` and `Option<impl View>` are views, so an absent child needs no placeholder element. Inside `view!`, an `if` or `match` written as a child erases its arms to `AnyView`, and an `if` without `else` yields an optional child. `Apply::when` and `Apply::when_some` do the same job for builder chains.
+`View::build` builds into the current parent rather than returning an element. Each helper owns a **fragment**: a contiguous run of children in its real parent, recorded in a side table, with no element or layout node of its own. Fragments nest (each `each` row is one), keep their place among siblings as they grow and shrink, and are what removal, reordering and enter/exit transitions act on. `()`, `Option<impl View>` and `Vec<impl View>` build zero or more children in place, so an absent child needs no placeholder. `Apply::when` and `Apply::when_some` do the same for builder chains. Plain `if` and `for` work for structure that is static after construction.
 
 ### 6.6 Element set
 
-`div`, `text`, `rich_text`, `image`, `svg`, `canvas` (custom draw callback with a painter API), `scroll`, `virtual_list`, `surface` (externally produced GPU content, section 9.6), and `overlay` (portal to the window's overlay root for popovers, menus, and tooltips).
+`div`, `text`, `rich_text`, `image`, `icon` (a filled or stroked `Path`, including `Path::svg` path data), `canvas` (a draw callback with a `Painter`), `editable`, `scroll`, `virtual_list`, `surface` (section 12) and `overlay`.
 
-`webview` is not in the core set. It is built on `surface` and ships in `rouge-webview` (section 15).
+## 7. Element tree and layout
 
-## 7. Element tree, layout, and invalidation
+### 7.1 Elements
 
-### 7.1 Retained tree
+- Elements live in a slotmap arena. Each holds its style (plus a boxed resolved style while a variant applies), a taffy node, a content `Kind` (`Div`, `Text`, `Image`, `Canvas` or `Surface`, with any payload boxed), up to two layers (its own, and a scroll container's content layer), its children, bounds, interaction states and flags. Everything rarely used (listeners, actions, key bindings, focus, scroll, variants, groups, observers, test ids, text hit callbacks) lives in one optional boxed `Extras`.
+- The tree changes only when `Ui` applies patches. Nothing is rebuilt per frame.
 
-- Elements live in a slotmap arena; each has a taffy node, a resolved style, event handlers, optional text layout, and a reference to the layer it paints into.
-- The tree is mutated only by binding effects and control-flow helpers. Nothing is rebuilt per frame.
+### 7.2 Dirty levels
 
-### 7.2 Dirty classes
+The tree keeps one dirty level, `None < Composite < Paint < Layout`, plus a dirty flag per layer. A patch sets the narrowest level:
 
-Each style property is statically classified, and a write sets the narrowest flag:
-
-| Flag | Properties | Consequence |
+| Level | Caused by | Consequence |
 |---|---|---|
-| `LAYOUT` | size, padding, margin, gap, flex/grid properties, text content, font | taffy relayout of the affected subtree, then repaint |
-| `PAINT` | background, border, corner radius, text color, shadow | rebuild the draw list of the owning layer |
-| `COMPOSITE` | transform, opacity, clip, effect parameters, scroll offset | update a layer property; no layout, no paint |
+| `Layout` | sizes, spacing, flex and grid properties, position, text content and typography, structure | taffy relayout, then repaint of layers whose content moved |
+| `Paint` | background, border colour, radius and shadow of an element without a layer, text colour, canvas output | rebuild the draw lists of the owning layer only |
+| `Composite` | layer transform and opacity, a layer-backed element's background and radii, effect values, scroll offsets, motion values | update compositor state; no layout, no paint |
 
 ### 7.3 Layout
 
-- taffy drives flexbox, grid, and block layout. Text and images are measured leaves (`measure` functions backed by Parley and intrinsic image size, with measurement caching).
-- Taffy's own dirty tracking plus cached layouts confines relayout to affected subtrees.
-- Layout results (bounds per element) are stored in window-space-independent form: positions relative to the owning layer, so moving a layer does not invalidate its contents.
-- Transforms never affect layout.
+- taffy drives flexbox, grid and block layout. Text, images and measuring canvases are measured leaves.
+- taffy's own caching confines relayout to affected subtrees.
+- Bounds are resolved into frames relative to the owning layer, so moving a layer never invalidates its contents. Transforms never affect layout.
+- Layer origins and scroll offsets snap to device pixels so text stays sharp; animated translations do not snap.
 
-### 7.4 Scrolling
+### 7.4 Scrolling and virtual lists
 
-- A `scroll` element owns a layer; its scroll offset is a compositor property. Scrolling changes no element, runs no effect, and repaints nothing.
-- Scroll offset is observable as a signal for code that wants it (sticky headers, virtualization), updated at most once per frame.
-- `virtual_list` derives its visible range from the offset with a memo, so rows mount and dispose only when the range actually changes, with overscan to keep that off the critical path.
-- Momentum and rubber-banding run in the compositor's animation engine.
+- `scroll()` returns a `Div` whose children live in a content layer; its offset is a compositor property. Scrolling changes no element, runs no binding effect and repaints nothing. It scrolls both axes and has no scrollbars (`rouge_widgets::scroll_view` adds them).
+- `.scroll_state(signal)` attaches a `Signal<ScrollState>` (offset, viewport, content) that is published after layout and accepts programmatic offsets. A scroller at its limit passes the wheel to its nearest scrollable ancestor.
+- `Div::scroll_linked(state, ScrollLinked::Sticky { lo, hi } | ScrollLinked::Linear { .. })` moves a layer in the compositor relative to a scroll container, so sticky headers and scrollbar thumbs cost no reactive work per frame.
+- `virtual_list(count, row_height, row)` mounts only rows in the visible range plus overscan, derived from the offset. Heights are uniform (constant time) or per index (a prefix index updated in logarithmic time). `.measure_rows(revision)` lays rows out at natural height and caches measurements; `.row_identity(|i| RowKey::new(id, revision))` keeps identity and the top visible item stable across data changes; `.follow_end(signal)` sticks to the end; `.track_rows(signal)` reports the visible range. `VirtualListHandle` offers `scroll_to_row(index, Align)`, `scroll_to`, `top_row`, `row_top` and `row_bounds`, all computed on demand rather than published per frame.
+- Wheel deltas scroll and clamp. Trackpad gestures with phases go through `Ui::scroll_drag`, which follows past the limits with resistance, and `Ui::scroll_release`, which flings from the measured velocity with decay and bounces off the limits; the native host swallows the OS's own momentum deltas after a lift. Touch pans use the same path.
 
-## 8. Rendering (`rouge-render`)
+## 8. Text (`rouge_core::text`)
 
-### 8.1 Primitives
+- **Parley** shapes and lays out: bidi, line breaking with a break-word fallback for overlong tokens, font fallback, system font discovery through fontique on native, rich spans, tab stops and a hanging `WrapIndent`. The browser build has no system fonts; apps add font bytes (`App::fonts`, `rouge_widgets::bundled_fonts`).
+- **swash** rasterizes glyphs into the alpha atlas with four horizontal subpixel buckets and grayscale antialiasing.
+- **One shaping cache per window.** `TextSystem::layout(text, style, max_width)` returns a `TextLayout` holding an `Rc` to an already broken and aligned layout. The key holds only what affects shaping: content, font properties, alignment, wrapping, tab size, span boundaries and the font fields of spans, never colours. Span colours and decorations are a palette resolved at paint. Each entry keeps up to four line-broken widths; two generations of 4,096 entries replace a full clear. Adding a font clears the cache. `TextStats` counts shapes, line-breaking passes and hits.
+- `text` and `rich_text(content, spans)` are measured leaves. Overlapping spans compose per field; `on_range_hover` and `on_range_click` report the byte under the pointer.
+- **Editing** is the core `editable(signal)` element over Parley's cursor and selection: movement by character, word, line and document, IME composition, clipboard, grouped undo and redo, a bidirectional selection signal in UTF-8 byte offsets, min and max rows with caret scrolling, placeholder, submit on Enter, and a caret that blinks for ten seconds after activity. `rouge_widgets::text_input` wraps it (`multiline` makes it a text area).
+- **Canvas text.** `Painter` draws `TextRun`s (clipping, wrapping, continuation marks, right alignment, hit tags, names) through the same cache. `Canvas::measure` makes a canvas a measured leaf sized from its text in the same layout pass, which is the supported route for dense content such as diffs and code.
 
-All primitives are instanced quads with analytic (SDF) coverage in the fragment shader, in the style of gpui's renderer:
+## 9. Rendering (`rouge-render`)
+
+### 9.1 Primitives
+
+One instanced pipeline (`primitive.wgsl`) draws every primitive with analytic coverage in the fragment shader, in the style of gpui:
 
 | Primitive | Notes |
 |---|---|
-| Quad | Rounded rect with per-corner radii, solid / linear / radial gradient fill, border, optional squircle (continuous corner) shape |
-| Shadow | Analytic blurred rounded-rect (no offscreen pass) for drop and inner shadows |
-| Glyph run | Alpha-mask atlas for text, color atlas for emoji |
-| Image | Sampled quad with corner clipping; decode and upload off the UI thread |
-| Path | Tessellated with lyon into a mesh; cached per path + scale. MSAA or coverage-based AA for edges |
-| Underline / strikethrough | Including wavy |
-| Layer | A texture or sub-layer drawn with transform, opacity, and optional effect |
-| Surface | An external texture sampled in place by a surface shader on the effect prelude: layer transform, rounded-rect clipping, region and row-origin mapping |
+| Quad | Per-corner radii, per-edge borders, solid fill |
+| Shadow | Analytic blurred rounded rectangle, no offscreen pass |
+| Glyph | Alpha mask from the atlas, tinted |
+| Image | RGBA or alpha-mask texture, source rect, tint, rounded clip |
+| Path | Rasterized on the CPU by zeno into an alpha mask at device scale, cached per path, stroke, scale and subpixel offset, and drawn as an image |
 
-### 8.2 Draw lists
+Every instance carries an axis-aligned clip rectangle. Underlines and strikethroughs are quads. A layer-backed element's background and radii are not in its instances: a "backing" quad reads them from the layer's per-draw record, so animating them uploads nothing.
 
-- Painting a layer produces a **draw list**: primitives sorted by z-order and batched by pipeline into GPU instance buffers.
-- Draw lists are retained per layer. A layer whose content is clean is not repainted; its existing buffers are reused as-is.
-- Clipping uses scissor rects where axis-aligned and SDF clip (rounded-rect clip in the fragment shader) for rounded content masks, avoiding stencil in the common case.
+### 9.2 Buffers
 
-### 8.3 Atlases and resources
+- **Draw lists.** Painting a layer produces one `DrawList` per paint-order segment (segments separate nested layers). A list has an id and a revision.
+- **One shared instance buffer.** Lists are uploaded into power-of-two slots keyed by list id. An unchanged revision uploads nothing. Slots idle for 600 frames are dropped and the buffer is compacted when less than half of it is live.
+- **Paged uniform records.** Per-draw data (layer transform, opacity, placement, fill, radii, and an effect's mapping and parameters) is appended each frame to 16 KiB pages and bound as a uniform buffer with dynamic offsets. 16 KiB is WebGL2's maximum uniform block, and the renderer uses no storage buffers and no compute, so it fits WebGL2.
+- Hash maps use FxHash. Effect pipelines are keyed by their WGSL source, one pipeline per distinct shader.
 
-- Glyph atlas keyed by (font, glyph id, size, subpixel offset bucket); shelf-packed, multiple pages, LRU eviction.
-- Image cache with size-aware eviction; mip generation for downscaled images.
-- Texture pool for offscreen targets (layer caches, blur chains), reused across frames.
+### 9.3 Atlas, images and caches
 
-### 8.4 Color and blending
+- One alpha-mask glyph atlas per window, 2048 pixels wide, shelf-packed, growing to 8192 rows; only dirty rows are uploaded.
+- Images upload once per `ImageData` id and are evicted after 600 idle frames or, least recently used first, above a 256 MiB budget. Draws batch per run of same-texture primitives. `image(source)` decodes off the UI thread on native (`spawn_blocking`) and on the main thread in the browser.
+- Rasterized layers and backdrops have cached textures, described in section 10.
 
-- Colors are specified in sRGB; the public `Color` type supports sRGB, Display P3, and OKLCH constructors.
-- Compositing blends in gamma (sRGB-encoded) space by default so results match CSS and design tools. Effects that need linear light (blur, glass) convert inside their shaders.
-- Wide gamut (P3) surface where available on macOS.
+### 9.4 Colour and blending
 
-### 8.5 Frame pacing
+- `Color` is RGBA in sRGB-encoded floats (`Color::rgb(0xRRGGBB)`, `from_rgba8`, `hsl`, `with_alpha`).
+- The swapchain uses a non-sRGB format and compositing blends sRGB-encoded values, matching CSS and design tools. Surface buffers follow the same rule (section 12).
 
-- Frames are produced only when a dirty flag is set or an animation is active.
-- Presentation is vsynced (`Fifo`), driven by the platform's redraw / frame callback. The animation clock samples the predicted presentation time, not wall-clock at tick time.
-- Variable refresh displays run at up to 120Hz during animation and input, and drop to zero frames when idle.
-- Surface producers do not run their own timers: they ask for frames and the compositor answers after each composite with the next presentation time (section 9.6).
+### 9.5 Frame pacing
 
-## 9. Compositor, layers, and effects
+- A frame is drawn only when `Ui::needs_frame` is true (queued patches, dirty state, a compositor animation, or a blinking caret) or a visible surface has or wants a frame.
+- Presentation is `AutoVsync` (overridable with `ROUGE_PRESENT_MODE` on native). The animation clock is the time at `Ui::update`; surfaces latch against now plus half the refresh interval.
+- Surface producers do not run timers: they ask for frames and the compositor answers after each present (section 12).
 
-### 9.1 Layer tree
+## 10. Compositor, layers and effects
 
-A **layer** is the unit of compositing: a retained draw list plus compositor properties (transform, opacity, clip, scroll offset, effect chain, blend mode).
+### 10.1 Layers
 
-An element gets its own layer when it:
+The compositor (`rouge_core::compositor`) is a retained layer tree owned by the element tree, which calls it directly as patches apply and as layout and paint run. Each frame, `Compositor::scene(scale)` emits a flat list of items for the renderer: `Item::Layer` (draw a list with a transform, opacity, fill, radii, scissor and optional backdrop effect), `Item::Group` (render children into a cached texture, then draw it, optionally through an effect) and `Item::Surface`.
 
-- has a compositor animation or transition declared on it,
-- has an effect, backdrop effect, mask, non-normal blend mode, or group opacity,
-- is a scroll container, or
-- is explicitly marked with `.layer()`.
+A layer is a retained set of draw lists plus compositor properties: translate, uniform scale, rotate, opacity, fill colour, corner radii, scroll offset, scroll link, effects and a surface binding. An element gets its own layer when it declares any of them: `.layer()`, `.rasterize()`, `translate_x/y`, `scale`, `rotate`, `opacity`, `.transition`, `.layout_transition`, `.animate`, an effect, backdrop, mask or blend, `.scroll_linked`, or a surface. Elements under `show` or `each` with enter or exit transitions are promoted when they mount, so there is no hitch on the first animated frame. Everything else paints into its nearest ancestor layer.
 
-Everything else paints into its nearest ancestor layer. Promotion is automatic and stable (declaring a transition promotes the element up front rather than at animation start, so there is no hitch on the first frame).
+### 10.2 Direct and rasterized layers
 
-### 9.2 Direct replay vs. cached textures
+- **Direct** (the default): the layer's retained lists are drawn into the parent target with its transform and opacity in the per-draw record. SDF primitives stay crisp under scale and cost no texture memory.
+- **Rasterized**: the layer renders into a cached group texture, then draws as one quad. This happens when it has content effects, a mask or a blend mode (each a stage, applied in that order), when it is translucent and holds more than one primitive, or when `.rasterize()` is set. A translucent layer with a backdrop reader somewhere below it is not rasterized and falls back to per-primitive opacity. A group texture is re-rendered only when the fingerprint of its contents changes, including the frames of any surfaces inside it.
 
-Layers have two composition modes, chosen automatically:
+A compositor-only frame therefore updates records and re-issues draws for existing buffers.
 
-- **Direct**: the layer's retained instance buffers are drawn straight into the parent target with the layer's transform and opacity applied as per-layer uniforms. This is the default. With SDF primitives it stays crisp under scale and costs no texture memory.
-- **Rasterized**: the layer is rendered to an offscreen texture, then drawn as a single quad. Used only when required: group opacity over overlapping content, any content effect (blur, color matrix, custom shader), masks, or when `.layer().rasterize()` is requested for very expensive static content. The texture is reused until the layer's content is dirty.
-
-This keeps texture memory and overdraw low while still making compositor-only frames cheap: such a frame updates uniforms and re-issues draw calls for existing buffers.
-
-### 9.3 Backdrop effects
+### 10.3 Backdrop effects
 
 A backdrop effect reads what has already been drawn behind an element.
 
-1. The scene renders into an offscreen scene target rather than directly into the swapchain.
-2. Layers draw back to front. On reaching a layer with a backdrop effect, the current pass ends.
-3. The region under the layer (inflated by the effect's sampling margin) is copied and processed into a backdrop texture. Blur uses a dual-Kawase downsample/upsample chain.
-4. A new pass begins and the layer's backdrop shader draws, sampling the backdrop texture, followed by the layer's own content.
+1. When a frame needs a backdrop, the scene renders into an offscreen scene target instead of the swapchain, and is blitted at the end. Frames without backdrops draw straight to the swapchain.
+2. On reaching a layer with a backdrop effect, the region under it, grown by the blur's reach, is copied from the scene and blurred with a dual-Kawase down/up chain at reduced resolution into a backdrop texture.
+3. The layer's backdrop shader draws, sampling that texture, followed by the layer's content.
 
-Cost controls:
+Cost controls: consecutive backdrops share one pass break when nothing drawn since the break touches the later one's region (each still runs its own blur); a backdrop is reused with no pass break when everything drawn before it hashes the same as last frame; blur radii are continuous, though the kernel changes shape at each power of two. An element has at most one backdrop effect. Inside a rasterized group, backdrop effects are skipped and blend modes draw normally, because they only see the window's scene.
 
-- Backdrop layers at the same depth that do not overlap share one pass break and one blur chain.
-- If nothing behind a backdrop layer changed this frame, its processed backdrop texture is reused.
-- Blur runs at reduced resolution proportional to radius.
-- Dev tooling shows the pass-break count per frame, since this is the main way to make a frame expensive.
+### 10.4 Clipping
 
-### 9.4 Effects API
+Within a layer, `overflow_hidden` clips through per-instance rectangles. Nested layers are clipped with scissor rectangles: exact for axis-aligned content, the bounding box under rotation, never rounded. `.mask(Mask::shape())` clips a layer to its rounded shape at the cost of rasterizing it.
 
-Built-ins, applied as style methods:
+### 10.5 Effects API
+
+Built-ins are style methods taking reactive props:
 
 ```rust
-div().effect(Blur::new(8.))                    // content effects
+div().effect(Blur::new(8.0))                       // content effects, applied in order
      .effect(ColorMatrix::saturate(1.4))
-     .backdrop(BackdropBlur::new(20.))         // backdrop effects
-     .backdrop(Glass::new().blur(24.).refraction(0.4).dispersion(0.05).tint(c))
-     .mask(Mask::linear_gradient(...))
+     .backdrop(Glass::new().blur(24.0).refraction(0.4).dispersion(0.05).tint(tint))
+     .mask(Mask::shape())
      .blend(BlendMode::Screen)
 ```
 
-`Glass` is implemented as a backdrop shader that uses the element's rounded-rect SDF to derive an edge normal and thickness profile, offsets backdrop UVs by a refraction term, optionally splits channels for dispersion, then adds tint, a specular rim highlight, and an inner shadow. All parameters are animatable uniforms.
+Built-ins: `Blur`, `BackdropBlur`, `ColorMatrix` (3x4: RGB with offset, alpha untouched), `Mask` (linear and radial gradients, shape, inverted), `BlendMode` (twelve modes, reading content and backdrop, so a blended element costs a backdrop snapshot) and `Glass`. `Glass` is a backdrop shader that derives an edge normal and thickness from the element's rounded-rect SDF, offsets backdrop UVs for refraction, splits channels for dispersion, then adds tint, saturation, a configurable rim light (`rim_light(angle, fill)`), an optional point light and an inner shadow. `Glass::frosted(blur)` is plain frosted glass.
 
-Custom effects implement a trait:
+Custom effects implement `ShaderEffect`:
 
 ```rust
 struct Ripple { frequency: f32, strength: f32 }
 
-impl Effect for Ripple {
+impl ShaderEffect for Ripple {
     const WGSL: &'static str = include_str!("ripple.wgsl");
-    const INPUTS: Inputs = Inputs::CONTENT;            // or BACKDROP, or BOTH
-    fn uniforms(&self) -> Vec<f32> { vec![self.frequency, self.strength] }
-    fn margin(&self) -> f32 { self.strength.abs() }    // extra area drawn and sampled
+    const INPUTS: Inputs = Inputs::CONTENT;           // or BACKDROP, or BOTH
+
+    fn uniforms(&self, uniforms: &mut [f32; 16]) {
+        uniforms[..2].copy_from_slice(&[self.frequency, self.strength]);
+    }
+
+    fn margin(&self) -> f32 { self.strength.abs() }   // extra area drawn and sampled
 }
 ```
 
-The WGSL defines one function, `fn effect(in: EffectInput) -> vec4<f32>`, returning a premultiplied color. A Rouge prelude is prepended to it and provides:
+```wgsl
+fn effect(in: EffectInput) -> vec4<f32> {
+    let away = in.local - in.size * 0.5;
+    let distance = max(length(away), 1e-4);
+    let wave = sin(distance * param(0).x) * param(0).y;
+    return sample_content(in.local + away / distance * wave);
+}
+```
 
-- `in.local` (logical pixels from the element's top-left), `in.size`, `in.uv`, `in.distance` (signed distance to the element's rounded rect) and `in.coverage` (its antialiased coverage),
-- `sample_content(local)` and `sample_backdrop(local)`, which take positions in the same local space and follow the layer's transform,
-- `shape_sdf(local)`, `scale_factor()`, and `param(i)`, which returns the i-th `vec4` of the effect's uniforms.
+The WGSL defines `fn effect(in: EffectInput) -> vec4<f32>` returning premultiplied colour. A prelude provides `in.local` (logical pixels from the element's top-left), `in.size`, `in.uv`, `in.distance` (signed distance to the rounded rect) and `in.coverage`; `sample_content(local)` and `sample_backdrop(local)`, which follow the layer's transform; and `shape_sdf(local)`, `scale_factor()` and `param(i)`, the i-th `vec4` of the 16 uniforms. `content_blur()` and `backdrop_blur()` ask for an input to be blurred first (that is how `Blur`, `BackdropBlur` and `Glass` work). `const CLOCK: Option<usize>` names a uniform that receives elapsed seconds, which keeps the layer animating while the effect is present.
 
-An effect has up to 16 uniform floats, in the order `uniforms()` returns them. `content_blur()` and `backdrop_blur()` ask for an input to be blurred before the shader samples it, which is how `Blur`, `BackdropBlur` and `Glass` are built. Effect values accept reactive props (`.effect(move || Blur::new(radius.get()))`); when the bound value changes on an element with a transition, every uniform, the blur radii and the margin animate in the compositor as a `COMPOSITE` change.
+Effect values accept reactive props (`.effect(move || Blur::new(radius.get()))`). When the bound value changes on an element with a `.transition`, every uniform, the margin and the blur radii animate in the compositor; a different shader replaces the effect.
 
-### 9.5 Commit boundary
+## 11. Animation
 
-The UI side never touches the compositor's state directly. Each frame it emits a **commit**: a list of layer creations, removals, property changes, new draw lists, and animation commands. The compositor applies the commit, ticks animations, and draws.
+### 11.1 Compositor-driven
 
-In v1 both sides run on the UI thread. Keeping the boundary as a data-only commit means the compositor can move to a dedicated render thread later (keeping animations smooth while the UI thread is busy) without changing the public API.
+Animatable without layout or paint: translate, uniform scale, rotate, opacity, scroll offset, the background colour and corner radii of a layer-backed element, and effect values. Clip is not animatable.
 
-Surface frames do not cross this boundary. A commit only binds a layer to a `SurfaceId`; frames go from producers to the surface registry (section 9.6), which moves to the render thread with the compositor.
+```rust
+// Transitions: animate whenever a bound value changes.
+div().opacity(move || if open.get() { 1.0 } else { 0.0 })
+     .scale(move || if open.get() { 1.0 } else { 0.95 })
+     .transition(Spring::snappy())
 
-### 9.6 Surfaces
+// Motion values: imperative and compositor-owned.
+let x = motion(0.0);
+div().translate_x(x)
+     .on_click(move |_| { x.animate_to(200.0, Spring::bouncy()); })
 
-A **surface** is a layer whose content is a GPU texture produced outside Rouge's painter: a web view, a video decoder, a 3D viewport, a camera feed. It is the single way foreign pixels enter the scene. The web view (section 15) is its first consumer and is not special-cased anywhere in the compositor.
+// Keyframes: declarative, one-shot or repeating.
+div().animate(Keyframes::new().at(0.0, |p| p.rotate(0.0)).at(1.0, |p| p.rotate(360.0)).duration(0.8).repeat())
+```
 
-**The rule.** The frame path never moves surface pixels through CPU memory. Rouge never reads a surface back (`glReadPixels`, `read_to_image`) and never writes surface pixels with `queue.write_texture`, and there is no software fallback that does either. A producer that cannot share GPU memory with the compositor's device gets a typed `SurfaceError` when it allocates or registers buffers, and the element mounts its fallback view. A 1600x1200 web view at 2x is 30.7 MB per frame; copying that out and back at 120Hz is 7.4 GB/s of memory traffic for no visual result, which is why this is a rule and not a tuning choice. A producer that renders on the CPU, such as a software video decoder, writes into a shared buffer itself (a locked IOSurface, for example). That is its rendering, not a copy made by Rouge.
+- With a transition, the binding effect runs once per change and hands the compositor a target; interpolation then happens entirely in the compositor. Springs keep velocity when retargeted.
+- `Motion` is `f32`: `set`, `animate_to`, `decay`, `stop` and `get` (the value as of the last frame). `animate_to` and `decay` return an `Animation` that can be ignored or awaited for `true` on arrival or `false` when interrupted. Gestures can drive a motion directly.
+- Timing is `Spring` (`snappy`, `smooth`, `bouncy`, or custom), `Tween` (seconds plus `Ease`: linear, in, out, in-out or `cubic_bezier`) and, for motions and flings, `Decay`.
+- Keyframes take `Pose`s over the compositor properties, a duration in seconds and one easing per segment; one-shot keyframes hold their final pose. Effect values cannot be keyframed.
 
-**Because a surface is an ordinary layer**, everything in sections 9.1 to 9.5 and section 10 applies without new code paths: transforms, opacity, rounded clipping, scroll containers, enter/exit, layout transitions, glass and backdrop blur over it, overlays above it, and hit testing through animated transforms.
+### 11.2 Layout transitions
 
-#### Shape
+`.layout_transition(Spring::smooth())` gives FLIP animation: when layout moves an element relative to its parent layer, layout runs once to the final state and the compositor animates an offset from the old position. `LayoutTransition::new(timing).size()` also animates size by stretching the layer, which scales its content while the transition runs.
 
-Surfaces are a buffer queue between a producer and an app-wide registry. This is the shape every OS compositor converged on: Wayland (`linux-dmabuf`, frame callbacks, `presentation-time`, explicit sync), Core Animation (IOSurface-backed layer contents), Android (`BufferQueue` into SurfaceFlinger) and Chromium (viz surfaces and shared images). Three parties take part:
+### 11.3 Enter and exit
+
+`show` and `each` accept `.enter(pose, timing)` and `.exit(pose, timing)`, for example `.enter(Pose::new().opacity(0.0), Spring::snappy())`. Rows present at first mount enter too. On exit, the scope is disposed immediately, and the layer stays in the compositor as a non-interactive orphan, drawn above its parent's content, until the animation finishes.
+
+### 11.4 Layout properties
+
+Width, height, padding and gap are not compositor properties. Animating them means writing a signal each frame, which relayouts the affected subtree per frame. That is correct and bounded, but it is the slow path; prefer layout transitions.
+
+## 12. Surfaces
+
+A **surface** is a layer whose content is a GPU texture produced outside Rouge's painter: a 3D viewport, a video decoder, a camera feed, a web view. It is the single way foreign pixels enter the scene, and no consumer is special-cased in the compositor.
+
+**The rule.** The frame path never moves surface pixels through CPU memory. Rouge never reads a surface back and never writes surface pixels with `queue.write_texture`, and there is no fallback that does either. A producer that cannot share GPU memory with the compositor's device gets a typed `SurfaceError` and the element shows its fallback view. A 1600x1200 surface at 2x is 30.7 MB per frame; copying it out and back at 120Hz is 7.4 GB/s of memory traffic for no visual result. A producer that renders on the CPU (a software decoder) writes into a shared buffer itself; that is its rendering, not a copy made by Rouge.
+
+**Because a surface is an ordinary layer**, everything in sections 10 and 11 applies: transforms, opacity, rounded clipping, scroll containers, enter and exit, layout transitions, glass over it, overlays above it, hit testing through animated transforms.
+
+### 12.1 Shape
+
+Surfaces are a buffer queue between a producer and a registry, the shape every OS compositor converged on (Wayland's `linux-dmabuf` with frame callbacks and explicit sync, Core Animation's IOSurface-backed contents, Android's `BufferQueue`, Chromium's viz surfaces):
 
 | Party | Type | Thread | Role |
 |---|---|---|---|
-| Producer | `SurfaceProducer` | Its own (an actor) | Owns its rendering; registers buffer sets, submits frames, reacts to events |
-| Registry | `Surfaces` | UI thread (the render thread once there is one) | One per app, next to the `Gpu`. Holds imported buffer sets, frame queues, each surface's current frame, release bookkeeping and frame requests |
-| Element | `surface(source)` | UI thread | A layout leaf that owns a layer. Reports its placement (size, scale, visibility) and binds its layer to the surface's `SurfaceId` |
+| Producer | `SurfaceProducer` | its own (an actor) | Owns its rendering; registers buffer sets, submits frames, reacts to events |
+| Registry | `Surfaces` | UI thread | Holds imported buffer sets, frame queues, each surface's current frame, release bookkeeping and frame requests |
+| Element | `surface(source)` | UI thread | A layout leaf that owns a layer bound to the surface's `SurfaceId`, and reports its placement |
 
-```
- producer thread                          UI thread
- SurfaceProducer ── register / submit ──▶ Surfaces ◀── place / detach ─── surface element (tree)
-       ▲                                     │      ◀── bind / unbind ─── compositor layer
-       └── Attached, Configure, FrameRequest,│
-           Released, Presented, Discarded ───┘
-                                             ▼  latch at composite
-                                   renderer samples each SurfaceId's current frame
-```
+Frames go straight from the producer to the registry. They never touch the reactive graph or the element tree, so a surface frame costs no effect, layout or paint: the compositor redraws from retained buffers and samples whatever the registry latched. Layers refer to surfaces by id, so a surface can be bound in more than one window.
 
-Frames go straight from the producer to the registry. They never travel in a UI commit (section 9.5), so a busy UI thread cannot delay a video, and a surface frame costs no effect, layout, paint or commit: the compositor redraws from retained buffers and samples whatever frame the registry latched. Layers refer to surfaces by `SurfaceId` (`LayerCommand::Surface`), so a surface can be bound in more than one window, and moving one between windows is a rebind.
-
-#### Element API
+### 12.2 Element API
 
 ```rust
-let (producer, source) = surface_channel(SurfaceOptions::default());
-spawn(move || run_producer(producer));
+use rouge::render::{QueueMode, surface_channel};
+
+let (producer, source) = surface_channel(QueueMode::Mailbox);
+std::thread::spawn(move || run_producer(producer));
+let status = signal(SurfaceStatus::Waiting);
 
 surface(source)
     .w_full()
-    .h(px(400.))
-    .rounded(12.)
+    .h(400.0)
+    .rounded(12.0)
     .status(status)
     .fallback(|error| text(error.to_string()))
 ```
 
-- `surface` is a taffy leaf that always owns a layer. Layout decides its size; it has no intrinsic size.
-- Its **placement** is its physical pixel size, the scale factor and visibility. The tree reports a changed placement to the registry after each update. A surface is not visible when it or an ancestor is hidden or invisible, when ancestors clip it away entirely (a scroll container scrolled past it) or it lies outside the window, when its window is occluded (`Ui::set_visible`), or once it is removed.
+- `surface` is a taffy leaf with no intrinsic size that always owns a layer.
+- Its **placement** is its physical pixel size, the scale and visibility. A surface is invisible when it or an ancestor is hidden or invisible, when ancestors clip it away entirely or it lies outside the window, when the window is occluded (`Ui::set_visible(false)`), or once it is removed.
 - `.status(signal)` receives `SurfaceStatus::{Waiting, Live, Failed(SurfaceError)}`; `.fallback(view)` is mounted while the status is `Failed`.
 - The element is an ordinary element for events, focus and hit testing.
 
-#### Producer protocol
+### 12.3 Producer protocol
 
 The protocol is data only, over channels in both directions:
 
 ```rust
-pub fn surface_channel(options: SurfaceOptions) -> (SurfaceProducer, SurfaceSource);
+pub fn surface_channel(queue: QueueMode) -> (SurfaceProducer, SurfaceSource);
 
 impl SurfaceProducer {
     pub fn register(&mut self, buffers: &[SharedBuffer]) -> BufferSetId;
@@ -490,7 +552,7 @@ impl SurfaceProducer {
     pub fn request_frame(&self);
     pub fn fail(&self, error: SurfaceError);
     pub fn fence(&self) -> (FenceSignal, Fence);
-    pub async fn recv(&mut self) -> Option<SurfaceEvent>; // also try_recv, blocking_recv
+    pub async fn recv(&mut self) -> Option<SurfaceEvent>;  // also try_recv, blocking_recv
 }
 
 pub enum SurfaceEvent {
@@ -502,588 +564,213 @@ pub enum SurfaceEvent {
     Discarded(FrameId),
     Detached,
 }
+
+let frame = Frame::new(BufferRef { set, index })
+    .region(valid_rect)              // the valid rectangle in buffer pixels; whole buffer by default
+    .origin(Origin::BottomLeft)      // row order; TopLeft by default
+    .alpha(AlphaMode::Opaque)        // Premultiplied by default
+    .after(fence)                    // Acquire::Fence; Acquire::Ready by default
+    .present_at(when);               // for timed queues
 ```
 
-- `SurfaceProducer` is `Send`. The `SurfaceSource` goes to the element, which hands it to the registry when it mounts. Producers own their resources, run on whatever thread suits them and talk to Rouge only through this protocol. Nothing is shared behind a lock.
-- `Attached` carries a `SurfaceCx`: the app's wgpu `Device` and `Queue`, the adapter's identity (so a producer can check it is on the compositor's GPU), and buffer allocation and import.
-- `Configure` carries a `SurfaceConfig`: a sequence number, the physical size, the scale and visibility. It is sent only when the placement changes. Frames echo the sequence number they were rendered for, so both sides know exactly when a resize has caught up.
-- Frames name a buffer, `BufferRef { set, index }`, not a texture. The registry imports a buffer set once, when it is registered. A GL, VideoToolbox or VA-API producer never touches wgpu, so it is not tied to Rouge's wgpu version. Because the protocol is only IDs, handles and metadata, it can run across processes (IOSurface mach ports, DMA-BUF file descriptors over a socket) without an API change, which is what a sandboxed web view or CEF needs.
+- `SurfaceProducer` is `Send`. The `SurfaceSource` goes to the element, which attaches it to the registry when the window syncs. Producers own their resources and talk to Rouge only through this protocol; nothing is shared behind a lock.
+- `Attached` carries a `SurfaceCx`: the app's wgpu `Device` and `Queue`, the adapter's `AdapterInfo` (so a producer can check it is on the compositor's GPU and report `SurfaceError::AdapterMismatch` otherwise), and buffer allocation and import.
+- `Configure` carries a `SurfaceConfig` (an increasing `seq`, physical width and height, scale, visibility), sent only when the placement changes.
+- Frames name a buffer, not a texture; the registry imports a buffer set once, when it is registered. A GL, VideoToolbox or VA-API producer never touches wgpu, so it is not tied to Rouge's wgpu version. Because the protocol is only ids, handles and metadata, it can be carried across processes without an API change.
 
-Each frame carries its metadata:
+### 12.4 Buffers
 
-| Field | Meaning |
-|---|---|
-| `buffer` | Which registered buffer holds the frame |
-| `region` | The valid rectangle in buffer pixels; the whole buffer by default |
-| `origin` | `TopLeft` or `BottomLeft` row order |
-| `alpha` | `Premultiplied`, or `Opaque` to ignore alpha |
-| `color` | Colour space and transfer function; `Srgb` is the only value so far, and the enum is non-exhaustive so BT.709, BT.2020, PQ and HLG join it with video |
-| `damage` | The rectangle that changed since the producer's previous frame |
-| `acquire` | `Ready`, or a `Fence` the registry waits for before showing the frame |
-| `present_at` | When a timed frame should appear |
-| `config` | The `SurfaceConfig` sequence number the frame was rendered for |
+- `SurfaceCx::allocate(&BufferDesc::new(w, h).format(f).count(n).sharing(s))` returns `n` `SharedBuffer`s (a wgpu texture plus, for native sharing, the OS object). Swap-chain allocation lives in Rouge once, not in every producer.
+- `Sharing::Device` allocates plain textures on Rouge's device, for producers that render with wgpu. It works on every platform, including the browser.
+- `Sharing::Native` allocates memory a foreign API can render into: an IOSurface on macOS (`SharedBuffer::io_surface()`). Producers with their own pools import through `SurfaceCx::import_io_surface`. `rouge_render::interop::IoSurface` also offers locked CPU writes for software producers and the global id for cross-process use. The import wraps `newTextureWithDescriptor:iosurface:plane:` with `wgpu::hal::metal::Device::texture_from_raw` and `Device::create_texture_from_hal`.
+- On Linux, native sharing is designed as DMA-BUF: `wgpu::hal::vulkan::Device::texture_from_dmabuf_fd` under `VULKAN_EXTERNAL_MEMORY_DMA_BUF`, with `SurfaceCx` advertising the importable DRM format and modifier pairs. DMA-BUF is chosen over opaque fds because it is a plain wgpu feature flag, it is what VA-API and Wayland already speak, and it does not require both sides to use the same driver build. Until it is built, `Sharing::Native` returns `SurfaceError::Unsupported` off macOS.
+- Buffers are `Bgra8Unorm` or `Rgba8Unorm` holding sRGB-encoded bytes, matching the gamma-space scene, so no conversion pass is needed. sRGB-typed formats are rejected with `SurfaceError::Format` because sampling them would decode to linear light. Multi-planar YUV would be new sampling variants behind the same protocol.
 
-#### Buffers
+### 12.5 Queues and pacing
 
-- `SurfaceCx::allocate(&BufferDesc::new(width, height).format(f).count(n).sharing(s))` returns `n` `SharedBuffer`s, each a wgpu texture plus, for native sharing, the OS object behind it. Swap-chain allocation lives in Rouge once instead of in every producer.
-- `Sharing::Device` allocates plain textures on Rouge's device, for producers that render with wgpu (3D viewports, custom GPU content). It works on every platform, including the browser host.
-- `Sharing::Native` allocates memory a foreign API can render into: an IOSurface on macOS, a DMA-BUF on Linux. `SharedBuffer::io_surface()` gives a GL or Metal producer the object to bind.
-- Producers that must allocate their own buffers, such as video decoders with their own pools, import them through the same code: `SurfaceCx::import_io_surface` (and `import_dmabuf` on Linux).
-- Buffers are BGRA8 or RGBA8 with sRGB-encoded bytes in a non-sRGB format, matching the gamma-space scene target (section 8.4), so no conversion pass is needed. sRGB-typed formats are rejected with `SurfaceError::Format`, because sampling them would decode to linear light. Multi-planar YUV (NV12, P010) becomes new sampling variants with the same protocol.
-- On Linux, `SurfaceCx` advertises the DRM format and modifier pairs the device can import, and native allocation picks among them; producers that allocate their own DMA-BUFs pick from the same list.
-- All allocation and import code lives in `rouge-interop`, the only crate that allows `unsafe`. It creates and imports textures only and never issues draw calls.
+- **Mailbox**: at latch, the newest ready frame wins. Older frames go back to the producer as `Released` and `Discarded`; they were never sampled.
+- **Timed** (for video): the latch shows the latest ready frame whose `present_at` is due by the target time, discards earlier ones and keeps later ones queued. `Surfaces::next_deadline` returns the next due time so the event loop wakes for it.
+- **The compositor is the clock.** A producer calls `request_frame` instead of running a timer. After the next present, the registry answers with `FrameRequest { target }`, the predicted time of the following frame. Only visible surfaces get answers, and a pending request on a visible surface asks the host for a frame, so producers animate at display rate, stop when hidden or occluded, and a static producer costs nothing.
+- `Presented { frame, at }` reports when each latched frame reached the screen; `Discarded` reports frames that never did.
 
-| OS | Shared object | Import |
-|---|---|---|
-| macOS | IOSurface | `newTextureWithDescriptor:iosurface:plane:` on the `MTLDevice` taken from `Device::as_hal`, wrapped with `wgpu::hal::metal::Device::texture_from_raw` and `Device::create_texture_from_hal` |
-| Linux | DMA-BUF | `wgpu::hal::vulkan::Device::texture_from_dmabuf_fd` under `Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`VK_EXT_external_memory_dma_buf`, `VK_EXT_image_drm_format_modifier`), then `create_texture_from_hal` |
+### 12.6 Synchronization and release
 
-- DMA-BUF is chosen on Linux over opaque-fd sharing (`VK_KHR_external_memory_fd` plus `GL_EXT_memory_object_fd`) for three reasons: it is a plain wgpu feature flag where opaque fds need hal-level device creation; it is what VA-API video decoders and Wayland already speak, so the same path serves video; and it is not tied to both sides using the same driver build. Opaque fd is the named contingency if the S0 spike finds DMA-BUF export unusable on a required driver.
-- `Gpu::new` requests the DMA-BUF feature when the adapter offers it. When it is absent, native allocation and `import_dmabuf` return `SurfaceError::Unsupported`.
-- A producer on a different GPU from the compositor (dual-GPU laptops) reports `SurfaceError::AdapterMismatch` through `fail`. Cross-GPU sharing is out of scope.
-
-#### Queues and pacing
-
-- **Mailbox** (the default, for web views and 3D): when the registry latches, the newest ready frame wins. Older frames go straight back to the producer as `Released` and `Discarded`; they were never sampled.
-- **Timed** (`SurfaceOptions::default().queue(QueueMode::Timed)`, for video): frames carry `present_at`. The latch shows the latest ready frame due by the predicted presentation time, discards earlier ones and keeps later ones queued. `Surfaces::next_deadline` returns the next due time so the event loop wakes for it.
-- **The compositor is the clock.** A producer calls `request_frame` instead of running its own timer. After the next composite that includes the surface, the registry answers with `FrameRequest { target }`, the predicted presentation time of the following frame. Only visible surfaces get answers, and a pending request on a visible surface asks the host for a frame, so producers animate at display rate, pause when hidden or occluded, and a static producer costs nothing.
-- `Presented { frame, at }` reports when each latched frame reached the screen, which video needs for A/V sync. `Discarded` reports frames that never did.
-
-#### Synchronization and release
-
-- A frame's `acquire` says when its pixels are complete. `Ready` means the work is ordered before Rouge's next submission: it was submitted on the `SurfaceCx` queue, or the producer already waited for its own GPU. `Fence` holds a frame back until the producer calls `FenceSignal::signal`, typically from a thread waiting on its GL sync object or Metal shared event; signalling wakes the event loop. The compositor never waits on a producer: a late frame is shown one compositor frame later and cannot stall one. When wgpu exposes waits on external semaphores, a native fence (an `MTLSharedEvent` value, a `sync_file`, a timeline semaphore) is waited for on the GPU; the field and the protocol stay the same.
+- A frame's acquire says when its pixels are complete. `Ready` means the work is ordered before Rouge's next submission (it was submitted on the `SurfaceCx` queue, or the producer already waited for its own GPU). A `Fence` holds the frame back until the producer calls `FenceSignal::signal`, typically from a thread waiting on a GL sync object or Metal shared event; signalling wakes the event loop, and dropping the signal discards the frame. The compositor never waits on a producer: a late frame shows one compositor frame later.
 - When a frame is replaced, its buffer is retired. `Released` is sent once all GPU work submitted so far has completed (`Queue::on_submitted_work_done`), because wgpu cannot see a foreign API writing into a texture it is still sampling. A buffer is read-only for the producer from `submit` until `Released`.
-- `Surfaces::maintain` registers those callbacks and polls the device while any are outstanding, and `next_deadline` keeps waking the loop for a few milliseconds until they fire, so an idle event loop never strands a producer's buffer. With three buffers a producer never waits on the compositor.
+- `Surfaces::maintain` registers those callbacks and polls the device while any are outstanding, and `next_deadline` keeps the loop waking every 2ms until they fire, so an idle loop never strands a buffer. With three buffers a producer never waits on the compositor. In the browser, wgpu handles are not `Send`, so releases are sent at `maintain`; that is safe there because the only producers are device-shared and ordered by Rouge's queue.
 
-#### Compositing
+### 12.7 Compositing
 
-- The renderer samples the texture in place with a dedicated surface shader built on the effect prelude (section 9.4): the layer's transform and opacity, the layer's rounded-rect SDF for coverage, and a UV mapping from the frame's region and origin computed when it is drawn. Row origin is handled by that mapping. GL producers are bottom-left; there is no flip pass.
-- Bind groups are cached per buffer and dropped when the buffer's set is gone, so a steady-state present allocates no GPU objects.
-- The surface draws above the element's own background and border.
-- `Opaque` frames ignore alpha.
-- A surface layer is never rasterized into a cache texture: it already is one. Every cache that contains a surface (a rasterized ancestor, a content effect, a processed backdrop behind glass) includes the current frame of each surface it contains in its signature, so a new frame invalidates exactly those caches and no others. Devtools reports this.
-- During a resize the compositor stretches the last frame to the new bounds until a frame at the new size arrives, so a live resize never shows a blank rectangle.
-- When a surface element is removed, the producer gets `Detached` and its pending frames are discarded. A layer leaving with an exit animation keeps showing the last frame; the registry keeps the surface while any layer binds it, then drops it and releases the buffer.
+- The renderer samples the texture in place with a surface shader built on the effect prelude: the layer's transform and opacity, the rounded-rect SDF for coverage, and a UV mapping from the frame's region and origin. Bottom-left producers need no flip pass.
+- Bind groups are cached per buffer and dropped when its set is gone, so a steady-state present allocates no GPU objects.
+- The surface draws above the element's own background and border; `Opaque` frames ignore alpha.
+- A surface layer is never itself rasterized. Every cache that contains a surface (a rasterized ancestor, a content effect, a backdrop behind glass) includes the current frame of each contained surface in its signature, so a new frame invalidates exactly those caches.
+- During a resize the last frame is stretched to the new bounds until a frame at the new size arrives.
+- When a surface element is removed, the producer gets `Detached` and its pending frames are discarded. A layer leaving with an exit animation keeps showing the last frame; the registry keeps the surface while any layer binds it, then releases its buffer.
 
-#### One device per app
+### 12.8 One device, and the host contract
 
-Imported textures belong to one wgpu device, and a producer must be able to outlive a window. The app therefore owns a single `Gpu` and a single `Surfaces` registry shared by all windows. Every window's compositor binds surfaces by ID, and because all windows submit to one queue, a release covers every window that sampled the buffer.
-
-#### Host contract
+Imported textures belong to one wgpu device, and a producer may outlive a window. On native, the app owns one `Gpu` (which is `Clone`) and one `Surfaces` shared by all windows; all windows submit to one queue, so a release covers every window that sampled the buffer. In the browser, one device is shared by every canvas on the page and each mounted canvas owns a registry.
 
 A host drives the registry around each composite and from its idle wakeup:
 
-1. `latch(target)` picks up registrations, placements and frames. `target` is the predicted presentation time.
+1. Before drawing a window: `ui.sync_surfaces(&mut surfaces)` sends attaches, placements, detaches and layer binds; `latch(target)` picks up registrations and frames.
 2. `Renderer::render(..., &surfaces)` draws.
 3. After presenting: `presented(at, interval)` sends `Presented` and answers frame requests, then `maintain()` schedules releases.
-4. When idle: `latch(now)`. If it reports a change, or `needs_frame()` is true, the host redraws every window whose `Ui::has_surfaces()` is true, and `next_deadline()` sets the wakeup.
+4. When idle: sync and `latch(now)`. If anything changed or `needs_frame()` is true, redraw every window whose `Ui::has_surfaces()` is true; `next_deadline()` sets the wakeup.
 
-`Ui::set_surfaces(registrar)` connects a window's tree to the registry, and `Ui::set_visible` reports occlusion.
+`Surfaces::stats()` counts surfaces and frames submitted, latched, discarded and released.
 
-#### Input regions
+### 12.9 Testing
 
-A producer that consumes input asynchronously (a web page) can attach input regions to its frames: rectangles that consume wheel events and cursor zones. Rouge's dispatch then decides scroll chaining and the cursor synchronously from the current frame's regions instead of waiting a frame for the producer's answer. Chromium's non-fast-scrollable regions exist for the same reason. The frame metadata reserves room for regions; they are built with the web view (section 15.5).
+`rouge_render::testing::TestSurface` is a real producer on Rouge's device: it allocates through `SurfaceCx`, renders known patterns with a GPU pass, and exposes `pump`, `present`, `present_flipped`, `fence`, `request_frame`, `fail`, `config` and `free_buffers`; its builder sets the queue mode, buffer count, sharing, format and size. `TestUi::surfaces()` and `Headless::surfaces()` provide a registry on a headless GPU. Pixel tests cover clipping, origin, alpha, regions, transforms, effects and glass over a surface, queues, fences, releases, frame requests, resize, exit and fallback, and IOSurface import on macOS. Tests assert that a new surface frame uploads no instance or image bytes and runs no layout or paint.
 
-#### Testing
+## 13. Events, input and focus
 
-- `rouge_render::testing::TestSurface` is a real producer on Rouge's device. It allocates through `SurfaceCx`, renders known patterns with a GPU pass, and exposes `pump`, `present`, `present_flipped`, `fence`, `request_frame` and `fail`. Its builder sets the queue mode, buffer count, sharing, format and a fixed size.
-- `TestUi::surfaces()` and the renderer's `Stage` test builder (`.surface(source)`) attach surfaces to a headless registry.
-- Pixel tests cover clipping, origin flip, alpha modes, regions, opacity, transforms, content effects and glass over a surface, the mailbox, timed frames, fences, releases, frame requests, resize stretch, exit and fallback views, and IOSurface rendering and import on macOS.
-- Tests assert that a new surface frame uploads no instance or image bytes and runs no layout, paint or effect.
+- `Ui` is the input boundary; there is no separate event enum. Hosts call `pointer_moved`, `pointer_down`, `pointer_up`, `pointer_cancel`, `scroll`, `scroll_drag`, `scroll_release`, `touch`, `key_down`, `key_up`, `ime`, `file_drop`, `set_modifiers`, `set_focused`, `set_visible`, `set_appearance`, `set_size` and `set_device_scale`, with positions in logical (zoomed) coordinates.
+- Hit testing walks the element tree using the compositor's current (animated) layer transforms, so it always matches what is on screen. Clipping ancestors, unseen elements and fully transparent layers are excluded; `.pass_through()` lets events fall through an element.
+- Dispatch bubbles from the deepest element to the root; `event.stop_propagation()` ends it. Handlers (`on_click`, `on_pointer_down/move/up`, `on_scroll`, `on_key_down/up`, `on_focus`, `on_blur`, `on_hover`, `on_ime`, `on_drag`, `on_file_drop`) run untracked in a batch, with the scope that registered them as owner.
+- `event.capture()` in a pointer-down handler routes moves and the release to that element. `.on_drag` captures once the pointer moves 3px, reports start, move and end with translation and velocity, and replaces the click. Pointer events carry element-local coordinates, modifiers and click count.
+- Hover, active, focus and disabled states are tracked by the framework and drive style variants. A disabled element and its descendants get no pointer handlers, focus or state styles.
+- **Focus**: tab order with `tab_index`, traversal confined to the innermost `.focus_scope()` (modals, popovers), `.autofocus()` with focus restored when the scope goes away, `FocusHandle` for programmatic focus, and `focus_visible` for keyboard focus. A click on something unfocusable clears focus unless an ancestor is `.preserve_focus()`. With nothing focused, keys go to the window's root view or an element marked `.root_host()`.
+- **Keymap**: `.bind_key(chord, action)` and `.on_action(|a: &Save| ...)` live on elements; the deepest binding on the focus path wins and the deepest handler for that action type runs. Menu shortcuts are bound window-wide by `Ui::bind_menus`, consulted after element bindings; Tab moves focus last. Chords parse from strings such as `"secondary-k"` (`cmd`, `command` and `secondary` mean the platform command key). `use_binding::<T>()` and `Ui::binding_for::<T>()` report the effective chord, and `Ui::dispatch_action` invokes the deepest handler directly.
+- **Clipboard** is the `Clipboard` trait. Reads are `PasteRequest`s answered now or later with text or media (files, PNG images); an answer that arrives after an edit, focus change or remount is dropped. `MemoryClipboard` (with `deferred()`) fakes it in tests. Native uses arboard; the browser uses DOM events (section 14.3).
+- **Touch** (`Ui::touch`): a press goes through pointer dispatch, so taps click and show active styles; after 8px a touch whose press has no drag handler becomes a scroll pan that flings on release; touches leave no hover.
+- **Query and test helpers** on `Ui`: `bounds_of(test_id)`, `bounds_of_all`, `text_of`, `text_bounds`, `text_index_at`, `bounds_at`, `cursor`, `accepts_text`, `text_cursor_area`.
 
-## 10. Animation
+## 14. Platform hosts (`rouge`)
 
-### 10.1 Compositor-driven (default)
+### 14.1 App and windows
 
-Animatable without layout or paint: translate, scale, rotate, opacity, clip, scroll offset, corner radius and background color of a layer-backed element, and any effect uniform.
+`App::new().window(options, root).run()` is the entry point on both hosts. `App` also takes `menus`, `fonts` and (with `tokio-rt`) a Tokio handle; each `window` call opens a window with its own `Ui`. `WindowOptions` covers title, size, minimum size, background, resizable, maximized, decorations and, in the browser, the canvas id.
 
-Three ways to use it:
+Each `Ui` provides a `Copy` `WindowHandle` in context: reactive `title()`, `set_title`, `minimize`, `zoom`, `close`, `start_drag`, `start_resize`, `quit`, `focus`, `dispatch_action` and `copy_text`. Commands queue on the window and the host applies them. `appearance()` and `window_focused()` are reactive signals fed by the host.
 
-```rust
-// 1. Transitions: animate whenever the bound value changes.
-div().opacity(move || if open.get() { 1.0 } else { 0.0 })
-     .scale(move || if open.get() { 1.0 } else { 0.95 })
-     .transition(Transition::all(Spring::snappy()))
+Menus are the shared `Menu` / `MenuItem` model: typed actions or callbacks, shortcuts, separators and submenus, with optional `id`, `icon` and `destructive` styling that native menus ignore. An Edit menu is added when absent and routes cut, copy, paste, select-all, undo and redo to the focused editor.
 
-// 2. Motion values: imperative, compositor-owned, not signals.
-let x = motion(0.0);
-div().translate_x(x)
-     .on_click(move |_| x.animate_to(200.0, Spring::bouncy()));
+### 14.2 Driver and native host
 
-// 3. Keyframes: declarative, looping or one-shot.
-div().animate(Keyframes::new().at(0.0, |s| s.rotate(deg(0.))).at(1.0, |s| s.rotate(deg(360.)))
-        .duration(ms(800)).repeat())
-```
+`Driver` owns a window's wgpu surface configuration (a non-sRGB format, vsync), resize, the frame (section 4.2), window commands with menu dispatch, cursor and text-input change tracking, and the profiler. Both hosts translate platform events into `Ui` calls and apply the driver's outputs.
 
-- With a transition, the binding effect runs once when the signal changes and hands the compositor a target value. Per-frame interpolation then happens entirely inside the compositor.
-- Springs are velocity-preserving on retarget, so interrupted animations stay continuous.
-- `Motion<T>` supports `set`, `animate_to`, `stop`, `get()` (sample the current value), and completion futures (`x.animate_to(...).await`). It can be driven directly by gestures for drag and swipe.
-- Timing: springs, cubic-bezier easing, duration tweens, decay (momentum).
+The native host (`platform::native`) runs winit on macOS, Wayland and X11. One `Runtime`, one `Gpu` and one `Surfaces` serve all windows. The loop waits (`ControlFlow::Wait`, or `WaitUntil` the registry's next deadline) and requests a redraw only for windows that want a frame; occlusion is reported with `set_visible`. macOS gets a native menu bar through muda (with About, Hide, Hide Others, Show All and Quit, and a Window menu added when absent); elsewhere the menus render as Rouge's `menu_bar`, because muda's Linux integration needs GTK-owned windows. Client decorations, or a compositor that declines server decorations, wrap the root in `window_chrome` (drag, double-click zoom, controls, resize edges). `platform::open_url` is behind the `open-url` feature.
 
-### 10.2 Signal-driven (fallback)
+### 14.3 Browser host
 
-Layout-affecting properties (width, height, padding, gap) can be animated by a `tween` or `spring` signal source that writes each frame. This relayouts the affected subtree per frame. It is correct and bounded, but it is the slow path, and dev tooling flags it.
+The browser host (`platform::web`) is part of the `rouge` crate and deliberately custom (section 3.2). The same `App` code runs on `wasm32`: `run` spawns the mount and returns. `WindowOptions::canvas(id)` uses that `<canvas>`, or fills the element with that id with a new one; without it the canvas covers the page. A mount error goes to the console and into the page.
 
-### 10.3 Layout transitions
+- **GPU.** wgpu's default instance uses WebGPU where the browser has it; the renderer's limits keep WebGL2 within reach (section 9.2). One device per page is shared by every canvas.
+- **Frames.** `requestAnimationFrame` is requested only when the driver wants a frame, a visible surface has or wants one, or the canvas resized; an idle page requests nothing. The backing size comes from a `ResizeObserver` on `device-pixel-content-box` (content box times `devicePixelRatio` where unsupported), so the canvas is never resampled. The canvas rectangle is cached so pointer events do not force a browser layout.
+- **Input.** Pointer events with fractional coordinates and pointer capture; touch goes to `Ui::touch`. Wheel deltas convert from line and page units and get no Rouge fling, since browsers deliver momentum; ctrl-wheel is left to browser zoom. Keys map from `key`, using `code` to recover the unshifted key so chords match native. Text arrives through a **hidden textarea placed at the caret**: `beforeinput` and `input` commit, and composition events become preedit and commit. `prefers-color-scheme` drives `Appearance`; focus, blur and `visibilitychange` drive `set_focused` and `set_visible`.
+- **Clipboard.** Keyboard copy, cut and paste use the DOM's **native clipboard events**: the host dispatches `EditAction::{Copy, Cut, Paste}` while `WebClipboard` captures the text written or supplies the text pasted, so editing goes through the same `PasteRequest` path as native. Other writes use `navigator.clipboard.writeText`; a menu-initiated paste uses `readText`, which may prompt.
+- **Window commands.** `SetTitle` sets `document.title` and `Focus` focuses the canvas; the rest do nothing. A menu bar renders only when the app supplies menus.
+- **Build.** `just web-check` type-checks the browser target, `just web-test` runs browser tests in headless Chrome, `just web-build` builds an example with the `wasm-release` profile (fat LTO, `wasm-opt` when installed), and `just web` serves the component gallery.
 
-`.layout_transition(Spring::smooth())` gives FLIP-style animation: when layout changes an element's bounds, layout runs once to the final state, and the compositor animates a transform (and optionally size via scale or clip) from the old rect to the new one. This covers reordering, expand/collapse, and shared-element moves at compositor cost.
+## 15. Widgets (`rouge-widgets`)
 
-### 10.4 Enter and exit
+Built strictly on the public API, which keeps that API honest. There is one component set:
 
-`show` and `each` accept `.enter(...)` and `.exit(...)` transitions. On exit, the scope is disposed immediately for reactivity purposes, but its layer is kept alive as a non-interactive snapshot until the exit animation completes.
+- Controls: `button`, `icon_button`, `toggle`, `checkbox`, `radio`, `slider`, `segmented_control`, `text_input` (single-line or `multiline`), `inline_edit`.
+- Structure: `scroll_view` and `vertical_scrollbar` (thumbs that track the compositor offset, drag and track jumps), `tree_row`, `list_row`, `section_header`, `disclosure`, `tabs`, `separator`, `resizable_panel` and `panel_toggle`, `action_bar`.
+- Overlays: `popover`, `tooltip` and `Hint` (`.tooltip(label)` on any view), `context_menu` (`.dropdown()` for a click-opened menu), `select`, `search_picker` and `picker_list`, `backdrop`, `modal`, `menu_bar`, `window_chrome`.
+- Feedback: `progress`, `spinner`, `notification`, `empty_state`, `muted_text`.
+- With features: `markdown` (on `rouge-markdown`) and `syntax_spans` (on `rouge-syntax`).
 
-## 11. Text (`rouge-text`)
+Components read colours from the theme and metrics from `tokens`, size themselves in pixels, scale with `InterfaceSize` (which sets the window zoom to `size / tokens::BASE_SIZE`), ship Inter and Lilex through `bundled_fonts()`, and draw Lucide icons through `Icon`. Elevated surfaces take one `Material` (`Floating`, `Surface`, `Glass`, `GlassPanel`, `GlassControl`, `Bare`). Popovers and menus render in the window's overlay root behind one dismiss layer that closes on an outside press or Escape; menus share one popup renderer with keyboard navigation and a focus policy (`MenuFocus::Take` or `Preserve`). `RovingFocus` moves focus through a list with arrows, Home and End. `rouge_widgets::testing::component_test()` builds a `TestUi` with the bundled fonts.
 
-- **Parley** for layout: shaping, bidi, line breaking, font fallback and system font discovery (fontique), rich text spans, inline boxes.
-- **swash / skrifa** to rasterize glyphs into the atlas, with subpixel positioning buckets on the x axis. Grayscale AA by default.
-- `text` is a taffy measured leaf. Parley layouts are cached per (content, style, width constraint).
-- A text content change is `LAYOUT` dirty; a color change is `PAINT` only.
-- Editing: built on Parley's editor primitives for cursor movement, selection, and IME composition, wrapped by `rouge-widgets` text input and text area.
-- Large documents (code-editor scale) are out of scope for the built-in text area; `canvas` plus `rouge-text` line layout is the supported route for building one, with a dedicated editor widget as a later phase.
+## 16. Standalone crates
 
-Text stack details (the exact Parley feature set and shaper version) should be pinned against the crate's current release at implementation time.
+These four crates have no UI or GPU dependencies so a terminal frontend can share them (section 3.2).
 
-## 12. Platform (`rouge-platform`)
+- **`rouge-reactive`**: section 5.
+- **`rouge-theme`**: `Rgba`, `UiPalette<T>` (the colour roles, listed once; `light()` and `dark()`), semantic styles for control, selection and notice states, `MarkdownPalette`, `Appearance`, and picker state with fuzzy matching (nucleo).
+- **`rouge-syntax`**: Tree-sitter highlighting and symbol tags over the arborium grammars. `SyntaxStream::append` is the one parsing path; `analyze(language, source)` is a stream fed once.
+- **`rouge-markdown`**: GFM documents (pulldown-cmark, with bare URL and email linking) with blocks, outline, link targets and source styles; code blocks carry `rouge-syntax` highlights. `MarkdownStream::push` appends incrementally and reports what changed; `MarkdownDocument::parse` runs the same incremental parser over the whole source.
 
-- An internal `Platform` trait covers: window lifecycle, surface handles, input events, IME, cursor, clipboard, scale factor, frame scheduling, and posting to the UI thread.
-- v1 implementation is **winit** on macOS, Wayland, and X11.
-- Small per-OS shims fill gaps where needed (for example macOS titlebar and window-background configuration). These stay behind the trait.
-- Later phases add native menus (muda), file dialogs (rfd), drag-and-drop, and tray behind the same trait.
-- The trait exists so that winit can be replaced on a single platform if frame pacing or popup handling requires it, without touching the rest of the framework.
+## 17. Diagnostics and testing
 
-## 13. Events, input, and focus
+- **Counters.** `Ui::stats()` returns cumulative `FrameStats`: layouts, relayouts, paints, layers painted, patches, elements created and removed, element and layer counts, `TextStats` and `ReactiveStats` (nodes created and disposed, effect and memo runs). Subtracting snapshots gives the work in between, which is how tests assert that scrolling and animation do no layout or paint. `Renderer::stats()` reports instance and image bytes uploaded, draw calls, groups and group passes, backdrop passes, blurs and reuses, and surface draws.
+- **Tracing.** Rouge emits `tracing` spans: `update`, `publish`, `layout`, `hover`, `paint`, `scene`, `acquire`, `encode`, `present`. On native, `ROUGE_PROFILE=<file>` writes a Chrome trace with one event per frame carrying that frame's `FrameStats`, and `ROUGE_BENCH=scroll:<px per frame>:<frames>` scrolls the window and prints frame-interval percentiles. In the browser, `?rouge_profile` records spans as `performance.measure` entries and `?rouge_bench=...` mirrors the bench. `WGPU_BACKEND` and `WGPU_POWER_PREF` choose the adapter.
+- **Benchmarks.** `cargo run -p rouge --release --example bench -- layers|scroll|glass` measures CPU time per frame on a headless GPU.
+- **Tests.** `rouge_core::testing::TestUi` (and `TestUiBuilder`: size, scale, fonts, palette, menus) runs a real `Ui` on a headless GPU with a deterministic clock (`advance`, `run`, `wait_until`) and drives it by test id (`click_on`, `hover_on`, `drag_on`, `scroll_on`, `scroll_into_view`, `drop_files_on`, `press("cmd-k enter")`, `type_text`), with pixel reads and `render()` to an image. `rouge_render::headless::Headless` renders scenes to textures with PNG export. Tests use public APIs only and prefer integration tests in each crate's `tests/`.
 
-- Hit testing walks the layer tree front to back using current (animated) transforms and clips, then the element tree within the hit layer. Because the compositor is on the UI thread in v1, hit testing always sees the on-screen position.
-- Handlers run untracked with the scope that registered them as the owner, so signals, tasks and callbacks a handler creates are disposed with the component rather than leaking into the window's root scope.
-- Dispatch has capture and bubble phases. Handlers are builder methods: `.on_click`, `.on_pointer_down/move/up`, `.on_scroll`, `.on_key_down`, `.on_focus`, `.on_blur`; `event.stop_propagation()` is supported.
-- Hover, active, and focus state are tracked by the framework and drive the style variants without user signals.
-- Pointer capture for drags; a gesture layer (drag, pan with velocity) feeds `Motion` values directly.
-- Focus: a focus tree with tab order, focus scopes for modals and popovers, and `focus_visible` distinction for keyboard vs. pointer.
-- Keyboard shortcuts: typed actions bound to key chords in a context-sensitive keymap (the gpui model), dispatched along the focus path.
-- Elements carry an optional semantic role and label from day one so accessibility can be added without API churn.
+## 18. Performance budgets
 
-## 14. Widgets (`rouge-widgets`, v1)
-
-Built strictly on the public API, which keeps that API honest.
-
-- Button, icon button, toggle, checkbox, radio, slider, segmented control
-- Text input, text area, inline edit
-- Scroll view, vertical scrollbar, virtual list, tree rows, list rows
-- Popover, tooltip, context menu (secondary click, or `.dropdown()` for a click-opened menu below its trigger), select, search picker
-- Backdrop and modal
-- Tabs, separator, progress, spinner, notifications, empty states, resizable panels and their toggles
-
-There is one component set. It reads colors from the theme and metrics from `tokens`, sizes itself in design units that scale with `InterfaceSize`, ships Inter and Lilex with `bundled_fonts()`, and draws Lucide icons through `Icon`. `rouge_widgets::testing::component_test()` builds a `TestUi` with those fonts. Elevated surfaces take one `Material` (`Floating`, `Surface`, `Glass`, `GlassPanel`, `GlassControl` or `Bare`) through `.material(m)`, written `material=Material::Glass` in `view!`. Popups and backdrops share one dismiss layer that closes on an outside press or Escape. In v1, popovers and menus render in the window's overlay root rather than in separate OS windows.
-
-Menu entries are the core `MenuItem` model: an `Item` runs a `MenuAction` (a typed action or a callback) and has optional `.id`, `.icon` and `.destructive` styling that native menus ignore. `select` is a dropdown `context_menu` whose trigger shows the chosen option. `Hint` adds `.tooltip(label)` and `.hint(Option<label>)` to any view, and `RovingFocus` moves focus between a list's items with the arrow, Home and End keys.
-
-## 15. Web view (`rouge-webview`)
-
-An optional crate that embeds [Servo](https://servo.org) as a surface source (section 9.6). Scheduled after v0.1 (M8); nothing in the core crates depends on it.
-
-### 15.1 Scope
-
-- For content the app author controls: bundled HTML/CSS/JS, rendered documents, embedded tools. Servo is not WebKit or Chromium, and arbitrary sites will break.
-- Fully composited. A web view is a surface layer, so glass, overlays, clipping, and animation all work over and on it.
-- Zero CPU copies per frame, per the surface rule.
-
-### 15.2 Why Servo, and why not the obvious shortcuts
-
-| Option | Verdict |
-|---|---|
-| Servo with `SoftwareRenderingContext` or `read_to_image` (what `iced_servo` does) | Rejected. CPU readback and re-upload on every repaint. |
-| Servo, blit its framebuffer into a shared texture (Slint's Linux path) | Rejected as the design; kept as a contingency. It is a GPU copy, not a CPU one, but it is avoidable: a custom `RenderingContext` can make Servo draw into the shared buffer directly. |
-| **Servo with a custom `RenderingContext` that renders into the shared buffer** | **Chosen.** |
-| System web view as a child window (wry) | Rejected. Cannot be composited; child views on Linux are X11-only. |
-| CEF offscreen rendering with shared textures | Not now. A viable second surface producer if open-web compatibility becomes a requirement; costs a ~200 MB bundle and a multi-process runtime. |
-| Wait for a wgpu backend in WebRender ([servo#37149](https://github.com/servo/servo/issues/37149)) | Not a plan. No merged status as of November 2026. If it lands, Servo could render on Rouge's device and `rouge-webview` would shrink; the surface API would not change. |
-
-### 15.3 Rendering path
-
-Servo paints with WebRender over OpenGL, in a GL context managed by surfman. Its embedding API takes any implementation of the public `RenderingContext` trait, and calls `prepare_for_rendering` before drawing so the context can bind a framebuffer.
-
-`rouge-webview` implements that trait as `SharedRenderingContext`:
-
-1. It owns the web view's `SurfaceProducer` and a chain of three buffers allocated with `SurfaceCx::allocate(... .sharing(Sharing::Native))` (IOSurfaces on macOS, DMA-BUFs on Linux), each attached to a GL framebuffer and registered once as a buffer set.
-2. `prepare_for_rendering` binds the framebuffer of a free buffer. WebRender draws the page straight into shared memory.
-3. `present` flushes, creates a GL fence, and submits the buffer with a `Fence` whose `FenceSignal` fires when the GL fence does. The buffer stays read-only until `Released`.
-4. `Configure` reallocates the chain at the new physical size and registers it as a new buffer set; frames carry the configuration they were rendered for.
-5. `read_to_image` is implemented with a readback because the trait requires it. Servo uses it for screenshots only; it is never on the frame path.
-
-One `SharedRenderingContext` per web view, because Servo sizes a web view to its rendering context.
-
-End to end, a page repaint is: WebRender draws into buffer N, the fence signals, the registry latches the frame, and one compositor frame samples buffer N. No copy on either the CPU or the GPU.
-
-### 15.4 Threading and frame pacing
-
-- One `Servo` instance per process, owned by a dedicated **web thread**, together with every `WebView` and `SharedRenderingContext`. Servo's handles are `!Send`, so they stay on the thread that created them. The web thread is an actor: commands in over a channel, frames out through each web view's `SurfaceProducer`, state out through `signal.sender()` (section 5.5).
-- Servo's layout and script already run on Servo's own threads. What remains on the embedder thread is `spin_event_loop` and `WebView::paint` (WebRender's GL submission). Keeping those off the UI thread means a slow page cannot drop a Rouge animation frame.
-- Servo's `EventLoopWaker` wakes the web thread. `WebViewDelegate::notify_new_frame_ready` triggers `WebView::paint` then `present`.
-- Page animations (`notify_animating_changed`) are paced by the compositor: while a page animates, the web thread calls `request_frame`, and each `FrameRequest` ticks Servo's `RefreshDriver` hook with the request's target time. Pages animate at display rate with timestamps that match presentation, and stop when the surface is hidden or the window is occluded, because hidden surfaces get no frame requests.
-- Idle is still idle: a static page produces no Servo frames, so no surface frames and no Rouge frames. A hidden web view (`SurfaceConfig` not visible) is hidden in Servo and stops painting.
-
-If the S0 spike shows Servo cannot run off the main thread on a target OS, the fallback is to run the same actor on the UI thread behind the same channels. The public API does not change; the cost is that page paint time counts against the UI frame budget.
-
-### 15.5 Input, focus, and cursor
-
-- The web view element receives events through normal dispatch (section 13). Hit testing already maps through animated transforms, so events arrive in surface-local coordinates.
-- Pointer, wheel, keyboard, and IME composition events are forwarded with `WebView::notify_input_event`. Servo answers whether the page consumed each one (`notify_input_event_handled`), but only after the event has crossed to the web thread and back. Wheel events therefore use the input regions attached to the current frame (section 9.6): the web thread publishes the page's scrollable and wheel-handling areas with each frame, and Rouge decides synchronously whether a wheel event stays in the page or chains to Rouge scroll containers. Keys go to the page first; `notify_input_event_handled` releases unconsumed keys to Rouge's bindings. How much of Servo's scroll tree the embedding API exposes for regions is to be confirmed in M8; the fallback is one region covering the whole page while it has any scrollable overflow.
-- Focus maps to `WebView::set_focused`. Tab traversal enters and leaves the page through the focus tree.
-- `notify_cursor_changed` sets the platform cursor while the pointer is over the element.
-- Scale factor changes go to `set_hidpi_scale_factor`.
-- Keyboard, focus, and IME depend on M5. Until then only pointer and wheel can be forwarded.
-
-### 15.6 API
-
-```rust
-let page = webview("app://index.html");
-
-page.view()
-    .w_full()
-    .h_full()
-    .rounded(12.);
-
-page.load("app://settings.html");
-page.title();
-page.loading();
-page.evaluate("document.title").await;
-```
-
-- `webview(url)` returns a `Copy` handle. `view()` builds the element; the other methods send commands to the web thread.
-- `title()`, `url()`, `loading()`, and `can_go_back()` are read signals.
-- Navigation policy is a callback (`on_navigate`) that allows or denies a request.
-- App resources are meant to be served from a custom scheme, so bundled content needs no local server. Whether Servo's embedding API exposes protocol registration to embedders is to be confirmed in M8; `data:` and `file:` URLs are the baseline.
-- Two-way messaging between page script and Rust is planned on top of `evaluate` and a message channel. Its shape is decided in M8, not here.
-
-### 15.7 Dependencies and build
-
-- **Servo version**: pinned to an exact release. Servo publishes 0.x releases roughly monthly (0.8.0 on 2026-11-07) and has had breaking changes between them. Upgrades are deliberate and gated on the M8 test suite.
-- **Build cost**: Servo is a very large dependency with native components (SpiderMonkey). It is isolated in `rouge-webview` so the core workspace build and CI are unaffected, with its own CI job.
-- **Licensing**: Servo is MPL-2.0. Rouge stays MIT OR Apache-2.0; apps that enable the web view take on MPL obligations for Servo's files. Documented in the crate README.
-- **Servo features**: built without Servo's `webgpu` feature at first, so Servo does not pull a second wgpu into the build.
-- **Interop code**: written in-house against wgpu's import APIs (section 9.6). The [Slint Servo example](https://slint.dev/blog/using-servo-with-slint) and [wgpu-graft](https://github.com/merely-made/wgpu-graft) are prior art for the same technique and are used as references. wgpu-graft is not taken as a dependency: it is young, single-maintainer, MPL-2.0, and the code we need is small.
-
-### 15.8 What is established and what the spike must prove
-
-| Claim | Status |
-|---|---|
-| Servo is embeddable from crates.io and accepts a custom `RenderingContext` | Established (Servo 0.8.0 docs). |
-| wgpu 30 can wrap an IOSurface-backed Metal texture and a DMA-BUF without copying | Established (APIs read in the pinned wgpu-hal source). |
-| Servo output can reach a wgpu texture on macOS with no copy | Established in principle: Slint and godot-servo do IOSurface to `MTLTexture`. Slint adds a flip pass, which UV flipping makes unnecessary. |
-| WebRender renders correctly into a framebuffer bound in `prepare_for_rendering` | Expected: Servo's own `OffscreenRenderingContext` works this way. To prove with our buffers in S0. |
-| A GL framebuffer backed by an exported DMA-BUF works on Mesa (Intel, AMD) and NVIDIA | Unproven. S0. |
-| Fence-gated presentation is sufficient on both OSes with no tearing or stale frames | Unproven. S0. |
-| Servo can be created and spun on a non-main thread on macOS and Linux | Unproven. S0. |
-| Servo's GL context can be forced onto the same GPU as the wgpu adapter on Linux | Unproven; surfman's EGL backend has no GPU selection API. S0. |
-| Servo paint time for representative pages at 2x | Unmeasured. S0 sets the M8 budget. |
-
-## 16. Dev tooling (`rouge-devtools`, v1)
-
-- **Inspector overlay**: pick an element to see its bounds, resolved style, layout box, owning layer, and creation location.
-- **Invalidation flashing**: relayout, repaint, and composite highlighted in distinct colors.
-- **Layer view**: layer boundaries, direct vs. rasterized mode, texture memory, pass-break count. Surface layers show their producer, buffer size, present rate, and any cache they invalidate.
-- **Frame HUD**: per-stage timing (effects, layout, paint, composite, GPU), frame-time graph, dropped frames.
-- **Signal graph**: live signals, memos, and effects per scope, with run counts and what triggered the last run.
-- **Warnings**: per-frame layout animation, effect loops, signals read outside a tracking context in view code (a common run-once mistake), leaked scopes.
-- **Hot reload**: stretch goal. Run-once components fit function-level hot patching (subsecond-style) well, since a patched component's scope can be disposed and re-run in place. Feasibility is validated in its own milestone and it does not block v1.
-
-Devtools are compiled out unless the `devtools` feature is enabled.
-
-## 17. Designed for, shipped later
-
-- **Accessibility**: AccessKit tree generated from element roles and labels, updated incrementally from the same dirty flags. Parley provides the text hooks.
-- **Multi-window and native chrome**: `App` owns a set of windows, each with its own root scope, element tree, and compositor sharing one wgpu device, one surface registry, and one atlas set. v1 ships a single window per app plus transparent/custom titlebar support where winit provides it.
-- **Render thread**: enabled by the commit boundary (section 9.5). The surface registry moves with the compositor, so video keeps playing while the UI thread is busy.
-- **Partial present / damage rects**: v1 redraws the full frame from retained buffers when anything changed. Surface frames already carry damage rectangles for it, and for keeping backdrop caches valid when a surface changes outside the glass above it.
-- **Windows and web**: wgpu and winit both support them; the work is in text, IME, and platform shims.
-- **Surfaces and web view**: designed in sections 9.6 and 15, scheduled as M7 and M8 after v0.1. The S0 spike runs earlier because its findings constrain device creation.
-- **More surface sources**: video (VA-API and VideoToolbox already produce DMA-BUFs and IOSurfaces; it adds YUV sampling and colour spaces behind the existing frame metadata and uses timed queues), user-rendered wgpu content (device sharing, available everywhere), and CEF if open-web compatibility is needed (the same protocol carried across processes). All use the M7 protocol unchanged.
-
-## 18. Performance plan
-
-### Budgets (M-series Mac or mid-range discrete/integrated Vulkan GPU, 120Hz)
+On an M-series Mac or a mid-range Vulkan GPU at 120Hz:
 
 | Scenario | Target |
 |---|---|
 | Idle | 0 frames, 0% CPU |
 | Compositor-only animation frame | under 2ms CPU |
-| Single signal change to paint | under 1ms CPU excluding GPU |
-| Scrolling a 100k-row virtual list | no dropped frames at 120Hz |
-| 1,000 simultaneously animating layers | no dropped frames at 120Hz |
-| Full-window glass panel over scrolling content | no dropped frames at 120Hz |
+| Single signal change to paint | under 1ms CPU, excluding GPU |
+| Scrolling a 100,000-row virtual list | no dropped frames |
+| 1,000 simultaneously animating layers | no dropped frames |
+| Full-window glass panel over scrolling content | no dropped frames |
 | Cold start to first frame | under 100ms after window creation |
-| Surface present, any buffer size (M7) | 0 bytes of pixel data through CPU memory; Rouge-side cost of a compositor-only frame (under 2ms CPU) |
-| Full-window animating surface under a glass panel (M7) | no dropped frames at 120Hz |
-| Web view idle on a static page (M8) | 0 frames, 0% CPU |
-| Web view scrolling a text-heavy page, full window at 2x (M8) | 120Hz target; the budget for Servo's own paint is set from S0 measurements |
-| Rouge animation while a web view page is busy (M8) | no dropped Rouge frames |
+| A surface presents a frame, any size | 0 bytes of pixel data through CPU memory; the cost of a compositor-only frame |
+| Full-window animating surface under glass | no dropped frames |
 
-### How the design meets them
+How the design meets them:
 
-- No per-frame tree rebuild or diff; work is proportional to change.
-- Dirty classification keeps most updates out of layout.
-- Retained draw lists and instance buffers; clean layers cost a draw call.
-- Animations interpolate in the compositor over flat arrays of layer properties.
-- Glyph and layout caches; image decode and upload off the UI thread.
-- Pass breaks (backdrop effects, rasterized layers) are counted, batched, and cached.
+- No per-frame tree rebuild or diff; work is proportional to change, and first values are computed at build.
+- Dirty levels keep most updates out of layout; scrolling and compositor animation stay out of paint.
+- Retained draw lists in one instance buffer; a clean layer costs a draw call and a few bytes of uniform records.
+- Animations interpolate in the compositor over flat per-layer values.
+- Text is shaped once per content and style, and re-broken only for new widths.
+- Pass breaks (backdrops, rasterized layers) are merged, cached and counted.
 
-### Verification
+## 19. Risks and open questions
 
-- Benchmark apps for each budget row, run in CI on a GPU runner where available and tracked over time.
-- Headless rendering to texture for golden-image tests of primitives and effects.
-- Unit and property tests for the reactive graph (glitch-freedom, disposal, run-at-most-once).
-- Frame-stage timing built into the runtime behind a feature flag, feeding the HUD.
-
-## 19. Roadmap
-
-| Milestone | Deliverable | Exit criteria |
-|---|---|---|
-| **M0: Reactive core** | `rouge-reactive`: signals, memos, effects, scopes, batching, context | Test suite passes; micro-benchmarks comparable to existing Rust signal libraries |
-| **M1: Pixels** | winit window, wgpu setup, quad + shadow pipelines, element tree, taffy, static `div` tree, reactive props | Counter demo without text; signal change repaints only the affected layer |
-| **M2: Text and input** | Parley integration, glyph atlas, `text`, events, hit testing, hover/active/focus variants, control flow (`show`, `each`) | Todo-list demo; keyed list reorder touches only moved rows |
-| **M3: Compositor** | Layer tree, direct vs. rasterized modes, commit boundary, scroll layers, transitions, springs, `Motion`, keyframes, layout transitions, enter/exit | 1,000-layer animation benchmark meets budget; idle is zero frames |
-| **M4: Effects** | Scene target, backdrop pipeline, blur, `Glass`, masks, blend modes, `Effect` trait with custom WGSL | Liquid-glass demo over scrolling content meets budget |
-| **M5: Widgets** | `rouge-widgets` v1 set, text editing with IME, focus traversal, keymap/actions, images, paths, `canvas`, async (`spawn`, `resource`) | A non-trivial sample app (e.g. a chat client or settings app) built only on public API |
-| **M6: Devtools and hardening** | Inspector, HUD, signal graph, warnings, hot-reload spike, docs, Linux X11/Wayland pass, benchmark suite in CI | All budget rows met on both OSes; v0.1 release |
-| **S0: Surface interop spike** | Time-boxed to two weeks, throwaway code, runs alongside M5. Servo with a custom `RenderingContext` drawing into an IOSurface (macOS) and a DMA-BUF (Linux), imported into wgpu and drawn by the existing renderer through a temporary hook. Resolves every "unproven" row in section 15.8. | Written go/no-go per OS with: zero CPU pixel copies confirmed by instrumentation; Servo paint times for three reference pages at 2x; the sync scheme validated for tearing and stale frames; driver matrix (Apple silicon, Intel/AMD Mesa, NVIDIA); threading answer. A no-go on DMA-BUF switches Linux to the opaque-fd contingency before M7 starts. |
-| **M7: Surfaces** | App-wide `Gpu` and `Surfaces` registry shared by windows; the producer protocol (`surface_channel`, `SurfaceProducer`, `SurfaceEvent`, `Frame` metadata, buffer sets); mailbox and timed queues; frame requests and presentation feedback; fences and GPU-gated release; `surface` element with placement, status and fallback; `LayerCommand::Surface`; surface shader; frame-aware cache signatures; `rouge-interop` with IOSurface and DMA-BUF allocation and import; `TestSurface`; devtools reporting. Depends on M5 and M6's Linux pass. | Surface budget rows met on both OSes; pixel tests for clip, flip, alpha, regions, transforms, effects and glass over a surface, resize and exit; protocol tests for queues, fences, releases, frame requests and detach; a new surface frame uploads no instance or image bytes and runs no layout, paint or effect; idle is zero frames. |
-| **M8: Web view** | `rouge-webview`: `SharedRenderingContext`, web-thread actor, refresh paced by frame requests, input regions, input/IME/focus/cursor forwarding, `webview` handle with signals, navigation policy, resource loading, script evaluation and messaging. Depends on M7 and M5 input. | Web view budget rows met on both OSes; a sample app with a web view under a glass toolbar, inside a scroll container, with a popover above it; text entry with IME in a page form; scroll chaining out of the page; pinned Servo version builds in its own CI job. |
-| **Post-v1** | AccessKit, multi-window, native menus/dialogs, render thread, damage rects, editor-grade text widget, further surface sources (video, CEF) | |
-
-M0 has no dependencies and M1's renderer work is independent of it until reactive props land, so the two can proceed in parallel.
-
-M7 and M8 ship after v0.1. S0 is deliberately early: it is cheap, it depends only on the renderer that already exists, and a no-go changes how `Gpu` is created, which is better known before M6 hardens it. M7 has value without M8 (video and custom GPU content), so it is a separate milestone and not a web view implementation detail.
-
-## 20. Risks and open questions
-
-| Risk / question | Mitigation or current position |
+| Risk or question | Position |
 |---|---|
-| **Run-once footguns**: reading a signal in a component body (not in a closure) silently captures a stale value. | Debug-mode warning for untracked reads during view construction; devtools surfacing; clear docs. This is the main ergonomic cost of the model. |
-| **`IntoProp` coherence** between plain values and closures. | Marker-type parameter fallback (section 6.3). Prototype in M1 before the style API is written out. |
-| **Disposed-handle access** with `Copy` signals. | Generational ids, debug panics with creation site, `try_` variants. |
-| **winit limitations**: frame pacing on macOS, popups/layer-shell on Wayland, native menus. | `Platform` trait allows per-OS replacement; popovers are in-window in v1. |
-| **Backdrop pass breaks** can make frames expensive with many glass elements. | Batching, caching, reduced-resolution blur, and a visible counter in devtools. Establish a tested upper bound in M4. |
-| **Text rendering quality** vs. native (CoreText) on macOS, especially at small sizes. | Evaluate swash output against native in M2; gamma/contrast tuning in the glyph shader; a native rasterizer behind `rouge-text` remains possible without API change. |
-| **Gamma-space vs. linear blending** default. | Start with gamma-space for parity with design tools; revisit after M4 once effects exist. |
-| **Path rendering** via tessellation may be insufficient for heavy vector content. | Acceptable for icons and simple shapes in v1; a compute-based path renderer could back the same primitive later. |
-| **UI-thread compositor**: a blocked UI thread stalls animations. | Async and background helpers keep work off the UI thread; the commit boundary keeps the render-thread option open. |
-| **Hot reload feasibility** with closures and generic views. | Time-boxed spike in M6; not a v1 commitment. |
-| **GL-to-Vulkan sharing on Linux** varies by driver (DMA-BUF export, modifiers, NVIDIA). | S0 tests a driver matrix before M7 is committed. Opaque-fd sharing is the contingency; a GPU blit into a shared image is the last resort. A CPU copy is not on the list: unsupported configurations get `SurfaceError` and the fallback view. |
-| **Cross-API synchronization**: wgpu cannot see GL writing to a buffer it samples. | Buffers are read-only for the producer from submit until `Released`, frames wait for their `Fence`, and releases are sent only after Rouge's GPU work completes (section 9.6). Validated in S0 with a tearing test. |
-| **External GPU waits**: wgpu has no public API to wait on a foreign semaphore or shared event. | Fences are signalled on the CPU by the producer, which costs up to one frame of latency but never stalls a compositor frame. The `acquire` field is typed so a native fence can be waited on the GPU later without a protocol change. |
-| **Idle release delivery**: `on_submitted_work_done` callbacks fire only while the device is polled. | `Surfaces::maintain` polls while releases are outstanding and `next_deadline` keeps the loop waking every few milliseconds until they arrive. |
-| **Servo API churn**: 0.x releases roughly monthly with breaking changes. | Exact version pin, upgrades gated on the M8 suite, all Servo types confined to `rouge-webview`. |
-| **Servo web compatibility** is well short of WebKit and Chromium. | Scope is author-controlled content (section 15.1). The surface protocol leaves room for a CEF producer without API change. |
-| **Servo paint cost** is unmeasured and could exceed a 120Hz frame on heavy pages. | Servo runs on its own thread, so it cannot stall Rouge frames; the page itself may update below display rate. S0 measures it and sets the M8 budget. |
-| **Servo off the main thread** may not work on every OS. | S0 answers it. Fallback is the same actor on the UI thread (section 15.4). |
-| **Servo build weight** (compile time, native toolchain, binary size). | Optional crate with its own CI job; never a dependency of the core crates. |
-| **Dual-GPU machines**: Servo's GL context and the wgpu adapter may land on different GPUs. | `Attached` carries the adapter's identity; a producer on another GPU reports `SurfaceError::AdapterMismatch`. Forcing a matching GPU on Linux is an S0 question. |
+| **Run-once footguns**: reading a signal in a component body captures a stale value. | The main ergonomic cost of the model. Planned devtools warnings; clear docs. |
+| **UI-thread compositor**: a blocked UI thread stalls animations. | Async and background helpers keep work off the UI thread. A render thread would need a data-only boundary between the tree and the compositor, which does not exist today. |
+| **Backdrop pass breaks** can make frames expensive with many overlapping glass elements. | Merging, caching, reduced-resolution blur, and counters in `RenderStats`. |
+| **CPU-rasterized paths** are resampled under compositor scale, and a canvas drawing new paths every frame uploads new masks. | Fine for icons and simple shapes; a GPU path renderer could back the same primitive later. |
+| **Text quality** versus CoreText at small sizes. | Grayscale swash output; tuning in the glyph shader; a native rasterizer could slot in behind `TextSystem`. |
+| **Gamma-space blending** differs from linear-light compositing. | Chosen for parity with CSS and design tools. |
+| **winit limitations**: popups and layer-shell on Wayland, native menus off macOS. | Popovers render in-window; Linux menus are rendered by Rouge. |
+| **Cross-API synchronization**: wgpu cannot see a foreign API writing a buffer it samples. | Read-only buffers from submit to `Released`, CPU-signalled fences, releases after GPU completion. A native fence could be waited on the GPU later without a protocol change. |
+| **Linux GL-to-Vulkan sharing** varies by driver (DMA-BUF export, modifiers, NVIDIA). | Opaque-fd sharing is the contingency; a GPU blit into a shared image is the last resort. A CPU copy is not on the list. |
 | **Name**: "Rouge" is a placeholder. | Check crates.io availability before publishing. |
 
-## 21. Implementation status
+## 20. Planned: web view (`rouge-webview`)
 
-Milestones M0 to M5 are implemented, M7 is implemented for macOS native sharing and for device sharing on every platform, and the S0 spike has been run on macOS. Everything listed as done is covered by tests, including pixel-level tests that render on a real GPU. Development and all windowed runs have been on macOS (Apple silicon); see "Linux" below for what has been run there.
+An optional crate embedding [Servo](https://servo.org) as a surface producer. Nothing else will depend on it, and it does not apply to the browser target.
 
-### API gap closure: window shell and menus (item 7)
+**Scope.** Content the app author controls (bundled HTML, rendered documents, embedded tools); arbitrary sites are best-effort. Fully composited as a surface, with zero CPU copies per frame.
 
-- `WindowOptions` now has `min_size(width, height)`, `maximized(bool)` and `decorations(Decorations::{Server, Client})`. The platform loop applies these with winit. Client decorations, or a compositor declining server decorations, wrap the content in `window_chrome(title, root)` with drag/double-click zoom, minimize/zoom/close controls and eight resize edges. Resize requests remain subject to the window manager's resizable/maximized policy.
-- Each `Ui` provides a copyable `window_handle()` in context. It supports reactive `title()`, `set_title`, `minimize`, `zoom`, `close`, `start_drag`, `start_resize` and `quit`. Commands are owned and drained by that window; disposed handles ignore commands. `App::quit()` works in pointer/key/action callbacks through the UI's window context; asynchronous code should capture the handle during construction. `App::appearance()` / `appearance()` return the window's reactive `ReadSignal<Appearance>` and follow winit theme events.
-- `App::menus(Vec<Menu>)` uses the shared `Menu` / `MenuItem` model (typed actions or callbacks, optional shortcuts, separators and nested submenus). `MenuItem::dispatch(&mut Ui)` uses the same focused typed action path as keys, or invokes a callback. `MenuItem::activate()` runs callbacks directly and queues typed actions for window dispatch. `Menu::edit()` is installed when no Edit menu is supplied and routes cut/copy/paste/select-all to the focused editable; undo/redo use the editor history added in item 9. Shortcut annotations are native accelerators on macOS and labels on the rendered bar; `Ui::bind_menus` makes every menu shortcut a window-wide key binding on all platforms, consulted after element bindings on the focus path; `App` binds its menus and `TestUiBuilder::menus` does the same in tests. `MenuItem::shortcut` and `Div::bind_key` accept a `Chord` or a chord string such as `"secondary-k"`, and `WindowHandle::dispatch_action(value)` sends a typed action to the focused handlers.
-- Select, context menus and the rendered application bar share one popup renderer. Select and default context menus take focus, support up/down/Enter/Space and nested-menu right/left/Escape navigation, and restore focus when dismissed; selecting a leaf closes its ancestor menus. `ContextMenu::focus_policy(MenuFocus::Preserve)` explicitly keeps editor focus for typed actions or auxiliary callbacks, independent of the item types. The application bar always preserves editor focus.
-- macOS uses muda, with a process-wide native menu, About/Hide/Hide Others/Show All/Quit, and event-loop wakeups for menu selections. **Linux's application menu is Rouge-rendered, not native**: muda's Linux integration requires GTK-owned windows and is incompatible with Rouge's winit ownership. This is the approved platform adjustment, not a GTK migration. The rendered bar preserves editor focus during pointer use; it does not yet provide keyboard menu navigation. `Div::preserve_focus()` also exposes that behavior for other auxiliary controls.
-- `platform::open_url` is available behind `rouge/open-url`. Shell behavior, focused editor menu dispatch, appearance, title commands, chrome geometry and controls are covered by headless public-API tests on x86_64 Linux. No windowed verification was performed here; the macOS-only native adapter is not compiled or executed on this Linux host.
+**Approach.**
 
-### API gap closure: interactive scrolling and panels (item 8)
-
-- `scroll_view` uses the existing shared `Signal<ScrollState>` for both axes. Vertical and horizontal thumbs appear only when their axis overflows, retain compositor-only offset tracking, and support captured drags outside the viewport. Clicking a track jumps the thumb's center to that point; offsets clamp through `ScrollState::scroll_to`. The minimum thumb shrinks to fit viewports smaller than 32 design units. Scrollbars preserve content focus.
-- `resizable_panel(Side::{Left, Right, Top, Bottom}, size_signal)` sizes the panel's width or height in rem and places a resize handle on its inner edge. It supports `.min_size`, `.max_size`, `.reset_size`, `.on_resize` and `.child`; double-click resets to the configured size (initial signal value by default). Bounds also clamp external signal writes. Resize notifications report user drag/reset changes, not external writes. It uses only public `Div::on_drag`, with no private widget gesture plumbing. Tests cover all four directions, bounds/reset/notifications, both scrollbar axes, track jumps and pointer capture.
-
-### API gap closure: editor parity (item 9)
-
-- `Editable` now provides undo/redo through normal command-Z / command-shift-Z / command-Y shortcuts and the same `EditAction` menu actions. Consecutive character insertion coalesces until navigation, selection, another edit operation or a one-second typing pause. Replacements, paste/cut, newlines and IME commits are transactions; IME cancellation restores the pre-composition content/selection. History restores selection and new edits invalidate redo. External value replacement clears history.
-- `.selection(Signal<Range<usize>>)` is bidirectional, uses UTF-8 byte offsets and publishes the normalized selected range (caret is `index..index`). External offsets clamp to valid character boundaries. `.min_rows` / `.max_rows` constrain intrinsic height using the resolved font size and line-height multiple, including wrapped lines. At the cap, the existing text clipping, hit testing and caret geometry use a vertical offset to keep the caret visible. The minimum wins if limits conflict.
-- `.placeholder(text, color)` paints a hint in the editor's own text style while its value is empty, and `.on_paste(|media| ...)` receives files or a PNG image from the clipboard instead of pasting text when the clipboard holds them. `Clipboard::read_media` supplies that media; the system clipboard reads file lists and images, and `MemoryClipboard::set_media` fakes them.
-- `.submit_on_enter(true)` makes unshifted Enter submit while Shift-Enter inserts a newline in multiline editors; ordinary multiline Enter remains a newline by default. Selection, row limits and submit mode forward through `text_input` / `text_area`. Explicit row limits replace the text area's default 72px minimum.
-- Focused carets blink every 500ms, reset on edit/navigation/focus, and stop after ten idle seconds with the caret visible. Blink invalidates paint, not layout; while blinking, the platform requests frames but unchanged blink phases do not repaint. Tests use the deterministic UI clock. Password masking remains unimplemented.
-- Public-API tests cover grouped undo/redo, selection restoration/replacement and UTF-8 clamping, IME transactions, row growth/caps, vertical caret geometry, submit mode, widget forwarding and blink/idle invalidation. The previously unregistered `tests/tree/edit_test.rs` is now included in the editable test entrypoint, so its five existing editing regressions actually run.
-
-### API gap closure: Tokio bridge (item 10)
-
-- Enable `rouge-reactive/tokio-rt` (or `rouge/tokio-rt`) for `spawn_tokio(future) -> Task<T>` and `spawn_blocking(work) -> Task<T>`. Both run on the Tokio runtime set for the current Rouge runtime with `set_tokio(handle)`, which `App::tokio(handle)` does for apps; spawning without one panics. The future and output must be `Send + 'static`; the work runs on that runtime, so Tokio timers/I/O have their runtime context, and blocking work uses Tokio's blocking pool. Completion wakes Rouge and is delivered by the existing UI executor when it polls. Awaiting yields `Result<T, TaskError>`; Tokio panics/shutdown errors are surfaced rather than panicking the UI executor.
-- Every task, local or bridged, is owned by the scope that spawned it: dropping its handle does not cancel it. `Task::cancel_on_drop()` opts a handle into cancelling when dropped. Cancelling a bridge task, disposing its Rouge scope, or dropping the Rouge runtime aborts its Tokio future. Abort is cooperative (it cannot interrupt synchronous work inside a poll). This holds before the bridge's first UI poll as well. Retain/await the returned task: discarding it immediately cancels the work.
-- The existing `Task` is now `Task<T = ()>` and is no longer `Copy`. `spawn`, `spawn_tokio` and `spawn_blocking` share this typed join API and executor path. No second UI executor or locks were added.
-- `spawn(async move { let result = spawn_tokio(io_future).await; value.set(result); })` delivers into a UI signal. For progress from the worker, capture `value.sender()` before spawning and call `sender.set(progress)` there; it marshals writes back to the UI thread. Feature-enabled tests use a real multi-thread Tokio runtime to cover timers, signal senders, UI-thread completion, panic propagation and abort-on-drop/scope cleanup.
-
-### API gap closure: dynamic rebuild continuity (item 11)
-
-- `dynamic` remains replacement-oriented, not a keyed reconciler. Allocate handles outside the rebuilding closure and reuse the same `FocusHandle`, `VirtualListHandle` or `Signal<ScrollState>` in each replacement. UI patches now settle as one batch: focused-element teardown retains its handle identity and editor state until the batch's replacement tree is attached. A matching enabled/focusable handle restores focus, selection/caret and scroll; unchanged editor content also retains undo/redo and IME composition. New typography/configuration and callbacks still come from the new view. Changed content clamps the selection and starts fresh history.
-- This works through nested dynamic/show wrappers and repeated updates before a frame. A genuinely hidden/unmounted branch does not retain focus for a future mount, and a fresh focus handle does not inherit focus. Each handle must identify one live attachment; it is not a key for multiple simultaneous editors. Keyed `each` remains the API for retaining element identities rather than replacing a tree.
-- Scroll publication no longer overwrites a pending programmatic target with a new compositor layer's initial zero offset before layout applies it. Reusing list/scroll handles therefore preserves exact offsets (including partially visible rows) across replacement. List row geometry is rebuilt, disposed row memos are never read through a retained handle, and subsequent `scroll_to_row` still works. Tests exercise editor focus/caret/history, nested replacement/unmount/fresh-handle behavior, ordinary scroll offsets and virtual-list offsets/top-row/geometry after rebuilding.
-
-### API gap closure: shared diff proof example
-
-- All eleven ordered API-gap items are implemented in separate tested commits. `crates/rouge/examples/shared/diff` now exercises the new APIs without changing the external `/home/josh/code/diff` application.
-- Each patch line is highlighted once into canonical text plus semantic UTF-8 byte ranges, shared by unified and split cells (including both sides of context rows). Tab expansion happens before range creation, and trailing whitespace is retained. Each cell maps tokens to theme colors in one `rich_text` leaf, rather than reconstructing text from fragments or building a flex child per token. The root supplies inherited UI typography; code rows, hunks and compact metadata override typography at their containers. Font sizes and selected layout spacing use `rem`.
-- `Review` owns one `VirtualListHandle`. The presentation stores file header row indices, not a second prefix-height table. Sticky-header lookup/push-off uses `row_top`; the toolbar reads `top_row`; file navigation, collapse correction and mode changes use `scroll_to_row`. Mode changes retain approximate per-file row progress, aligned to a row. The viewport begins beneath the floating toolbar, removing the old synthetic spacer row and its index/coordinate correction.
-- Named hover groups reveal a line's add-comment affordance. Stable test IDs drive file navigation, mode changes, line/comment interaction and the headless screenshot sequence. A local comment draft demonstrates autofocus, multiline editing, min/max rows, Enter submission and Shift-Enter newlines. Saved comments can be reopened in the same cell; they are in-memory example state keyed by presentation row/side, not persisted or reconciled across unified/split layouts.
-- The example reuses `clankerdiff-core` hunk, patch-line and status types through a development-only Git dependency pinned to `09a11f7e7fbaa354a2df4743b4ee18ede000a30c`. `Patch::from(Vec<clankerdiff_core::FileDiff>)` also accepts domain-generated diffs directly. Rouge library crates have no application-domain dependencies. The example retains a compatibility parser and positional row projection: the domain parser validates repository paths and complete hunks, while its presentation sorts files, changes added/deleted layout, and truncates cells. Replacing these would change the example's accepted inputs and UI behavior. The example keeps its small lexer rather than importing the syntax crate's full grammar set.
-- Public-API integration tests cover file/mode navigation, sticky push-off and collapse, hover rendering/reversion, comment save/reopen/cancel, Unicode/tab/trailing-whitespace byte hits, inherited rem sizing, domain-model input, permissive parsing, and sample/empty-patch GPU smoke renders. `cargo run -p rouge --example demo -- --snapshot <directory>` includes unified, scrolled, split, selected and comment-draft diff screenshots. The example remains a small review UI, not a port of the full application; the existing shell/menu, resizing, Tokio and rebuild tests cover APIs not exercised here.
-
-### Done
-
-| Area | What exists |
+| Option | Verdict |
 |---|---|
-| Reactivity (`rouge-reactive`) | Explicit `Runtime` with an enter guard; signals, memos, effects, scopes, batching, context, untrack, cleanup; push-pull propagation; disposal with creation-site diagnostics. Async: `spawn` (a UI-thread executor owned by the runtime, tasks owned by the scope or effect that spawned them), `spawn_blocking`, `sleep`, `resource`, and `Signal::sender` for writes from other threads. `Runtime::poll` / `poll_tasks` drive it and `Runtime::set_waker` tells the embedder when there is work. |
-| Renderer (`rouge-render`) | wgpu pipelines for quads (rounded, bordered), shadows, glyphs and sampled images (`ImageQuad`: RGBA or alpha-mask `ImageData`, source rect, tint, rounded-rect clip; textures uploaded once, cached per image and evicted when idle or over budget; a draw list is drawn as one call per run of same-texture primitives); glyph atlas; retained per-list GPU buffers; one effect pipeline per `Effect` type, built from a shared WGSL prelude; region-limited dual-Kawase blur at reduced resolution; backdrop snapshots that are batched and cached; headless rendering with PNG export. |
-| Effects (`rouge-render`) | The `Effect` trait for custom WGSL, and the built-ins written against it: `Blur`, `ColorMatrix`, `Mask` (linear, radial, shape), `BlendMode` (twelve modes), `BackdropBlur`, `Glass`. |
-| Compositor (`rouge-render`) | Retained layer tree driven only by data-only `Commit`s; per-layer transform, opacity, fill color, corner radii, scroll offset and clip; content effect chains, mask, blend mode and backdrop effect per layer, with animatable parameters; direct replay and rasterized (cached texture) layers chosen automatically; the animation engine (springs, tweens with cubic-bezier easing, decay, keyframes, motion values, layout transitions with optional size, enter/exit); scroll momentum and rubber-banding; scene generation for the renderer. |
-| Surfaces (`rouge-render`, `rouge-interop`, `rouge-core`) | The app-wide `Surfaces` registry and producer protocol, the `surface` element, the surface shader, IOSurface allocation and import, and `TestSurface`. See "M7: surfaces" below. |
-| Text (`rouge-text`) | Parley layout (wrapping with break-word fallback for overlong tokens, hanging `WrapIndent` that follows a line's leading whitespace, alignment, weights, families, composable byte-range spans; layouts cached per content, style and width), swash rasterization with subpixel positioning. Editing primitives over Parley's cursor and selection: carets and selections from byte indices or points, movement by character, word, line and document, selection rectangles and caret geometry. |
-| Core (`rouge-core`) | Retained element tree, taffy layout with text measurement, `Styled` builder API with reactive props, dirty classes, `div`, `text` and `rich_text`, hover/active variants, pointer down/move/up and scroll-wheel events with bubbling, pointer capture, a drag gesture with velocity, a `window_size` signal, `show` / `each` / `dynamic` with `.enter()` / `.exit()`, layers with segmented paint order and layer-relative draw lists, transitions, `motion`, `.animate(Keyframes)`, `.layout_transition()`, `scroll` and `virtual_list`, `.effect()` / `.backdrop()` / `.mask()` / `.blend()`. M5 additions: keyboard events with bubbling, a focus tree (tab order, `tab_index`, focus scopes, autofocus with restore, `FocusHandle`), `.focus()` / `.focus_visible()` / `.disabled()` variants and `.enabled()`, typed actions bound to key chords along the focus path, IME events, cursors, hover enter/leave, pointer events with element-local coordinates, modifiers and click count, `.pass_through()`, `.track_bounds()`, `overlay`, a `Theme` of signals in context, `editable` (single- and multi-line text editing with selection, clipboard, IME composition), `image` (decoded off the UI thread, four fit modes), `Path`, `canvas` with a `Painter`, and `icon`. |
-| Widgets (`rouge-widgets`) | Built only on the public API: the single component set described in section 14, with its fonts, icons, tokens and typography. Each reads the theme and implements `Styled`, so style methods override its defaults. |
-| App (`rouge`) | winit event loop, one GPU and surface registry shared by all windows with surface latching and frame-request pacing, window surface management, vsynced redraw only when dirty or animating, trackpad scroll phases, keyboard and modifier mapping, IME enablement and cursor area, cursor icons, the system clipboard (arboard), event-loop wake-ups for async work, examples (`counter`, `glass`, `effects`, `motion`, `diff`, `settings`, `snapshot`, `bench_layers`, `bench_scroll`, `bench_glass`, `surface`). `settings` is the M5 sample app: tabs, forms, theme switching, a popover, a modal, a context menu, a key binding and an async resource, all through `rouge::prelude`. |
+| Servo with a software context or `read_to_image` | Rejected: CPU readback and re-upload on every repaint. |
+| Blit Servo's framebuffer into a shared texture | Contingency only: a GPU copy that a custom context avoids. |
+| **Servo with a custom `RenderingContext` that renders into the shared buffer** | **Chosen.** |
+| System web view as a child window | Rejected: cannot be composited. |
+| CEF offscreen rendering with shared textures | A possible second producer if open-web compatibility is ever required. |
 
-### Measured
+**Rendering path.** A `SharedRenderingContext` owns the web view's `SurfaceProducer` and three native-shared buffers, each attached to a GL framebuffer and registered once. `prepare_for_rendering` binds a free buffer's framebuffer and WebRender draws straight into shared memory; `present` submits the buffer with a `Fence` signalled when the GL fence completes; `Configure` reallocates the chain at the new size. A page repaint is one WebRender draw and one compositor sample, with no copy on the CPU or GPU.
 
-Release mode, 800x600 at 2x scale on an Apple silicon laptop. CPU time unless stated; `bench_glass` also reports the time until the GPU has finished the frame, with no vsync.
+**Threading.** One Servo instance lives on a dedicated web thread, an actor with commands in over a channel, frames out through each producer, and state out through `signal.sender()`. Page animations are paced by frame requests, so hidden or occluded pages stop, and a static page produces no frames.
 
-- `bench_layers`, 1,000 layers springing at once: 0.55ms average per frame (1.6 to 1.9ms worst across runs), zero instance bytes uploaded, zero layout or paint passes.
-- `bench_scroll`, a 100,000-row `virtual_list` scrolled 40px per frame: 0.11ms average per frame (1.6ms worst) with about 150 elements mounted. Frames that stay inside the overscan run no layout and no paint; crossing it re-lays-out and repaints only the list's window layer.
-- `bench_glass`, a `Glass` panel with a 24px blur covering the window over that scrolling list: 0.19ms CPU and 0.8ms including the GPU per frame, with one pass break. Four stacked panels: 0.44ms and 2.1ms. Twelve panels with an 8px blur: 0.89ms and 3.6ms. Stacked panels touch, so each needs its own pass break; twelve is the largest count tested.
-- Re-run after M5 (the draw list now draws one call per run of same-texture primitives): `bench_layers` 0.57 to 0.59ms average (1.9 to 2.1ms worst); `bench_scroll` 0.11 to 0.16ms average, with a worst frame of 1.5 to 1.9ms in three runs and an unexplained 15 to 16ms frame in two others; `bench_glass` with one panel 0.16ms CPU and 0.59ms including the GPU.
-- Idle: `Ui::needs_frame` is false whenever nothing is dirty and nothing is animating, and the event loop requests no redraw.
+**Input.** Events arrive through normal dispatch in surface-local coordinates and are forwarded to Servo. Because Servo answers whether it consumed an event only after a round trip, frames will carry input regions (areas that consume wheel events, and cursor zones) so Rouge can decide scroll chaining synchronously from the current frame. Focus maps to `set_focused`, keys go to the page first, and the page's cursor drives the platform cursor.
 
-### Differences from this document
+**Constraints.** Pin an exact Servo release and gate upgrades on the crate's tests; build in its own CI job; Servo is MPL-2.0 while Rouge stays MIT or Apache-2.0; build without Servo's `webgpu` feature.
 
-- **Rem lengths**: `Length::Rem` and `rem` work for every Length-taking layout property and text size. A per-window `root_font_size() -> Signal<f32>` defaults to 16; root-size changes re-resolve retained rem declarations and invalidate their layout. Plain numeric text sizes remain pixels. Text-size fractions resolve against the root size; `auto()` uses the 14px text default.
-- **Keymap queries**: `Ui::binding_for::<T>()` and `use_binding::<T>() -> Memo<Option<Chord>>` use the same focus path, chord shadowing and deepest action handler as key dispatch. Queries do not execute arbitrary key-down handlers to predict whether they would stop propagation. `Ui::dispatch_action(value)` invokes the deepest typed handler without requiring a key binding. `Chord::parse` accepts `cmd`, `command` and `secondary` as platform-command aliases; `display` produces platform labels.
-- **Invisible elements**: the `invisible` style keeps an element's layout space but skips painting it, hit testing it and focusing it; `visible` undoes it, so `.invisible().group_hover("row", Styled::visible)` reveals actions while a row is hovered.
-- **Hover groups and test IDs**: `.group(name)` on a `Div` names an ancestor group; `.group_hover(name, |style| ...)` is a `Styled` variant driven by that ancestor’s existing hover state. `Div::test_id` accepts owned or borrowed names. `Ui::bounds_of` returns the first match in tree paint order and `bounds_of_all` returns all matches, in window coordinates; hidden subtrees are excluded. `TestUi` adds fallible `center_of`, `click_on`, `click_nth`, `right_click_on`, `hover_on`, `drag_on` (in steps), `scroll_on`, `scroll_into_view` and `drop_files_on`, plus `press("cmd-k enter")`, built on `Ui::press_chord`. `TestUi::advance` dispatches queued menu actions and focus requests the way the app loop does and keeps other window commands for `take_window_commands`. Queries traverse the live retained tree, including newly rebuilt `dynamic` subtrees.
-- **Inherited text styles**: `Styled` exposes `text_color`, `text_size`, `font`, `font_weight`, `italic` and `line_height` on any styled element. A leaf resolves each field independently from the nearest declaration, then its scoped theme (color) or the text defaults. Existing `Text::color`, `weight` and `bold` use these same declarations. Wrapping, alignment and spans remain leaf-local. Updates compare resolved leaf values: color changes repaint only inheriting layers without a layout pass, while typography clears only affected leaf layouts. Explicit overrides shield a leaf from ancestor changes. Line height remains a font-size multiple, not a Length.
-- **Rich text**: `rich_text(content, spans)` returns the existing `Text` leaf, also exposing `.spans(prop)`. `TextStyle::spans` is shaped through the same Parley layout as plain text. Overlapping spans compose per field, with later values winning; backgrounds paint before glyphs and underline/strike rectangles after them. `SpanStyle` uses optional color, background, weight, italic, underline (`Underline { thickness, color }`), strikethrough and family. Range hover/click callbacks and `Ui::text_index_at` report the UTF-8 byte at the start of the grapheme under the pointer, not a nearest insertion caret; outside text returns `None`.
+**Known and open.** On macOS, Servo drawing through a custom `RenderingContext` into an IOSurface imported into wgpu without copies, fence-gated triple buffering without stale or torn frames, and Servo running off the main thread are known to work. Open: DMA-BUF export from GL on Mesa and NVIDIA, forcing Servo's GL context onto the wgpu adapter's GPU on Linux, Servo's paint budget for heavy pages, how much of Servo's scroll tree is exposed for input regions, and custom-scheme resource loading.
 
-- **Flush timing**: see section 5.3, which was updated to match.
-- **Prop conversions** use a dedicated `PropFrom` trait plus the marker parameter. A blanket `Into` bound made bare float literals ambiguous for `f32` props. Effects use their own `IntoEffect` conversion for the same reason.
-- **No `rouge-platform` crate yet** (M5 added keyboard, IME, cursor and clipboard to the same place): winit is used directly from `rouge`. The `Ui` type is the platform-independent boundary and is what tests drive.
-- **Commit boundary**: `Commit`, `Compositor` and the animation types live in `rouge-render`. The element tree only ever pushes commands. Two things read back across the boundary, both on the UI thread: hit testing asks the compositor for a layer's current pose, and once per frame `Ui` copies motion values and scroll state out for `Motion::get` and `scroll_state`. The compositor also reports which surfaces its layers bind and unbind, which `Ui` forwards to the surface registry.
-- **Compositor-animatable properties** are translate, scale (uniform), rotate, opacity, scroll offset, the background color and corner radii of an element that owns a layer, and effect parameters. Clip is not. Background and radius are layer properties read by the shader, so animating them uploads no instance data; they also work in `Pose`, so keyframes and enter/exit can use them. An element's border and text are still painted.
-- **`Motion` is `f32` only** (not `Motion<T>`). `animate_to` and `decay` return an `Animation` that can be ignored or awaited; awaiting it yields `true` on arrival and `false` when interrupted. `get` returns the value as of the last frame.
-- **Timing** is springs, tweens (four cubic easings or `Ease::cubic_bezier`), and `Decay` for motion values.
-- **Scrolling**: wheel deltas scroll by exactly what the OS delivers and clamp. Trackpad gestures that report phases go through `Ui::scroll_drag` and `Ui::scroll_release`: past a limit the content follows with resistance, and on release it springs back. `scroll_release` with a velocity decays in the compositor and bounces off the limits; nothing in the app loop produces a non-zero velocity yet, since the OS already supplies momentum as further deltas. An axis with nothing to scroll does not rubber-band.
-- **Keyframes** take poses over the compositor properties, a duration in seconds and one easing applied per segment. One-shot keyframes hold their final pose. Effect parameters are not available in poses.
-- **Layout transitions animate position**, measured relative to the parent layer, and size when built with `LayoutTransition::new(timing).size()`. Size is animated by stretching the layer, so its content is scaled while the transition runs.
-- **Enter and exit** take a `Pose` and a timing: `.enter(Pose::new().opacity(0.0), Spring::snappy())`. Rows present at first mount enter too. An exiting layer is drawn above the rest of its parent layer's content until it finishes.
-- **Rasterized layers** are rendered in window space into a texture sized to their content, so they stay crisp but are re-rendered when anything other than their opacity or effect parameters changes. A layer is rasterized when it has a content effect, mask or blend mode, when it is translucent and holds more than one primitive, or when `.rasterize()` is set. A translucent layer with a backdrop effect somewhere below it is not rasterized and falls back to per-primitive opacity.
-- **Effect chains**: each content effect, the mask and the blend mode is its own offscreen stage, applied in that order. Blend modes are an effect that reads both the element and the backdrop, so a blended element costs a backdrop snapshot.
-- **Effect uniforms** are a flat list of up to 16 floats read with `param(i)`, not a user-defined struct, and there is no `#[derive(Uniforms)]`. Parameters animate through the element's transition when a bound effect value changes; they cannot be bound to a `Motion`.
-- **`ColorMatrix` is 3x4**: it maps RGB with an offset and leaves alpha alone.
-- **One backdrop effect per element.** Backdrop effects, and blend modes, only see the window's scene: inside a rasterized layer or a layer with content effects, a backdrop effect is skipped and a blend mode draws normally.
-- **Clipping across layers uses scissor rects**: exact for axis-aligned content, the bounding box of the clip under rotation, and never rounded. `.mask(Mask::shape())` clips a layer to its rounded shape at the cost of rasterizing it.
-- **Pointer capture and gestures**: `event.capture()` in a pointer-down handler routes moves and the release to that element until the button comes up. `.on_drag()` captures implicitly once the pointer has moved 3px, reports start, move and end with translation and velocity, and replaces the click. Drag is the only gesture. Every element under the pointer takes part in hit testing, so an overlay such as a glass panel blocks the wheel from reaching what is behind it.
-- **`scroll()` returns a `Div`** whose children live in an implicit content layer. It scrolls on both axes and has no scrollbars. Attach a `Signal<ScrollState>` with `.scroll_state(state)` and call `state.update(|s| s.scroll_to(offset))` for programmatic scrolling. A scroller at its limit passes the wheel to its nearest scrollable ancestor.
-- **`virtual_list`** keeps its constant-time uniform-height path. Indexed estimates update an internal prefix-height index in logarithmic time per changed height. Zero-height fixed or indexed rows are hidden and aren't mounted.
-- **`.row_identity(|index| RowKey::new(id, revision))`** opts into stable identity. IDs must be unique in the current list. Change the revision when a row's content, view type, or captured callbacks change. An affected mounted row is rebuilt if its index or key changes. Derive count, keys, and estimates from the same presentation snapshot, not from transient state like selection. The viewport keeps its top intersecting item and intra-item offset across geometry changes. If its key disappears, the list uses the next surviving old item, then the previous one, then a clamped index.
-- **`.measure_rows(|| layout_revision)`** treats the height argument as an estimate and lays out mounted rows at their natural height (at least one logical pixel). Measurements are reused by identity and revision when a row moves, or by index without identity keys. A change in available width, root font size, or the supplied layout revision invalidates measurements; bump the layout revision for layout-affecting font or style changes not covered by the other inputs. Remove collapsed items from measured presentations rather than giving them zero-height estimates. Offscreen rows need not mount to measure.
-- **`.follow_end(following)`** keeps the list at its end while `following` is true: new rows and size changes scroll to the last row. Scrolling up more than a couple of pixels sets it false, reaching the bottom sets it true, and setting it true scrolls back to the end.
-- **`VirtualListHandle`** is `Copy`, created by `virtual_list_handle()` and attached with `.handle(h)`. It provides `scroll_to_row(index, Align::{Top, Center, Bottom, Visible})`, `scroll_to(offset)`, `scroll_state()`, `top_row()` (first fully visible row), `row_top(index)`, and `row_bounds(index)` for mounted rows. `track_rows` reports the intersecting index range; it may span hidden indexes. Row bounds and `Ui::bounds_at` are in window coordinates, including compositor transforms. Scroll requests clamp at the ends and align using measured heights once the target lays out; an empty list reports top row zero.
-- **Layer origins and scroll offsets snap to device pixels** so text stays sharp; animated translations do not.
-- **Backdrop cost controls**: a backdrop effect copies only the region under the element, grown by the blur's reach, and blurs it at half or quarter resolution. Consecutive backdrops share one pass break when nothing drawn since the break touches the later one's region; each still runs its own blur. A backdrop is reused without a pass break when everything drawn before it is unchanged from the previous frame. Blur radii are continuous, but the kernel changes shape at each power of two, so an animated radius is smooth rather than exact.
+## 21. Not built yet
 
-### M5: differences from this document
-
-- **Paths are rasterized on the CPU, not tessellated.** A filled or stroked `Path` is rendered by zeno into an alpha mask at device scale and drawn through the image pipeline with a tint; masks are cached per path, stroke, scale and subpixel offset. lyon is not used. Edges are antialiased without MSAA, but a path under a compositor scale animation is resampled like text, and a canvas that draws new paths every frame uploads a new mask each time. This is the "could back the same primitive later" case from section 20 taken in the other direction, and should be revisited if heavy vector content matters.
-- **`svg` is `icon(Path::svg(d))`**: SVG path data in a view box, filled or stroked in one colour. There is no SVG document support.
-- **`canvas` takes `Fn(&mut Painter)`** and runs inside an effect, so it redraws when a signal it reads changes, or when its size does. The painter has rects/quads, path fill and stroke, images and text runs. A run is unwrapped unless given `.wrap(max_width)`, and `.continuation(mark, x, color)` draws a mark at `x` on each soft-wrapped line.
-- **`Canvas::measure(|measure, width| height)`** makes a canvas a measured layout leaf: layout calls it with the available width and a `Measure` that lays out `TextRun`s through the shared text cache, so a canvas can size itself to wrapped text in the same pass that places it. The callback runs untracked; when the draw callback reruns, the canvas is re-measured at its last width and relaid out only if its height changed, so the measure callback should read the same state as the draw callback. Inside a `measure_rows` virtual list, rows whose measured height differs from the estimate cost one extra pass in the frame that mounts them.
-- **Images**: PNG and JPEG through the `image` crate, decoded with `spawn_blocking`. No mip generation, so heavily downscaled images alias. Uploading an image is one `write_texture`; that is separate from the surface rule in section 9.6.
-- **Focus**: the `focus` variant applies to the focused element only (no focus-within); a wrapper that needs it reads `FocusHandle::is_focused`, which is how `text_input` draws its border. When nothing is focused, key events go to the window's root view. A wrapper around that view (the rendered menu bar, `window_chrome`) marks the element holding it with `Div::root_host()` so unfocused keys and actions still reach it. A click on something not focusable clears focus.
-- **Disabled** is a state set with `.enabled(prop)`; `.disabled(|s| ...)` is its style variant. A disabled element gets no pointer handlers, focus, hover or active styles, and neither do its descendants, but ancestors still see the events.
-- **Actions**: `.bind_key(Chord::parse("cmd-s")?, Save)` and `.on_action(|save: &Save| ...)` live on elements; the deepest binding on the focus path wins and the deepest handler for that action type runs. There is no separate keymap object or global table. `cmd` means the platform command key.
-- **Text editing** is an `editable(signal)` element in the core, wrapped by the widgets, not Parley's `PlainEditor`. Undo/redo, selection, caret blink, row limits and multiline caret scrolling are implemented; see item 9 above. Password masking is not built.
-- **Async**: without a Tokio runtime, `spawn_blocking` starts one OS thread per call; there is no pool. `resource` re-fetches whenever its source closure re-runs, so wrap the source in a `memo` to dedupe. `Runtime::set_waker` may be called once. `Runtime::poll` runs until no task is ready, so a task that always wakes itself would spin it.
-- **Popovers and menus** render in the overlay root and take a full-window catcher while open, so an outside click dismisses and is swallowed. Placement is fixed (below, above, left, right); there is no flipping or collision handling. Tooltips are plain text.
-- **Scroll view** has draggable vertical/horizontal thumbs, compositor offset tracking and track jumps; see item 8 above.
-- **Slider and tabs** are laid out by signals, so dragging a slider relayouts its own subtree each frame.
-- **taffy keeps a stale list of out-of-flow children** on a node that loses its last child while holding an absolutely positioned one. The overlay root keeps a hidden placeholder child for that reason.
-
-### M7: surfaces
-
-Built as designed in section 9.6, for macOS native sharing and for device sharing on every platform:
-
-- `Surfaces`, the producer protocol (`surface_channel`, `SurfaceProducer`, `SurfaceSource`, `SurfaceEvent`, `Frame`, buffer sets), mailbox and timed queues, CPU-signalled fences, GPU-gated releases, frame requests, presentation and discard feedback, configuration sequence numbers, and detach that keeps an exiting layer's last frame.
-- `surface(source)` with placement, `.status(signal)` and `.fallback(view)`; `LayerCommand::Surface` and the compositor's bind/unbind reports; `Ui::set_surfaces`, `Ui::set_visible` and `Ui::has_surfaces`.
-- The surface shader, bind groups cached per buffer, and cache signatures that include each contained surface's current frame, so content effects and backdrops over a surface refresh on every new frame and on nothing else.
-- `rouge-interop` with `IoSurface` (allocation, CPU writes for software producers, global ID) and `import_io_surface`. `SurfaceCx::allocate` with `Sharing::Native` allocates IOSurfaces on macOS.
-- One `Gpu` (which is `Clone`) and one `Surfaces` per app, shared by all windows, in the native host. The browser host owns a registry for device-shared producers.
-- `rouge_render::testing::TestSurface`, `TestUi::surfaces()`, the `Stage` test builder's `.surface(source)`, and `headless::headless_gpu` and `Headless::with_gpu`.
-- `cargo run -p rouge --example surface` animates a wgpu-rendered plasma in IOSurfaces under a glass panel, paced by frame requests.
-
-Measured on an Apple M4 Pro, 1440x960 at scale 2, with the example's surface filling the window under glass: 239 frames at 8.34 ms p50, 8.73 ms p99 frame interval (one startup frame over 16.7 ms), and 3 layouts and 3 paints over the whole run, all at startup.
-
-#### M7: differences from this document
-
-- **Linux native sharing is not built.** `Sharing::Native` returns `SurfaceError::Unsupported` off macOS, there is no `import_dmabuf`, `Gpu::new` does not request `VULKAN_EXTERNAL_MEMORY_DMA_BUF`, and `SurfaceCx` does not advertise DRM modifiers. This waits on S0's Linux verdict. Device sharing works everywhere; the surface tests have run on macOS only.
-- **Fences are CPU-signalled only.** There is no native fence variant of `Acquire`.
-- **Damage and input regions** are not used: `Frame::damage` is carried but ignored, and input regions are not built (they arrive with M8).
-- **Colour**: `ColorSpace::Srgb` is the only colour space, buffers are BGRA8 or RGBA8, and IOSurfaces are BGRA8.
-- **Adapter checks** are the producer's: `Attached` carries the adapter's `AdapterInfo`, and the registry does not compare adapters itself.
-- **Devtools reporting** is not built, because devtools are not (see M6). `Surfaces::stats()` reports surfaces, frames submitted, latched and discarded, and buffers released; `RenderStats::surfaces` counts surface draws.
-- **Browser host**: wgpu handles are not `Send` on `wasm32`, so releases are sent at `maintain` without waiting for GPU completion. This is safe there because the only producers are device-shared and ordered by Rouge's queue.
-- **Hosts** latch timed frames against the current time plus half the monitor's refresh interval. `Presented` is sent for each latched frame after the next present of any window.
-
-### S0 spike
-
-Run on macOS (Apple M4 Pro); the code and the full findings are in `spikes/s0-surface-interop/` (`FINDINGS.md`). It is throwaway and not part of the workspace.
-
-- **macOS: go.** An IOSurface was imported into wgpu 30.0.1 with no copy, a GL producer and then Servo 0.8.0 (through a custom `RenderingContext`) drew straight into it, a fence-gated three-buffer swap chain showed no stale or torn frame in 2,300 fully checked frames at 3200x2400, UV flipping handled the bottom-left origin, and Servo ran on a non-main thread. `WebView::paint` took 0.7 to 1.9 ms at p50 on three synthetic pages at 2x, with 2 to 6 ms of GPU time behind the fence.
-- **Linux: no verdict.** Nothing in S0 was run there: no DMA-BUF export or import, no driver matrix, no EGL GPU selection. The opaque-fd decision is still open, and M7's Linux native sharing waits on it.
-- The IOSurface import in `rouge-interop` uses the details S0 found (the `objc2-metal` `objc2-io-surface` feature, the exact `texture_from_raw` and `create_texture_from_hal` signatures). Corrections to section 15 that M8 needs (Servo needing both `gleam` and `glow` contexts, `LoadStatus::Complete` not meaning the new page is what paints next) are listed in the findings.
-- On this machine `glFlush` alone, without a fence, also produced no stale frames, so the fence is shown to be sufficient but not shown to be necessary.
-
-### Linux
-
-- The full M5 workspace builds and all its tests pass in an aarch64 Linux container with Mesa llvmpipe (software Vulkan), run in parallel.
-- Before M5, parallel test runs there crashed inside `libvulkan` while naming debug objects on concurrently created devices (`view_test` in 9 of 10 runs). `Headless` now creates its instance without `InstanceFlags::DEBUG`; one full parallel run since then was clean.
-- Building needs `pkg-config` and `libfontconfig1-dev` (fontique); tests need a Vulkan driver. Cross-checking from macOS stops at the fontconfig build script.
-- The API gap closure tests and full workspace suite also pass headlessly on x86_64 Linux. Still not verified here: windowed shell behavior (X11 or Wayland) and the macOS-only menu adapter.
-
-### M6: frame profiling (in progress)
-
-- **Counters.** `Ui::stats()` returns cumulative `FrameStats`: layouts, paints, layers painted, update passes, patches, elements created and removed, element and layer counts, `TextStats` (shapes, shape-cache hits, glyphs rasterized) and `ReactiveStats` (nodes created and disposed, effect and memo runs). Subtracting two snapshots gives the work in between, which is how tests assert that scrolling does no layout, paint or building. They are always on; there is no feature flag.
-- **Spans.** Rouge emits `tracing` spans (`update`, `layout`, `paint`, `hover`, `scene`, and on native hosts `event`, `acquire`, `encode`, `present`). Without a subscriber they cost almost nothing.
-- **Native host.** `ROUGE_PROFILE=<file>` installs a `tracing-chrome` layer (winit's own spans filtered out) that writes a Chrome trace for `ui.perfetto.dev`, with one `rouge::frame` event per frame carrying that frame's `FrameStats` delta. `ROUGE_BENCH=scroll:<px per frame>:<frames>` scrolls the window center once per presented frame, reversing at either end, and closes the window when done. Either variable prints a summary to stderr when the window closes: frame-interval percentiles, frames over 16.7 ms, the adapter and surface, and the total `FrameStats`. `ROUGE_PRESENT_MODE`, `WGPU_BACKEND` and `WGPU_POWER_PREF` pick the present mode, backend and adapter.
-
-### Scroll and build performance
-
-Driven by profiling a large diff in the native host, these hold for every Rouge app:
-
-- **Scrolling moves layers, not signals.** `VirtualListHandle::row_bounds` is computed on demand from row heights, the list frame and the scroll offset. `Div::track_size` observes layout-space size only when layout changes. `Div::scroll_linked(state, ScrollLinked::Sticky { lo, hi } | ScrollLinked::Linear { .. })` moves a layer in the compositor relative to the scroll container whose `scroll_state` is `state`, so sticky headers and scrollbar thumbs cost no reactive work per frame and may be built before their container.
-- **One invalidation per build.** Dynamic props compute their first value during build instead of sending a follow-up patch. Attaching a subtree refreshes variants and inherited text once, and only when it joins the connected tree; `apply_style` refreshes text only when an inherited text property changed.
-- **Reactive bookkeeping is proportional to change.** Subscribers and children are insertion-ordered sets, so unlinking is constant time. A rerun keeps the dependencies it reads again and unlinks only the ones it dropped; while a node computes, links it has not re-read are treated as stale so diamonds stay glitch-free.
-- **Text is shaped once.** `TextSystem` caches unbroken layouts by style and content.
-- **Canvas for dense content.** `TextRun` adds clipping, right alignment, a hit tag and a name; `Painter::region` names a rectangle. `bounds_of` finds regions and named runs. `Canvas::on_text_hover` and `on_text_click` report the tagged run and byte under the pointer (text elements report tag 0 through the same path), `track_overflow` reports how far clipped text overflows, and a canvas does not paint until it has a size.
-- **Copying.** `WindowHandle::copy_text` writes to the window's clipboard without involving the host.
-
-### Browser host portability
-
-`rouge-web` currently provides `BrowserRuntime`, which coalesces executor wakeups into a microtask. The embedding host enters the runtime when mounting, handling input or polling a frame; the wake callback can schedule that frame without polling while idle. `rouge_reactive::sleep` uses browser timers on `wasm32`, and dropping the sleep cancels its outstanding timeout. This is a browser host for Rouge, not the proposed Servo `rouge-webview` widget.
-
-`Ui::with_fonts` registers application-provided faces before mounting; native apps configure them with `App::fonts`. WASM uses Parley without system font discovery. Byte-backed images decode on the browser thread; local filesystem image sources, native background work, and synchronous GPU readback are native-only. `Gpu::new` remains async.
-
-A host can apply paste data or confirm a cut using a `ClipboardTarget` captured from the focused editor. Edits, focus changes, and remounts invalidate that target. The embedding host owns permission errors and should only confirm a cut after the clipboard write succeeds. DOM input, actual clipboard access, canvas/surface setup, and animation-frame ownership are not implemented yet.
-
-```sh
-cargo check --locked --target wasm32-unknown-unknown -p rouge-web -p rouge-widgets
-# Requires the matching wasm-bindgen-test-runner and ChromeDriver on PATH.
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-  cargo test --locked --target wasm32-unknown-unknown -p rouge-web --test runtime_test
-```
-
-### Not yet built
-
-- Compositor leftovers: clip animation, non-uniform scale, `Motion<T>` beyond `f32`, effect parameters in keyframes and bound to motions, backdrop effects inside rasterized layers, hit-test pass-through for overlays.
-- M5 leftovers: SVG documents, password masking in text editing, popover collision handling, image mips, a thread pool behind `spawn_blocking`. Typing, IME and clipboard have been exercised through `Ui` in tests but not by hand in a window.
-- M6: HUD, inspector, invalidation flashing, layer view, signal graph, warnings, GPU timing, hot reload, benchmark suite in CI. Frame counters and tracing are done (see above).
-- S0 on Linux and M7's Linux native sharing (see "M7: differences from this document"). M8: there is no `rouge-webview` crate.
-- Text gaps: color glyphs (emoji), atlas eviction.
-- Linux beyond what is listed above.
+- WebGL2 end to end: the renderer fits WebGL2's limits, but `Gpu::new` requests wgpu's default (WebGPU) limits, which a WebGL2 adapter cannot meet.
+- Accessibility: an AccessKit tree generated from element semantics and updated from the same dirty tracking, mirrored in the browser as a hidden ARIA DOM. Elements carry no roles or labels yet.
+- Devtools (`rouge-devtools`): inspector, invalidation flashing, layer view with pass breaks and surface sources, frame HUD, signal graph, warnings for per-frame layout animation and untracked reads in view code, hot reload as a stretch goal.
+- `rouge-webview` (section 20) and a render thread.
+- Surfaces: Linux native sharing (DMA-BUF), native fences, frame damage and colour-space metadata, input regions, video sources (YUV, timed queues), CEF across processes, browser video through `copyExternalImageToTexture`.
+- Partial present: frames redraw fully from retained buffers.
+- Compositor: clip animation, non-uniform scale, `Motion` beyond `f32`, effect values in keyframes or bound to motions, backdrop effects inside rasterized layers.
+- Text and images: colour glyphs (emoji), atlas eviction, image mipmaps, SVG documents, password masking.
+- Browser: system font discovery and on-demand fallback fonts, EditContext, off-thread image decoding, timers for timed surface frames, multi-touch and pen pressure, media paste, an `OffscreenCanvas` worker.
+- Popover collision handling and flipping; keyboard navigation of the rendered menu bar; rich tooltips.
+- A thread pool behind `spawn_blocking` without Tokio.
+- A "next wake time" from `Ui`: a blinking caret requests a frame every vsync for ten seconds after editor activity.
+- Benchmarks in CI on a GPU runner.
