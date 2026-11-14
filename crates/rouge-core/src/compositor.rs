@@ -1,15 +1,15 @@
 use crate::animation::{
     Animated, Decay, Keyframes, LayerProp, LayoutTransition, MAX_TICK, Pose, Spring, Timing,
 };
-use crate::effect::{EffectDraw, EffectInstance, Shader};
-use crate::renderer::{Group, Item, LayerDraw, SurfaceDraw, device_rect};
-use crate::scene::DrawList;
-use crate::surface::SurfaceId;
-use crate::{Affine, Corners, Point, Rect, Size};
+use crate::motion::Completion;
+use rouge_render::{
+    Affine, Corners, DrawList, EffectDraw, EffectInstance, Group, Item, LayerDraw, Point, Rect,
+    Size, SurfaceDraw, SurfaceId, Surfaces, device_rect,
+};
+use rustc_hash::FxHasher;
 use std::collections::{BTreeMap, HashMap};
-use std::hash::{DefaultHasher, Hasher};
+use std::hash::Hasher;
 use std::mem::take;
-use tokio::sync::oneshot::Sender;
 
 const RUBBER_BAND: f32 = 0.25;
 const BOUNCE: Spring = Spring::new(220.0, 30.0);
@@ -126,106 +126,6 @@ impl ScrollLinked {
     }
 }
 
-pub enum LayerCommand {
-    ScrollSource(u64),
-    ScrollLink(Option<(u64, ScrollLinked)>),
-    Set {
-        prop: LayerProp,
-        value: f32,
-        animate: bool,
-    },
-    Bind {
-        prop: LayerProp,
-        motion: MotionId,
-    },
-    Transition(Option<Timing>),
-    LayoutTransition(Option<LayoutTransition>),
-    Animate(Keyframes),
-    Effect {
-        slot: EffectSlot,
-        effect: Option<EffectInstance>,
-        animate: bool,
-    },
-    Rasterize(bool),
-    Surface(Option<SurfaceId>),
-    Frame(Rect),
-    Content(Content),
-    ScrollExtent {
-        viewport: Size,
-        content: Size,
-    },
-    ScrollBy(Point),
-    ScrollTo(Point),
-    ScrollDrag(Point),
-    ScrollRelease(Point),
-    Enter {
-        from: Pose,
-        timing: Timing,
-    },
-    Exit {
-        to: Pose,
-        timing: Timing,
-    },
-}
-
-pub enum MotionCommand {
-    Create(f32),
-    Set(f32),
-    Animate {
-        target: f32,
-        timing: Timing,
-        done: Option<Sender<bool>>,
-    },
-    Decay {
-        velocity: f32,
-        decay: Decay,
-        done: Option<Sender<bool>>,
-    },
-    Stop,
-    Remove,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SurfaceUse {
-    Bound(SurfaceId),
-    Unbound(SurfaceId),
-}
-
-pub enum Command {
-    Create(LayerId),
-    Root(LayerId),
-    Remove(LayerId),
-    Layer(LayerId, LayerCommand),
-    Motion(MotionId, MotionCommand),
-}
-
-#[derive(Default)]
-pub struct Commit {
-    commands: Vec<Command>,
-}
-
-impl Commit {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
-
-    pub fn push(&mut self, command: Command) {
-        self.commands.push(command);
-    }
-
-    pub fn layer(&mut self, id: LayerId, command: LayerCommand) {
-        self.push(Command::Layer(id, command));
-    }
-
-    pub fn motion(&mut self, id: MotionId, command: MotionCommand) {
-        self.push(Command::Motion(id, command));
-    }
-}
-
 #[derive(Clone, Copy)]
 enum Value {
     Own(Animated),
@@ -234,13 +134,13 @@ enum Value {
 
 struct Motion {
     value: Animated,
-    waiting: Vec<Sender<bool>>,
+    waiting: Vec<Completion>,
 }
 
 impl Motion {
     fn settle(&mut self, completed: bool) {
         for done in self.waiting.drain(..) {
-            let _ = done.send(completed);
+            done.complete(completed);
         }
     }
 }
@@ -249,7 +149,7 @@ type Motions = HashMap<MotionId, Motion>;
 
 #[derive(Clone, Copy)]
 struct Applied {
-    shader: Shader,
+    effect: EffectInstance,
     values: [Animated; EffectInstance::VALUES],
     elapsed: f32,
 }
@@ -257,14 +157,15 @@ struct Applied {
 impl Applied {
     fn new(effect: &EffectInstance, elapsed: f32) -> Self {
         Applied {
-            shader: effect.shader(),
+            effect: *effect,
             values: effect.values().map(Animated::new),
             elapsed,
         }
     }
 
     fn instance(&self) -> EffectInstance {
-        EffectInstance::from_values(self.shader, self.values.map(|value| value.value()))
+        self.effect
+            .with_values(self.values.map(|value| value.value()))
             .at(self.elapsed)
     }
 
@@ -282,10 +183,10 @@ impl Applied {
             .values
             .iter_mut()
             .fold(false, |moving, value| value.tick(dt) | moving);
-        if self.shader.clock().is_some() {
+        if self.effect.clock().is_some() {
             self.elapsed = (self.elapsed + dt.max(0.0)) % CLOCK_PERIOD;
         }
-        moving || self.shader.clock().is_some()
+        moving || self.effect.clock().is_some()
     }
 }
 
@@ -534,7 +435,7 @@ pub struct Compositor {
     animating: Vec<LayerId>,
     moving: Vec<MotionId>,
     sources: HashMap<u64, LayerId>,
-    surface_uses: Vec<SurfaceUse>,
+    surface_uses: Vec<(SurfaceId, bool)>,
     surface_layers: usize,
     empty: DrawList,
 }
@@ -556,8 +457,14 @@ impl Compositor {
         self.surface_layers > 0
     }
 
-    pub fn take_surface_uses(&mut self) -> Vec<SurfaceUse> {
-        take(&mut self.surface_uses)
+    pub fn sync_surfaces(&mut self, surfaces: &mut Surfaces) {
+        for (id, bound) in take(&mut self.surface_uses) {
+            if bound {
+                surfaces.bind(id);
+            } else {
+                surfaces.unbind(id);
+            }
+        }
     }
 
     pub fn pose(&self, id: LayerId) -> Option<LayerPose> {
@@ -588,225 +495,296 @@ impl Compositor {
         self.motions.get(&id).map(|motion| motion.value.value())
     }
 
-    pub fn apply(&mut self, commit: Commit) {
-        for command in commit.commands {
-            match command {
-                Command::Create(id) => {
-                    self.layers.insert(id, Layer::default());
-                }
-                Command::Root(id) => self.root = Some(id),
-                Command::Remove(id) => self.remove(id),
-                Command::Layer(id, command) => self.apply_layer(id, command),
-                Command::Motion(id, command) => self.apply_motion(id, command),
-            }
+    pub fn create_layer(&mut self, id: LayerId) {
+        self.layers.insert(id, Layer::default());
+    }
+
+    pub fn set_root(&mut self, id: LayerId) {
+        self.root = Some(id);
+    }
+
+    fn update(&mut self, id: LayerId, f: impl FnOnce(&mut Layer, &Motions) -> bool) {
+        let Some(layer) = self.layers.get_mut(&id) else {
+            return;
+        };
+        if f(layer, &self.motions) && !layer.animating {
+            layer.animating = true;
+            self.animating.push(id);
         }
     }
 
-    fn apply_layer(&mut self, id: LayerId, command: LayerCommand) {
-        let Compositor {
-            layers,
-            motions,
-            animating,
-            sources,
-            surface_uses,
-            surface_layers,
-            ..
-        } = self;
+    pub fn set_prop(&mut self, id: LayerId, prop: LayerProp, value: f32, animate: bool) {
+        self.update(id, |layer, motions| {
+            let transition = layer.transition.filter(|_| animate);
+            let animated = layer.own(prop, motions);
+            match transition {
+                Some(timing) => animated.animate_to(value, timing),
+                None => *animated = Animated::new(value),
+            }
+            animated.is_animating()
+        });
+    }
+
+    pub fn bind_prop(&mut self, id: LayerId, prop: LayerProp, motion: MotionId) {
+        self.update(id, |layer, _| {
+            layer.props[prop as usize] = Value::Motion(motion);
+            false
+        });
+    }
+
+    pub fn set_transition(&mut self, id: LayerId, timing: Option<Timing>) {
+        self.update(id, |layer, _| {
+            layer.transition = timing;
+            false
+        });
+    }
+
+    pub fn set_layout_transition(&mut self, id: LayerId, transition: Option<LayoutTransition>) {
+        self.update(id, |layer, _| {
+            layer.layout_transition = transition;
+            false
+        });
+    }
+
+    pub fn animate(&mut self, id: LayerId, keyframes: Keyframes) {
+        self.update(id, |layer, _| {
+            layer.keyframes = Some((keyframes, 0.0));
+            true
+        });
+    }
+
+    pub fn set_effect(
+        &mut self,
+        id: LayerId,
+        slot: EffectSlot,
+        effect: Option<EffectInstance>,
+        animate: bool,
+    ) {
+        self.update(id, |layer, _| {
+            let transition = layer.transition.filter(|_| animate);
+            let running = (layer.effects.get_mut(&slot).zip(effect.as_ref()))
+                .filter(|(applied, effect)| applied.effect.same_shader(effect));
+            let elapsed = running.as_ref().map_or(0.0, |(applied, _)| applied.elapsed);
+            let mut wake = effect.is_some_and(|effect| effect.clock().is_some());
+            if let Some(((applied, effect), timing)) = running.zip(transition) {
+                wake |= applied.retarget(effect, timing);
+            } else if let Some(effect) = &effect {
+                layer.effects.insert(slot, Applied::new(effect, elapsed));
+            } else {
+                layer.effects.remove(&slot);
+            }
+            wake
+        });
+    }
+
+    pub fn set_rasterize(&mut self, id: LayerId, rasterize: bool) {
+        self.update(id, |layer, _| {
+            layer.rasterize = rasterize;
+            false
+        });
+    }
+
+    pub fn set_surface(&mut self, id: LayerId, surface: Option<SurfaceId>) {
+        let Some(layer) = self.layers.get_mut(&id) else {
+            return;
+        };
+        if layer.surface == surface {
+            return;
+        }
+        if let Some(old) = layer.surface.take() {
+            self.surface_uses.push((old, false));
+            self.surface_layers -= 1;
+        }
+        if let Some(new) = surface {
+            self.surface_uses.push((new, true));
+            self.surface_layers += 1;
+        }
+        layer.surface = surface;
+    }
+
+    pub fn set_scroll_source(&mut self, id: LayerId, key: u64) {
+        if let Some(layer) = self.layers.get_mut(&id) {
+            layer.source = Some(key);
+            self.sources.insert(key, id);
+        }
+    }
+
+    pub fn set_scroll_link(&mut self, id: LayerId, link: Option<(u64, ScrollLinked)>) {
+        self.update(id, |layer, _| {
+            layer.link = link;
+            false
+        });
+    }
+
+    pub fn set_frame(&mut self, id: LayerId, frame: Rect) {
+        self.update(id, |layer, _| {
+            let mut wake = false;
+            if let (Some(old), Some(transition)) = (layer.frame, layer.layout_transition) {
+                let moved = old.origin - frame.origin;
+                let [x, y, width, height] = &mut layer.flip;
+                for (flip, delta) in [x, y].into_iter().zip([moved.x, moved.y]) {
+                    flip.shift(delta);
+                    flip.animate_to(0.0, transition.timing);
+                    wake |= flip.is_animating();
+                }
+                let sizes = [
+                    (old.size.width, frame.size.width),
+                    (old.size.height, frame.size.height),
+                ];
+                for (flip, (old, new)) in [width, height].into_iter().zip(sizes) {
+                    if transition.size && old > 0.0 && new > 0.0 {
+                        flip.stretch(old / new);
+                        flip.animate_to(1.0, transition.timing);
+                        wake |= flip.is_animating();
+                    }
+                }
+            }
+            layer.frame = Some(frame);
+            wake
+        });
+    }
+
+    pub fn set_content(&mut self, id: LayerId, content: Content) {
+        let layers = &mut self.layers;
         let Some(layer) = layers.get_mut(&id) else {
             return;
         };
-        let mut wake = false;
-        match command {
-            LayerCommand::Set {
-                prop,
-                value,
-                animate,
-            } => {
-                let transition = layer.transition.filter(|_| animate);
-                let animated = layer.own(prop, motions);
-                match transition {
-                    Some(timing) => animated.animate_to(value, timing),
-                    None => *animated = Animated::new(value),
-                }
-                wake = animated.is_animating();
-            }
-            LayerCommand::Bind { prop, motion } => {
-                layer.props[prop as usize] = Value::Motion(motion);
-            }
-            LayerCommand::Transition(timing) => layer.transition = timing,
-            LayerCommand::LayoutTransition(timing) => layer.layout_transition = timing,
-            LayerCommand::Animate(keyframes) => {
-                layer.keyframes = Some((keyframes, 0.0));
-                wake = true;
-            }
-            LayerCommand::Effect {
-                slot,
-                effect,
-                animate,
-            } => {
-                let transition = layer.transition.filter(|_| animate);
-                let running = (layer.effects.get_mut(&slot).zip(effect.as_ref()))
-                    .filter(|(applied, effect)| applied.shader == effect.shader());
-                let elapsed = running.as_ref().map_or(0.0, |(applied, _)| applied.elapsed);
-                wake = effect.is_some_and(|effect| effect.shader().clock().is_some());
-                if let Some(((applied, effect), timing)) = running.zip(transition) {
-                    wake |= applied.retarget(effect, timing);
-                } else if let Some(effect) = &effect {
-                    layer.effects.insert(slot, Applied::new(effect, elapsed));
-                } else {
-                    layer.effects.remove(&slot);
-                }
-            }
-            LayerCommand::Rasterize(rasterize) => layer.rasterize = rasterize,
-            LayerCommand::Surface(surface) => {
-                if layer.surface != surface {
-                    if let Some(old) = layer.surface.take() {
-                        surface_uses.push(SurfaceUse::Unbound(old));
-                        *surface_layers -= 1;
-                    }
-                    if let Some(new) = surface {
-                        surface_uses.push(SurfaceUse::Bound(new));
-                        *surface_layers += 1;
-                    }
-                    layer.surface = surface;
-                }
-            }
-            LayerCommand::ScrollSource(key) => {
-                layer.source = Some(key);
-                sources.insert(key, id);
-            }
-            LayerCommand::ScrollLink(link) => layer.link = link,
-            LayerCommand::Frame(frame) => {
-                if let (Some(old), Some(transition)) = (layer.frame, layer.layout_transition) {
-                    let moved = old.origin - frame.origin;
-                    let [x, y, width, height] = &mut layer.flip;
-                    for (flip, delta) in [x, y].into_iter().zip([moved.x, moved.y]) {
-                        flip.shift(delta);
-                        flip.animate_to(0.0, transition.timing);
-                        wake |= flip.is_animating();
-                    }
-                    let sizes = [
-                        (old.size.width, frame.size.width),
-                        (old.size.height, frame.size.height),
-                    ];
-                    for (flip, (old, new)) in [width, height].into_iter().zip(sizes) {
-                        if transition.size && old > 0.0 && new > 0.0 {
-                            flip.stretch(old / new);
-                            flip.animate_to(1.0, transition.timing);
-                            wake |= flip.is_animating();
-                        }
-                    }
-                }
-                layer.frame = Some(frame);
-            }
-            LayerCommand::Content(content) => {
-                layer.lists.truncate(content.lists.len());
-                for (index, list) in content.lists.into_iter().enumerate() {
-                    match layer.lists.get_mut(index) {
-                        Some(existing) => existing.replace(list),
-                        None => layer.lists.push(list),
-                    }
-                }
-                let kept = |old: &Nested| content.nested.iter().any(|new| new.layer == old.layer);
-                let dropped: Vec<_> = layer
-                    .nested
-                    .iter()
-                    .filter(|old| !kept(old))
-                    .map(|old| old.layer)
-                    .collect();
-                layer.nested = content.nested;
-                let adopted: Vec<_> = layer.nested.iter().map(|nested| nested.layer).collect();
-                for child in adopted {
-                    if let Some(child) = layers.get_mut(&child) {
-                        child.parent = Some(id);
-                    }
-                }
-                let leaving = |child: &LayerId| {
-                    layers
-                        .get(child)
-                        .is_some_and(|c| c.exiting && c.parent == Some(id))
-                };
-                let orphans: Vec<_> = dropped.into_iter().filter(leaving).collect();
-                if let Some(layer) = layers.get_mut(&id) {
-                    layer.orphans.extend(orphans);
-                }
-                return;
-            }
-            LayerCommand::ScrollExtent { viewport, content } => {
-                let scroll = layer.scroll.get_or_insert_default();
-                (scroll.viewport, scroll.content) = (viewport, content);
-                if !layer.fling.iter().any(Animated::is_animating) {
-                    scroll.offset = scroll.clamp(scroll.offset);
-                }
-            }
-            LayerCommand::ScrollBy(delta) => layer.scroll_to(|offset| offset + delta),
-            LayerCommand::ScrollTo(offset) => layer.scroll_to(|_| offset),
-            LayerCommand::ScrollDrag(delta) => layer.drag(delta),
-            LayerCommand::ScrollRelease(velocity) => wake = layer.release(velocity),
-            LayerCommand::Enter { from, timing } => {
-                for (prop, value) in from.iter() {
-                    let animated = layer.own(prop, motions);
-                    let target = animated.target();
-                    *animated = Animated::new(value);
-                    animated.animate_to(target, timing);
-                }
-                wake = true;
-            }
-            LayerCommand::Exit { to, timing } => {
-                layer.freeze(motions);
-                for (prop, value) in to.iter() {
-                    layer.own(prop, motions).animate_to(value, timing);
-                }
-                layer.exiting = true;
-                wake = true;
+        layer.lists.truncate(content.lists.len());
+        for (index, list) in content.lists.into_iter().enumerate() {
+            match layer.lists.get_mut(index) {
+                Some(existing) => existing.replace(list),
+                None => layer.lists.push(list),
             }
         }
-        if wake && !layer.animating {
-            layer.animating = true;
-            animating.push(id);
+        let kept = |old: &Nested| content.nested.iter().any(|new| new.layer == old.layer);
+        let dropped: Vec<_> = layer
+            .nested
+            .iter()
+            .filter(|old| !kept(old))
+            .map(|old| old.layer)
+            .collect();
+        layer.nested = content.nested;
+        let adopted: Vec<_> = layer.nested.iter().map(|nested| nested.layer).collect();
+        for child in adopted {
+            if let Some(child) = layers.get_mut(&child) {
+                child.parent = Some(id);
+            }
+        }
+        let leaving = |child: &LayerId| {
+            layers
+                .get(child)
+                .is_some_and(|c| c.exiting && c.parent == Some(id))
+        };
+        let orphans: Vec<_> = dropped.into_iter().filter(leaving).collect();
+        if let Some(layer) = layers.get_mut(&id) {
+            layer.orphans.extend(orphans);
         }
     }
 
-    fn apply_motion(&mut self, id: MotionId, command: MotionCommand) {
-        if let MotionCommand::Create(value) = command {
-            self.motions.insert(
-                id,
-                Motion {
-                    value: Animated::new(value),
-                    waiting: Vec::new(),
-                },
-            );
-            return;
-        }
-        let Some(motion) = self.motions.get_mut(&id) else {
-            return;
+    pub fn set_scroll_extent(&mut self, id: LayerId, viewport: Size, content: Size) {
+        self.update(id, |layer, _| {
+            let scroll = layer.scroll.get_or_insert_default();
+            (scroll.viewport, scroll.content) = (viewport, content);
+            if !layer.fling.iter().any(Animated::is_animating) {
+                scroll.offset = scroll.clamp(scroll.offset);
+            }
+            false
+        });
+    }
+
+    pub fn scroll_by(&mut self, id: LayerId, delta: Point) {
+        self.update(id, |layer, _| {
+            layer.scroll_to(|offset| offset + delta);
+            false
+        });
+    }
+
+    pub fn scroll_to(&mut self, id: LayerId, offset: Point) {
+        self.update(id, |layer, _| {
+            layer.scroll_to(|_| offset);
+            false
+        });
+    }
+
+    pub fn scroll_drag(&mut self, id: LayerId, delta: Point) {
+        self.update(id, |layer, _| {
+            layer.drag(delta);
+            false
+        });
+    }
+
+    pub fn scroll_release(&mut self, id: LayerId, velocity: Point) {
+        self.update(id, |layer, _| layer.release(velocity));
+    }
+
+    pub fn enter(&mut self, id: LayerId, from: Pose, timing: Timing) {
+        self.update(id, |layer, motions| {
+            for (prop, value) in from.iter() {
+                let animated = layer.own(prop, motions);
+                let target = animated.target();
+                *animated = Animated::new(value);
+                animated.animate_to(target, timing);
+            }
+            true
+        });
+    }
+
+    pub fn exit(&mut self, id: LayerId, to: Pose, timing: Timing) {
+        self.update(id, |layer, motions| {
+            layer.freeze(motions);
+            for (prop, value) in to.iter() {
+                layer.own(prop, motions).animate_to(value, timing);
+            }
+            layer.exiting = true;
+            true
+        });
+    }
+
+    pub fn create_motion(&mut self, id: MotionId, value: f32) {
+        let motion = Motion {
+            value: Animated::new(value),
+            waiting: Vec::new(),
         };
+        self.motions.insert(id, motion);
+    }
+
+    fn interrupt(&mut self, id: MotionId) -> Option<&mut Motion> {
+        let motion = self.motions.get_mut(&id)?;
         motion.settle(false);
-        let done = match command {
-            MotionCommand::Set(value) => return motion.value = Animated::new(value),
-            MotionCommand::Stop => return motion.value = Animated::new(motion.value.value()),
-            MotionCommand::Animate {
-                target,
-                timing,
-                done,
-            } => {
-                motion.value.animate_to(target, timing);
-                done
-            }
-            MotionCommand::Decay {
-                velocity,
-                decay,
-                done,
-            } => {
-                motion.value.decay(velocity, decay);
-                done
-            }
-            MotionCommand::Create(_) | MotionCommand::Remove => {
-                self.motions.remove(&id);
-                return;
-            }
+        Some(motion)
+    }
+
+    pub fn set_motion(&mut self, id: MotionId, value: f32) {
+        if let Some(motion) = self.interrupt(id) {
+            motion.value = Animated::new(value);
+        }
+    }
+
+    pub fn stop_motion(&mut self, id: MotionId) {
+        if let Some(motion) = self.interrupt(id) {
+            motion.value = Animated::new(motion.value.value());
+        }
+    }
+
+    pub fn remove_motion(&mut self, id: MotionId) {
+        self.interrupt(id);
+        self.motions.remove(&id);
+    }
+
+    pub fn animate_motion(&mut self, id: MotionId, target: f32, timing: Timing, done: Completion) {
+        self.drive(id, done, |value| value.animate_to(target, timing));
+    }
+
+    pub fn decay_motion(&mut self, id: MotionId, velocity: f32, decay: Decay, done: Completion) {
+        self.drive(id, done, |value| value.decay(velocity, decay));
+    }
+
+    fn drive(&mut self, id: MotionId, done: Completion, start: impl FnOnce(&mut Animated)) {
+        let Some(motion) = self.interrupt(id) else {
+            return;
         };
-        motion.waiting.extend(done);
+        start(&mut motion.value);
+        motion.waiting.push(done);
         if !motion.value.is_animating() {
             motion.settle(true);
         } else if !self.moving.contains(&id) {
@@ -826,7 +804,7 @@ impl Compositor {
             self.root = None;
         }
         if let Some(surface) = layer.surface {
-            self.surface_uses.push(SurfaceUse::Unbound(surface));
+            self.surface_uses.push((surface, false));
             self.surface_layers -= 1;
         }
         if let Some(key) = layer.source
@@ -837,7 +815,7 @@ impl Compositor {
         Some(layer)
     }
 
-    fn remove(&mut self, id: LayerId) {
+    pub fn remove_layer(&mut self, id: LayerId) {
         let Some(layer) = self.unlink(id) else { return };
         for orphan in layer.orphans {
             self.remove_subtree(orphan);
@@ -1000,7 +978,7 @@ impl Compositor {
             .take(last + 1)
             .enumerate();
         for (stage, effect) in effects {
-            let mut hasher = DefaultHasher::new();
+            let mut hasher = FxHasher::default();
             let Some(bounds) = summarize(&items, scale, &mut hasher) else {
                 return;
             };
@@ -1105,7 +1083,7 @@ struct Style {
     backdrop: Option<EffectDraw>,
 }
 
-fn summarize(items: &[Item<'_>], scale: f32, hasher: &mut DefaultHasher) -> Option<Rect> {
+fn summarize(items: &[Item<'_>], scale: f32, hasher: &mut FxHasher) -> Option<Rect> {
     let mut bounds: Option<Rect> = None;
     for item in items {
         item.fingerprint(hasher);

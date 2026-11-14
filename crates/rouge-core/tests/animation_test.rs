@@ -1,4 +1,4 @@
-use rouge_render::{Color, Ease, Keyframes, LayerProp, Pose};
+use rouge_core::{Color, Ease, Keyframes, LayerProp, Pose};
 
 #[test]
 fn easing_curves_hit_their_endpoints() {

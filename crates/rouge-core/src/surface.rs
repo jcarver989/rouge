@@ -1,13 +1,10 @@
 use crate::control::dynamic;
 use crate::styled;
-use crate::tree::ElementId;
+use crate::tree::Kind;
 use crate::view::{AnyView, BuildCx, Div, View, div};
 use rouge_macros::component;
 use rouge_reactive::{Signal, signal};
-use rouge_render::{
-    LayerCommand, Placement, SurfaceError, SurfaceId, SurfaceRegistrar, SurfaceSource,
-    SurfaceStatus,
-};
+use rouge_render::{Placement, SurfaceError, SurfaceId, SurfaceSource, SurfaceStatus};
 use std::rc::Rc;
 
 type Fallback = Rc<dyn Fn(SurfaceError) -> AnyView>;
@@ -23,16 +20,6 @@ pub(crate) enum SurfaceOp {
     Attach(SurfaceSource, StatusSink),
     Place(SurfaceId, Placement),
     Detach(SurfaceId),
-}
-
-impl SurfaceOp {
-    pub(crate) fn send(self, registrar: &SurfaceRegistrar) {
-        match self {
-            SurfaceOp::Attach(source, status) => registrar.attach(source, status),
-            SurfaceOp::Place(id, placement) => registrar.place(id, placement),
-            SurfaceOp::Detach(id) => registrar.detach(id),
-        }
-    }
 }
 
 pub struct Surface {
@@ -67,7 +54,7 @@ impl Surface {
 styled!(Surface => div);
 
 impl View for Surface {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let Surface {
             mut div,
             source,
@@ -77,22 +64,18 @@ impl View for Surface {
         let id = source.id();
         let status = status.unwrap_or_else(|| signal(SurfaceStatus::Waiting));
         let sender = status.sender();
-        div.spec.surface = Some(SurfaceSpec {
+        div.spec.kind = Kind::Surface(Box::new(SurfaceSpec {
             id,
             attach: Some((source, Box::new(move |update| sender.set(update)))),
             placement: None,
-        });
-        div.spec
-            .layer
-            .get_or_insert_default()
-            .commands
-            .push(LayerCommand::Surface(Some(id)));
+        }));
+        div.spec.layer.get_or_insert_default().surface = Some(id);
         if let Some(fallback) = fallback {
             div = div.child(dynamic(move || match status.get() {
                 SurfaceStatus::Failed(error) => Some(fallback(error)),
                 SurfaceStatus::Waiting | SurfaceStatus::Live => None,
             }));
         }
-        div.build(cx)
+        div.build(cx);
     }
 }

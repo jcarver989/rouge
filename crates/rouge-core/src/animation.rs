@@ -1,4 +1,4 @@
-use crate::{Color, Corners};
+use rouge_render::{Color, Corners};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spring {

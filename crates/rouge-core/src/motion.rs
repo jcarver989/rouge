@@ -1,40 +1,59 @@
+use crate::animation::{Decay, Timing};
+use crate::compositor::MotionId;
 use crate::prop::PropFrom;
-use crate::view::{Patches, send};
+use crate::view::{Patch, Queue};
 use rouge_reactive::{Signal, expect_context, on_cleanup, signal};
-use rouge_render::{Decay, MotionCommand, MotionId, Timing};
+use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
-use tokio::sync::oneshot::{Receiver, Sender, channel};
+use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 
 #[derive(Clone)]
 pub(crate) struct UiContext {
-    patches: Patches,
-    next_motion: Signal<u64>,
+    queue: Queue,
+    next_id: Signal<u64>,
 }
 
 impl UiContext {
-    pub(crate) fn new(patches: Patches) -> Self {
+    pub(crate) fn new(queue: Queue) -> Self {
         UiContext {
-            patches,
-            next_motion: signal(0),
+            queue,
+            next_id: signal(0),
         }
     }
 
-    pub(crate) fn patches(&self) -> Patches {
-        self.patches.clone()
+    pub(crate) fn queue(&self) -> Queue {
+        self.queue.clone()
     }
 
     pub(crate) fn next_id(&self) -> u64 {
-        let id = self.next_motion.get_untracked();
-        self.next_motion.set(id + 1);
+        let id = self.next_id.get_untracked();
+        self.next_id.set(id + 1);
         id
     }
 }
 
+pub(crate) enum MotionOp {
+    Create(Signal<f32>),
+    Set(f32),
+    Animate {
+        target: f32,
+        timing: Timing,
+        done: Completion,
+    },
+    Decay {
+        velocity: f32,
+        decay: Decay,
+        done: Completion,
+    },
+    Stop,
+    Remove,
+}
+
 struct Shared {
     value: Signal<f32>,
-    patches: Patches,
+    queue: Queue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,18 +65,14 @@ pub struct Motion {
 #[track_caller]
 pub fn motion(initial: f32) -> Motion {
     let context = expect_context::<UiContext>();
-    let (id, patches) = (MotionId(context.next_id()), context.patches());
+    let (id, queue) = (MotionId(context.next_id()), context.queue());
     let value = signal(initial);
-    send(&patches, move |cx| cx.tree.create_motion(id, value));
-    let removed = patches.clone();
-    on_cleanup(move || {
-        send(&removed, move |cx| {
-            cx.tree.motion_command(id, MotionCommand::Remove);
-        });
-    });
+    queue.push(Patch::Motion(id, MotionOp::Create(value)));
+    let removed = queue.clone();
+    on_cleanup(move || removed.push(Patch::Motion(id, MotionOp::Remove)));
     Motion {
         id,
-        shared: signal(Shared { value, patches }),
+        shared: signal(Shared { value, queue }),
     }
 }
 
@@ -66,7 +81,7 @@ impl Motion {
         self.id
     }
 
-    fn command(&self, command: MotionCommand, publish: Option<f32>) {
+    fn command(&self, op: MotionOp, publish: Option<f32>) {
         if !self.shared.is_alive() {
             return;
         }
@@ -75,9 +90,7 @@ impl Motion {
             if let Some(value) = publish {
                 shared.value.set(value);
             }
-            send(&shared.patches, move |cx| {
-                cx.tree.motion_command(id, command);
-            });
+            shared.queue.push(Patch::Motion(id, op));
         });
     }
 
@@ -90,46 +103,94 @@ impl Motion {
     }
 
     pub fn set(&self, value: f32) {
-        self.command(MotionCommand::Set(value), Some(value));
-    }
-
-    fn settle(&self, command: impl FnOnce(Option<Sender<bool>>) -> MotionCommand) -> Animation {
-        let (done, settled) = channel();
-        self.command(command(Some(done)), None);
-        Animation(settled)
+        self.command(MotionOp::Set(value), Some(value));
     }
 
     pub fn animate_to(&self, target: f32, timing: impl Into<Timing>) -> Animation {
+        let (done, animation) = Animation::pending();
         let timing = timing.into();
-        self.settle(|done| MotionCommand::Animate {
-            target,
-            timing,
-            done,
-        })
+        self.command(
+            MotionOp::Animate {
+                target,
+                timing,
+                done,
+            },
+            None,
+        );
+        animation
     }
 
     pub fn decay(&self, velocity: f32, decay: Decay) -> Animation {
-        self.settle(|done| MotionCommand::Decay {
-            velocity,
-            decay,
-            done,
-        })
+        let (done, animation) = Animation::pending();
+        self.command(
+            MotionOp::Decay {
+                velocity,
+                decay,
+                done,
+            },
+            None,
+        );
+        animation
     }
 
     pub fn stop(&self) {
-        self.command(MotionCommand::Stop, None);
+        self.command(MotionOp::Stop, None);
     }
 }
 
-pub struct Animation(Receiver<bool>);
+#[derive(Default)]
+struct Outcome {
+    completed: Option<bool>,
+    waker: Option<Waker>,
+}
+
+pub struct Completion(Rc<RefCell<Outcome>>);
+
+impl Completion {
+    pub(crate) fn complete(self, completed: bool) {
+        self.finish(completed);
+    }
+
+    fn finish(&self, completed: bool) {
+        let waker = {
+            let mut outcome = self.0.borrow_mut();
+            if outcome.completed.is_some() {
+                return;
+            }
+            outcome.completed = Some(completed);
+            outcome.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl Drop for Completion {
+    fn drop(&mut self) {
+        self.finish(false);
+    }
+}
+
+pub struct Animation(Rc<RefCell<Outcome>>);
+
+impl Animation {
+    pub fn pending() -> (Completion, Animation) {
+        let outcome = Rc::new(RefCell::new(Outcome::default()));
+        (Completion(outcome.clone()), Animation(outcome))
+    }
+}
 
 impl Future for Animation {
     type Output = bool;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
-        Pin::new(&mut self.0)
-            .poll(cx)
-            .map(|completed| completed.unwrap_or(false))
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        let mut outcome = self.0.borrow_mut();
+        if let Some(completed) = outcome.completed {
+            return Poll::Ready(completed);
+        }
+        outcome.waker = Some(cx.waker().clone());
+        Poll::Pending
     }
 }
 
