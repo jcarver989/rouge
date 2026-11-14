@@ -2,20 +2,27 @@ use parley::fontique::Blob;
 use parley::{
     Affinity, Alignment, AlignmentOptions, BoundingBox, Cluster, Cursor, FontContext, FontData,
     FontFamily, FontStyle, FontWeight, IndentOptions, Layout, LayoutContext, LineHeight,
-    OverflowWrap, PositionedLayoutItem, Selection, StyleProperty,
+    OverflowWrap, PositionedLayoutItem, Run, Selection, StyleProperty,
 };
 use rouge_render::Color;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::mem::take;
 use std::ops::{Range, Sub};
+use std::rc::Rc;
+use std::sync::Arc;
 use swash::FontRef;
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::{Angle, Format, Transform, Vector};
 
 pub const SUBPIXEL_BUCKETS: u8 = 4;
-const SHAPE_CACHE_LIMIT: usize = 8192;
+const GENERATION_LIMIT: usize = 4096;
+const WIDTHS_PER_TEXT: usize = 4;
+
+type Segment = (Range<usize>, u16);
+type SpaceKey = (Cow<'static, str>, u32, u32, bool);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Underline {
@@ -121,7 +128,8 @@ pub struct PositionedGlyph<'a> {
     pub font: &'a FontData,
     pub font_size: f32,
     pub style: &'a SpanStyle,
-    coords: &'a [i16],
+    run: &'a Run<'a, u16>,
+    variation: u64,
     embolden: bool,
     skew: Option<f32>,
 }
@@ -134,20 +142,13 @@ impl PositionedGlyph<'_> {
         let snapped = (x * buckets).round() / buckets;
         let px = snapped.floor();
         let subpixel = ((snapped - px) * buckets).round() as u8 % SUBPIXEL_BUCKETS;
-        let mut variation = 0xcbf2_9ce4_8422_2325u64;
-        let mut mix = |v: u64| variation = (variation ^ v).wrapping_mul(0x0100_0000_01b3);
-        for coord in self.coords {
-            mix(u64::from(*coord as u16));
-        }
-        mix(u64::from(self.embolden));
-        mix(self.skew.map_or(0, |s| u64::from(s.to_bits()) + 1));
         let key = GlyphKey {
             font_id: self.font.data.id(),
             font_index: self.font.index,
             glyph_id: self.glyph_id,
             size_bits: (self.font_size * scale).to_bits(),
             subpixel,
-            variation,
+            variation: self.variation,
         };
         (key, px as i32, y.round() as i32)
     }
@@ -224,27 +225,63 @@ impl From<BoundingBox> for TextRect {
 
 #[derive(Clone)]
 pub struct TextLayout {
-    layout: Layout<SpanStyle>,
+    shaped: Rc<Shaped>,
+    paints: Rc<[SpanStyle]>,
+}
+
+#[derive(Clone)]
+struct Shaped {
+    layout: Layout<u16>,
+    width: Option<f32>,
     align: TextAlign,
-    wrap: bool,
     indent: f32,
     len: usize,
-    #[expect(clippy::option_option)]
-    broken_at: Option<Option<f32>>,
+    wrap: bool,
+}
+
+impl Shaped {
+    fn break_at(&mut self, width: Option<f32>) {
+        let indent = width.map_or(0.0, |width| self.indent.min(width / 2.0).max(0.0));
+        self.layout.set_text_indent(
+            indent,
+            IndentOptions {
+                each_line: true,
+                hanging: true,
+            },
+        );
+        self.layout.break_all_lines(width);
+        let alignment = match self.align {
+            TextAlign::Start => Alignment::Start,
+            TextAlign::Center => Alignment::Center,
+            TextAlign::End => Alignment::End,
+            TextAlign::Justify => Alignment::Justify,
+        };
+        self.layout.align(alignment, AlignmentOptions::default());
+        self.width = width;
+    }
 }
 
 impl TextLayout {
+    pub(crate) fn fits(&self, max_width: Option<f32>) -> bool {
+        self.shaped.width == max_width.filter(|_| self.shaped.wrap)
+    }
+
+    fn paint(&self, brush: u16) -> &SpanStyle {
+        &self.paints[usize::from(brush)]
+    }
+
     pub fn index_at(&self, x: f32, y: f32) -> Option<usize> {
-        Cluster::from_point_exact(&self.layout, x, y).map(|(cluster, _)| cluster.text_range().start)
+        Cluster::from_point_exact(&self.shaped.layout, x, y)
+            .map(|(cluster, _)| cluster.text_range().start)
     }
 
     pub fn for_each_rect(&self, foreground: bool, mut f: impl FnMut(TextRect, Option<Color>)) {
-        for line in self.layout.lines() {
+        for line in self.shaped.layout.lines() {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
-                let style = &run.style().brush;
+                let style = self.paint(run.style().brush);
                 let metrics = line.metrics();
                 let rect = |y, height| TextRect {
                     x: run.offset(),
@@ -279,7 +316,11 @@ impl TextLayout {
     }
 
     fn cursor(&self, index: usize) -> Cursor {
-        Cursor::from_byte_index(&self.layout, index.min(self.len), Affinity::Downstream)
+        Cursor::from_byte_index(
+            &self.shaped.layout,
+            index.min(self.shaped.len),
+            Affinity::Downstream,
+        )
     }
 
     pub fn select(&self, anchor: usize, focus: usize) -> TextSelection {
@@ -287,10 +328,11 @@ impl TextLayout {
     }
 
     pub fn select_at(&self, x: f32, y: f32, granularity: Granularity) -> TextSelection {
+        let layout = &self.shaped.layout;
         TextSelection(match granularity {
-            Granularity::Caret => Selection::from_point(&self.layout, x, y),
-            Granularity::Word => Selection::word_from_point(&self.layout, x, y),
-            Granularity::Line => Selection::line_from_point(&self.layout, x, y),
+            Granularity::Caret => Selection::from_point(layout, x, y),
+            Granularity::Word => Selection::word_from_point(layout, x, y),
+            Granularity::Line => Selection::line_from_point(layout, x, y),
         })
     }
 
@@ -302,9 +344,9 @@ impl TextLayout {
         shift: bool,
     ) -> TextSelection {
         TextSelection(if shift {
-            selection.0.shift_click_extension(&self.layout, x, y)
+            selection.0.shift_click_extension(&self.shaped.layout, x, y)
         } else {
-            selection.0.extend_to_point(&self.layout, x, y)
+            selection.0.extend_to_point(&self.shaped.layout, x, y)
         })
     }
 
@@ -314,7 +356,7 @@ impl TextLayout {
         movement: Movement,
         extend: bool,
     ) -> TextSelection {
-        let (layout, from) = (&self.layout, selection.0);
+        let (layout, from) = (&self.shaped.layout, selection.0);
         let to = |index: usize| {
             if extend {
                 from.extend(self.cursor(index))
@@ -332,54 +374,34 @@ impl TextLayout {
             Movement::Up => from.previous_line(layout, extend),
             Movement::Down => from.next_line(layout, extend),
             Movement::Start => to(0),
-            Movement::End => to(self.len),
+            Movement::End => to(self.shaped.len),
         })
     }
 
     pub fn selection_rects(&self, selection: TextSelection) -> Vec<TextRect> {
         selection
             .0
-            .geometry(&self.layout)
+            .geometry(&self.shaped.layout)
             .into_iter()
             .map(|(bounds, _)| bounds.into())
             .collect()
     }
 
     pub fn caret(&self, selection: TextSelection, width: f32) -> TextRect {
-        selection.0.focus().geometry(&self.layout, width).into()
-    }
-
-    pub fn break_lines(&mut self, max_width: Option<f32>) {
-        let max_width = max_width.filter(|_| self.wrap);
-        if self.broken_at == Some(max_width) {
-            return;
-        }
-        let indent = max_width.map_or(0.0, |width| self.indent.min(width / 2.0).max(0.0));
-        self.layout.set_text_indent(
-            indent,
-            IndentOptions {
-                each_line: true,
-                hanging: true,
-            },
-        );
-        self.layout.break_all_lines(max_width);
-        let alignment = match self.align {
-            TextAlign::Start => Alignment::Start,
-            TextAlign::Center => Alignment::Center,
-            TextAlign::End => Alignment::End,
-            TextAlign::Justify => Alignment::Justify,
-        };
-        self.layout.align(alignment, AlignmentOptions::default());
-        self.broken_at = Some(max_width);
+        selection
+            .0
+            .focus()
+            .geometry(&self.shaped.layout, width)
+            .into()
     }
 
     pub fn size(&self) -> (f32, f32) {
-        (self.layout.width(), self.layout.height())
+        (self.shaped.layout.width(), self.shaped.layout.height())
     }
 
     pub fn content_widths(&self) -> (f32, f32) {
-        let widths = self.layout.calculate_content_widths();
-        if self.wrap {
+        let widths = self.shaped.layout.calculate_content_widths();
+        if self.shaped.wrap {
             (widths.min, widths.max)
         } else {
             (widths.max, widths.max)
@@ -387,29 +409,26 @@ impl TextLayout {
     }
 
     pub fn line_count(&self) -> usize {
-        self.layout.len()
+        self.shaped.layout.len()
     }
 
-    pub fn line_tops(&self) -> Vec<f32> {
-        self.layout
+    pub fn line_tops(&self) -> impl Iterator<Item = f32> + '_ {
+        self.shaped
+            .layout
             .lines()
             .map(|line| line.metrics().block_min_coord)
-            .collect()
     }
 
     pub fn for_each_glyph(&self, mut f: impl FnMut(PositionedGlyph<'_>)) {
-        for line in self.layout.lines() {
+        for line in self.shaped.layout.lines() {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
                 };
                 let run = glyph_run.run();
                 let synthesis = run.synthesis();
-                let coords: Vec<i16> = run
-                    .normalized_coords()
-                    .iter()
-                    .map(|c| c.to_bits())
-                    .collect();
+                let variation = variation(run);
+                let style = self.paint(glyph_run.style().brush);
                 for glyph in glyph_run.positioned_glyphs() {
                     f(PositionedGlyph {
                         glyph_id: glyph.id,
@@ -417,8 +436,9 @@ impl TextLayout {
                         y: glyph.y,
                         font: run.font(),
                         font_size: run.font_size(),
-                        style: &glyph_run.style().brush,
-                        coords: &coords,
+                        style,
+                        run,
+                        variation,
                         embolden: synthesis.embolden(),
                         skew: synthesis.skew(),
                     });
@@ -428,19 +448,20 @@ impl TextLayout {
     }
 }
 
-#[derive(Default)]
 pub struct TextSystem {
     fonts: FontContext,
-    layouts: LayoutContext<SpanStyle>,
+    layouts: LayoutContext<u16>,
     scaler: ScaleContext,
-    shaped: HashMap<TextStyle, HashMap<String, TextLayout>>,
-    shaped_len: usize,
+    cache: ShapeCache,
+    spaces: FxHashMap<SpaceKey, f32>,
+    plain: Rc<[SpanStyle]>,
     stats: TextStats,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextStats {
     pub shapes: u64,
+    pub breaks: u64,
     pub cache_hits: u64,
     pub glyphs_rasterized: u64,
 }
@@ -451,8 +472,23 @@ impl Sub for TextStats {
     fn sub(self, earlier: TextStats) -> TextStats {
         TextStats {
             shapes: self.shapes - earlier.shapes,
+            breaks: self.breaks - earlier.breaks,
             cache_hits: self.cache_hits - earlier.cache_hits,
             glyphs_rasterized: self.glyphs_rasterized - earlier.glyphs_rasterized,
+        }
+    }
+}
+
+impl Default for TextSystem {
+    fn default() -> Self {
+        TextSystem {
+            fonts: FontContext::default(),
+            layouts: LayoutContext::default(),
+            scaler: ScaleContext::default(),
+            cache: ShapeCache::default(),
+            spaces: FxHashMap::default(),
+            plain: Rc::new([SpanStyle::default()]),
+            stats: TextStats::default(),
         }
     }
 }
@@ -466,86 +502,123 @@ impl TextSystem {
         self.stats
     }
 
-    pub fn add_font(&mut self, data: Vec<u8>) -> Vec<String> {
-        self.shaped.clear();
-        self.shaped_len = 0;
-        let families = self.fonts.collection.register_fonts(Blob::from(data), None);
+    pub fn add_font(&mut self, data: impl Into<Cow<'static, [u8]>>) -> Vec<String> {
+        self.cache = ShapeCache::default();
+        self.spaces.clear();
+        let blob = Blob::new(Arc::new(data.into()));
+        let families = self.fonts.collection.register_fonts(blob, None);
         families
             .into_iter()
             .filter_map(|(id, _)| self.fonts.collection.family_name(id).map(str::to_owned))
             .collect()
     }
 
-    pub fn layout(&mut self, text: &str, style: &TextStyle) -> TextLayout {
-        if let Some(layout) = self.shaped.get(style).and_then(|texts| texts.get(text)) {
-            self.stats.cache_hits += 1;
-            return layout.clone();
+    pub fn layout(&mut self, text: &str, style: &TextStyle, max_width: Option<f32>) -> TextLayout {
+        let width = max_width.filter(|_| style.wrap);
+        let (segments, palette) = if style.spans.is_empty() {
+            (Vec::new(), self.plain.clone())
+        } else {
+            let (segments, palette) = classify(text, &style.spans);
+            (segments, Rc::from(palette))
+        };
+        let request = Request {
+            text,
+            style,
+            segments,
+            palette,
+        };
+        let hash = request.hash();
+        if let Some(entry) = self.cache.find(hash, &request) {
+            let shaped = entry.at(width, &mut self.stats);
+            let paints = if entry.palette == request.palette {
+                entry.palette.clone()
+            } else {
+                request.palette
+            };
+            return TextLayout { shaped, paints };
         }
         self.stats.shapes += 1;
-        let layout = self.shape(text, style);
-        if self.shaped_len >= SHAPE_CACHE_LIMIT {
-            self.shaped.clear();
-            self.shaped_len = 0;
-        }
-        self.shaped_len += 1;
-        self.shaped
-            .entry(style.clone())
-            .or_default()
-            .insert(text.to_owned(), layout.clone());
-        layout
+        let mut shaped = self.shape(&request);
+        shaped.break_at(width);
+        let shaped = Rc::new(shaped);
+        let paints = request.palette.clone();
+        self.cache.insert(hash, request.into_entry(shaped.clone()));
+        TextLayout { shaped, paints }
     }
 
-    fn shape(&mut self, text: &str, style: &TextStyle) -> TextLayout {
+    fn shape(&mut self, request: &Request<'_>) -> Shaped {
+        let Request {
+            text,
+            style,
+            segments,
+            palette,
+        } = request;
         let tabbed = text.contains('\t');
         let source = if tabbed {
             Cow::Owned(text.replace('\t', " "))
         } else {
-            Cow::Borrowed(text)
+            Cow::Borrowed(*text)
         };
-        let mut layout = self.build(&source, style, &[]);
-        if tabbed {
-            layout.break_all_lines(None);
-            let stops = tab_stops(text, style.tab_size, |index| {
-                Cluster::from_byte_index(&layout, index).map_or(0.0, |cluster| cluster.advance())
-            });
-            layout = self.build(&source, style, &stops);
-        }
+        let stops = if tabbed {
+            tab_stops(text, style.tab_size, |index| {
+                let class = segment_at(segments, index);
+                self.space(style, &palette[usize::from(class)])
+            })
+        } else {
+            Vec::new()
+        };
+        let mut layout = self.build(&source, style, segments, palette, &stops);
         let indent = match style.wrap_indent {
             WrapIndent::Leading { extra_columns } if style.wrap => {
                 layout.break_all_lines(None);
-                leading_width(&layout, text) + f32::from(extra_columns) * self.space(style)
+                leading_width(&layout, text)
+                    + f32::from(extra_columns) * self.space(style, &SpanStyle::default())
             }
             _ => 0.0,
         };
-        TextLayout {
+        Shaped {
             layout,
+            width: None,
             align: style.align,
-            wrap: style.wrap,
             indent,
             len: text.len(),
-            broken_at: None,
+            wrap: style.wrap,
         }
     }
 
-    fn space(&mut self, style: &TextStyle) -> f32 {
+    fn space(&mut self, style: &TextStyle, span: &SpanStyle) -> f32 {
+        let family = span.family.as_ref().unwrap_or(&style.family).clone();
+        let weight = span.weight.unwrap_or(style.weight);
+        let italic = span.italic.unwrap_or(style.italic);
+        let key = (family, style.size.to_bits(), weight.to_bits(), italic);
+        if let Some(width) = self.spaces.get(&key) {
+            return *width;
+        }
         let plain = TextStyle {
+            family: key.0.clone(),
+            weight,
+            italic,
             spans: Vec::new(),
             wrap: false,
             wrap_indent: WrapIndent::None,
             align: TextAlign::Start,
-            ..style.clone()
+            ..*style
         };
-        let mut space = self.layout(" ", &plain);
-        space.break_lines(None);
-        space.size().0
+        let mut layout = self.build(" ", &plain, &[], &[], &[]);
+        layout.break_all_lines(None);
+        let width = layout.width();
+        self.spaces.insert(key, width);
+        width
     }
 
     fn build(
         &mut self,
         text: &str,
         style: &TextStyle,
+        segments: &[Segment],
+        palette: &[SpanStyle],
         stops: &[(usize, f32)],
-    ) -> Layout<SpanStyle> {
+    ) -> Layout<u16> {
         let mut builder = self
             .layouts
             .ranged_builder(&mut self.fonts, text, 1.0, false);
@@ -561,23 +634,8 @@ impl TextSystem {
         if style.wrap {
             builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
         }
-        let mut boundaries = vec![0, text.len()];
-        for (range, _) in &style.spans {
-            if range.start < range.end && range.start < text.len() {
-                boundaries.extend([range.start, range.end.min(text.len())]);
-            }
-        }
-        boundaries.retain(|index| text.is_char_boundary(*index));
-        boundaries.sort_unstable();
-        boundaries.dedup();
-        for pair in boundaries.windows(2) {
-            let range = pair[0]..pair[1];
-            let mut span = SpanStyle::default();
-            for (source, style) in &style.spans {
-                if source.start <= range.start && source.end >= range.end {
-                    span.overlay(style);
-                }
-            }
+        for (range, class) in segments {
+            let span = &palette[usize::from(*class)];
             if let Some(weight) = span.weight {
                 builder.push(
                     StyleProperty::FontWeight(FontWeight::new(weight)),
@@ -600,7 +658,7 @@ impl TextSystem {
                     range.clone(),
                 );
             }
-            builder.push(StyleProperty::Brush(span), range);
+            builder.push(StyleProperty::Brush(*class), range.clone());
         }
         for &(index, spacing) in stops {
             builder.push(StyleProperty::LetterSpacing(spacing), index..=index);
@@ -611,12 +669,17 @@ impl TextSystem {
     pub fn rasterize(&mut self, glyph: &PositionedGlyph<'_>, key: &GlyphKey) -> Option<GlyphImage> {
         self.stats.glyphs_rasterized += 1;
         let font = FontRef::from_index(glyph.font.data.as_ref(), glyph.font.index as usize)?;
+        let coords = glyph
+            .run
+            .normalized_coords()
+            .iter()
+            .map(|coord| coord.to_bits());
         let mut scaler = self
             .scaler
             .builder(font)
             .size(f32::from_bits(key.size_bits))
             .hint(false)
-            .normalized_coords(glyph.coords)
+            .normalized_coords(coords)
             .build();
         let offset = Vector::new(f32::from(key.subpixel) / f32::from(SUBPIXEL_BUCKETS), 0.0);
         let mut render = Render::new(&[Source::Outline]);
@@ -647,14 +710,210 @@ impl TextSystem {
     }
 }
 
-fn leading_width(layout: &Layout<SpanStyle>, text: &str) -> f32 {
+struct Request<'a> {
+    text: &'a str,
+    style: &'a TextStyle,
+    segments: Vec<Segment>,
+    palette: Rc<[SpanStyle]>,
+}
+
+impl Request<'_> {
+    fn hash(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        self.text.hash(&mut hasher);
+        shape_of(self.style).hash(&mut hasher);
+        self.segments.hash(&mut hasher);
+        for span in self.palette.iter() {
+            font_of(span).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    fn into_entry(self, shaped: Rc<Shaped>) -> Entry {
+        Entry {
+            text: self.text.into(),
+            style: TextStyle {
+                family: self.style.family.clone(),
+                spans: Vec::new(),
+                ..*self.style
+            },
+            segments: self.segments.into(),
+            palette: self.palette,
+            widths: vec![shaped],
+        }
+    }
+}
+
+struct Entry {
+    text: Box<str>,
+    style: TextStyle,
+    segments: Box<[Segment]>,
+    palette: Rc<[SpanStyle]>,
+    widths: Vec<Rc<Shaped>>,
+}
+
+impl Entry {
+    fn matches(&self, request: &Request<'_>) -> bool {
+        *self.text == *request.text
+            && shape_of(&self.style) == shape_of(request.style)
+            && *self.segments == *request.segments
+            && self.palette.len() == request.palette.len()
+            && self
+                .palette
+                .iter()
+                .zip(request.palette.iter())
+                .all(|(known, span)| font_of(known) == font_of(span))
+    }
+
+    fn at(&mut self, width: Option<f32>, stats: &mut TextStats) -> Rc<Shaped> {
+        if let Some(index) = self.widths.iter().position(|shaped| shaped.width == width) {
+            stats.cache_hits += 1;
+            self.widths[..=index].rotate_right(1);
+            return self.widths[0].clone();
+        }
+        stats.breaks += 1;
+        let full = self.widths.len() >= WIDTHS_PER_TEXT;
+        let idle = self
+            .widths
+            .iter()
+            .rposition(|shaped| Rc::strong_count(shaped) == 1);
+        let mut shaped = match idle.filter(|_| full) {
+            Some(index) => self.widths.remove(index),
+            None => self.widths[0].clone(),
+        };
+        Rc::make_mut(&mut shaped).break_at(width);
+        self.widths.insert(0, shaped.clone());
+        self.widths.truncate(WIDTHS_PER_TEXT);
+        shaped
+    }
+}
+
+#[derive(Default)]
+struct ShapeCache {
+    current: FxHashMap<u64, Vec<Entry>>,
+    previous: FxHashMap<u64, Vec<Entry>>,
+    len: usize,
+}
+
+impl ShapeCache {
+    fn find(&mut self, hash: u64, request: &Request<'_>) -> Option<&mut Entry> {
+        if let Some(bucket) = self.previous.get_mut(&hash)
+            && let Some(index) = bucket.iter().position(|entry| entry.matches(request))
+        {
+            let entry = bucket.swap_remove(index);
+            if bucket.is_empty() {
+                self.previous.remove(&hash);
+            }
+            self.insert(hash, entry);
+        }
+        self.current
+            .get_mut(&hash)?
+            .iter_mut()
+            .find(|entry| entry.matches(request))
+    }
+
+    fn insert(&mut self, hash: u64, entry: Entry) {
+        if self.len >= GENERATION_LIMIT {
+            self.previous = take(&mut self.current);
+            self.len = 0;
+        }
+        self.len += 1;
+        self.current.entry(hash).or_default().push(entry);
+    }
+}
+
+fn shape_of(style: &TextStyle) -> (&str, [u32; 3], bool, TextAlign, bool, WrapIndent, u8) {
+    (
+        &style.family,
+        [style.size, style.weight, style.line_height].map(f32::to_bits),
+        style.italic,
+        style.align,
+        style.wrap,
+        style.wrap_indent,
+        style.tab_size,
+    )
+}
+
+fn font_of(span: &SpanStyle) -> (Option<u32>, Option<bool>, Option<&str>) {
+    (
+        span.weight.map(f32::to_bits),
+        span.italic,
+        span.family.as_deref(),
+    )
+}
+
+fn variation(run: &Run<'_, u16>) -> u64 {
+    let synthesis = run.synthesis();
+    let mut variation = 0xcbf2_9ce4_8422_2325u64;
+    let mut mix = |v: u64| variation = (variation ^ v).wrapping_mul(0x0100_0000_01b3);
+    for coord in run.normalized_coords() {
+        mix(u64::from(coord.to_bits() as u16));
+    }
+    mix(u64::from(synthesis.embolden()));
+    mix(synthesis.skew().map_or(0, |s| u64::from(s.to_bits()) + 1));
+    variation
+}
+
+fn classify(text: &str, spans: &[(Range<usize>, SpanStyle)]) -> (Vec<Segment>, Vec<SpanStyle>) {
+    let len = text.len();
+    let mut boundaries: Vec<usize> = spans
+        .iter()
+        .filter(|(range, _)| range.start < range.end && range.start < len)
+        .flat_map(|(range, _)| [range.start, range.end.min(len)])
+        .chain([0, len])
+        .filter(|index| text.is_char_boundary(*index))
+        .collect();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let mut starts: Vec<usize> = (0..spans.len()).collect();
+    starts.sort_by_key(|index| spans[*index].0.start);
+    let mut pending = starts.into_iter().peekable();
+    let mut active: Vec<usize> = Vec::new();
+    let mut palette = vec![SpanStyle::default()];
+    let mut segments: Vec<Segment> = Vec::new();
+    for pair in boundaries.windows(2) {
+        let range = pair[0]..pair[1];
+        while let Some(index) = pending.next_if(|index| spans[*index].0.start <= range.start) {
+            let at = active.partition_point(|active| *active < index);
+            active.insert(at, index);
+        }
+        active.retain(|index| spans[*index].0.end >= range.end);
+        let mut style = SpanStyle::default();
+        for index in &active {
+            style.overlay(&spans[*index].1);
+        }
+        let known = palette.iter().position(|known| *known == style);
+        let class = known.unwrap_or_else(|| {
+            palette.push(style);
+            palette.len() - 1
+        }) as u16;
+        match segments.last_mut() {
+            Some((last, previous)) if *previous == class && last.end == range.start => {
+                last.end = range.end;
+            }
+            _ if class != 0 => segments.push((range, class)),
+            _ => {}
+        }
+    }
+    (segments, palette)
+}
+
+fn segment_at(segments: &[Segment], index: usize) -> u16 {
+    let at = segments.partition_point(|(range, _)| range.end <= index);
+    segments
+        .get(at)
+        .filter(|(range, _)| range.start <= index)
+        .map_or(0, |(_, class)| *class)
+}
+
+fn leading_width(layout: &Layout<u16>, text: &str) -> f32 {
     text.char_indices()
         .take_while(|(_, c)| *c == ' ' || *c == '\t')
         .map(|(index, _)| Cluster::from_byte_index(layout, index).map_or(0.0, |c| c.advance()))
         .sum()
 }
 
-fn tab_stops(text: &str, tab_size: u8, space: impl Fn(usize) -> f32) -> Vec<(usize, f32)> {
+fn tab_stops(text: &str, tab_size: u8, mut space: impl FnMut(usize) -> f32) -> Vec<(usize, f32)> {
     let tab_size = usize::from(tab_size);
     let mut column = 0;
     let mut stops = Vec::new();
@@ -675,34 +934,4 @@ fn tab_stops(text: &str, tab_size: u8, space: impl Fn(usize) -> f32) -> Vec<(usi
         }
     }
     stops
-}
-
-impl Eq for TextStyle {}
-
-impl Hash for TextStyle {
-    fn hash<T: Hasher>(&self, state: &mut T) {
-        self.family.hash(state);
-        [self.size, self.weight, self.line_height]
-            .map(f32::to_bits)
-            .hash(state);
-        (
-            self.italic,
-            self.align,
-            self.wrap,
-            self.wrap_indent,
-            self.tab_size,
-        )
-            .hash(state);
-        for (range, span) in &self.spans {
-            range.hash(state);
-            [span.color, span.background]
-                .map(|c| c.map(|c| c.to_array().map(f32::to_bits)))
-                .hash(state);
-            span.weight.map(f32::to_bits).hash(state);
-            (span.italic, span.strikethrough, &span.family).hash(state);
-            span.underline
-                .map(|u| (u.thickness.to_bits(), u.color.to_array().map(f32::to_bits)))
-                .hash(state);
-        }
-    }
 }

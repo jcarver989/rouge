@@ -1,12 +1,19 @@
-use rouge_text::{
-    Granularity, Movement, SUBPIXEL_BUCKETS, TextLayout, TextStyle, TextSystem, WrapIndent,
+use rouge_core::testing::{TestResult, TestUi};
+use rouge_core::text::{
+    Granularity, Movement, SUBPIXEL_BUCKETS, SpanStyle, TextLayout, TextStyle, TextSystem,
+    WrapIndent,
 };
+use rouge_core::{Canvas, Color, Point, Styled, TextRun, canvas, div, editable, rich_text};
+use rouge_reactive::{Runtime, Signal, signal};
 
 #[test]
 fn layout_measures_scales_and_wraps() {
     let mut text = TextSystem::new();
-    let mut layout = text.layout("The quick brown fox jumps over the lazy dog", &style(16.0));
-    layout.break_lines(None);
+    let layout = text.layout(
+        "The quick brown fox jumps over the lazy dog",
+        &style(16.0),
+        None,
+    );
     let (width, height) = layout.size();
     assert!(
         width > 100.0 && width < 600.0,
@@ -18,7 +25,11 @@ fn layout_measures_scales_and_wraps() {
         "one line of 1.4 line height, got {height}"
     );
 
-    layout.break_lines(Some(width / 3.0));
+    let layout = text.layout(
+        "The quick brown fox jumps over the lazy dog",
+        &style(16.0),
+        Some(width / 3.0),
+    );
     assert!(layout.line_count() >= 3);
     assert!(layout.size().0 <= width / 3.0 + 0.5);
     assert!(layout.size().1 > height * 2.5);
@@ -27,8 +38,11 @@ fn layout_measures_scales_and_wraps() {
     assert!((max - width).abs() < 0.5);
     assert!(min > 10.0 && min < width / 3.0, "longest word, got {min}");
 
-    let mut large = text.layout("The quick brown fox jumps over the lazy dog", &style(32.0));
-    large.break_lines(None);
+    let large = text.layout(
+        "The quick brown fox jumps over the lazy dog",
+        &style(32.0),
+        None,
+    );
     let ratio = large.size().0 / width;
     assert!(
         (1.6..2.2).contains(&ratio),
@@ -39,16 +53,14 @@ fn layout_measures_scales_and_wraps() {
         wrap: false,
         ..style(16.0)
     };
-    let mut layout = text.layout("several words in a row", &unwrapped);
-    layout.break_lines(Some(20.0));
+    let layout = text.layout("several words in a row", &unwrapped, Some(20.0));
     assert_eq!(layout.line_count(), 1, "no-wrap text ignores the width");
 }
 
 #[test]
 fn glyphs_rasterize_to_coverage_masks() {
     let mut text = TextSystem::new();
-    let mut layout = text.layout("Hi there", &style(16.0));
-    layout.break_lines(None);
+    let layout = text.layout("Hi there", &style(16.0), None);
     let mut glyphs = 0;
     let mut images = 0;
     let mut last_x = -1.0;
@@ -78,8 +90,7 @@ fn glyphs_rasterize_to_coverage_masks() {
 #[test]
 fn subpixel_snapping_rolls_over() {
     let mut text = TextSystem::new();
-    let mut layout = text.layout("I", &style(16.0));
-    layout.break_lines(None);
+    let layout = text.layout("I", &style(16.0), None);
     layout.for_each_glyph(|glyph| {
         let base = glyph.x;
         let (key, x, _) = glyph.snap((10.0 - base, 0.0), 1.0);
@@ -173,9 +184,6 @@ fn points_map_to_carets_words_and_geometry() {
 
 #[test]
 fn overlapping_spans_compose_per_field_and_later_values_win() {
-    use rouge_render::Color;
-    use rouge_text::SpanStyle;
-
     let style = TextStyle {
         spans: vec![
             (
@@ -205,8 +213,7 @@ fn overlapping_spans_compose_per_field_and_later_values_win() {
         ],
         ..Default::default()
     };
-    let mut layout = TextSystem::new().layout("abcdef", &style);
-    layout.break_lines(None);
+    let layout = TextSystem::new().layout("abcdef", &style, None);
     let mut seen = Vec::new();
     layout.for_each_glyph(|glyph| seen.push(glyph.style.clone()));
     assert_eq!(seen.len(), 6);
@@ -223,8 +230,7 @@ fn overlapping_spans_compose_per_field_and_later_values_win() {
 fn tabs_render_as_blank_space() {
     let mut text = TextSystem::new();
     for style in [style(16.0), monospace()] {
-        let mut layout = text.layout("\tx", &style);
-        layout.break_lines(None);
+        let layout = text.layout("\tx", &style, None);
         let mut glyphs = Vec::new();
         let mut images = 0;
         layout.for_each_glyph(|glyph| {
@@ -271,10 +277,8 @@ fn tabs_advance_to_the_next_tab_stop() {
 #[test]
 fn tabs_keep_byte_offsets_for_hit_testing_and_selection() {
     let mut text = TextSystem::new();
-    let mut tabbed = text.layout("\tx = 1", &monospace());
-    tabbed.break_lines(None);
-    let mut spaced = text.layout("    x = 1", &monospace());
-    spaced.break_lines(None);
+    let tabbed = text.layout("\tx = 1", &monospace(), None);
+    let spaced = text.layout("    x = 1", &monospace(), None);
     let (width, height) = spaced.size();
     assert!((tabbed.size().0 - width).abs() < 0.01);
 
@@ -303,8 +307,7 @@ fn tabs_keep_byte_offsets_for_hit_testing_and_selection() {
 fn wrapping_breaks_overlong_tokens_but_prefers_word_boundaries() {
     let mut text = TextSystem::new();
     let column = column_width(&mut text);
-    let token = laid_out(
-        &mut text,
+    let token = text.layout(
         &"x".repeat(40),
         &code(WrapIndent::None),
         Some(column * 10.5),
@@ -316,8 +319,7 @@ fn wrapping_breaks_overlong_tokens_but_prefers_word_boundaries() {
     );
     assert!(token.size().0 <= column * 10.5 + 0.5);
 
-    let words = laid_out(
-        &mut text,
+    let words = text.layout(
         "aaaa bbbb cccc",
         &code(WrapIndent::None),
         Some(column * 10.5),
@@ -343,7 +345,7 @@ fn continuation_lines_hang_under_the_leading_indent_capped_at_half_the_width() {
     ];
     for (source, columns, hang) in cases {
         let indent = WrapIndent::Leading { extra_columns: 2 };
-        let layout = laid_out(&mut text, source, &code(indent), Some(column * columns));
+        let layout = text.layout(source, &code(indent), Some(column * columns));
         let starts = line_starts(&layout);
         assert!(starts.len() >= 2, "{source:?} wraps");
         assert!(
@@ -355,6 +357,63 @@ fn continuation_lines_hang_under_the_leading_indent_capped_at_half_the_width() {
     }
 }
 
+#[test]
+fn hits_share_one_shaping_and_span_colors_apply_at_paint() {
+    let mut text = TextSystem::new();
+    let red = text.layout("abcdef", &tinted(Color::RED), Some(30.0));
+    let blue = text.layout("abcdef", &tinted(Color::BLUE), Some(30.0));
+    let stats = text.stats();
+    assert_eq!((stats.shapes, stats.breaks, stats.cache_hits), (1, 0, 1));
+    let colors = |layout: &TextLayout| {
+        let mut colors = Vec::new();
+        layout.for_each_glyph(|glyph| colors.push(glyph.style.color));
+        colors
+    };
+    assert_eq!(colors(&red)[..3], [Some(Color::RED); 3]);
+    assert_eq!(colors(&blue)[..3], [Some(Color::BLUE); 3]);
+    assert_eq!(colors(&blue)[3..], [None; 3]);
+    let wide = text.layout("abcdef", &tinted(Color::GREEN), Some(300.0));
+    assert_eq!((text.stats().shapes, text.stats().breaks), (1, 1));
+    assert_eq!(wide.line_count(), 1);
+}
+
+#[test]
+fn steady_frames_neither_shape_nor_break_text() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let tint = signal(Color::RED);
+    let mut ui = TestUi::new(move || {
+        let field = editable(signal(String::new()))
+            .test_id("field")
+            .w(150.0)
+            .placeholder("Type here", Color::RED);
+        let body = rich_text("Wrapped body text that spans a few lines", move || {
+            vec![(0..7, span(tint.get()))]
+        })
+        .w(120.0);
+        div()
+            .size_full()
+            .flex()
+            .col()
+            .child(field)
+            .child(body)
+            .child(paragraph(tint))
+    });
+    ui.render()?;
+    ui.click_on("field")?;
+    ui.run(1.0);
+    ui.render()?;
+    let before = ui.stats().text;
+    for color in [Color::BLUE, Color::GREEN, Color::RED] {
+        tint.set(color);
+        ui.run(0.6);
+        ui.render()?;
+    }
+    let steady = ui.stats().text - before;
+    assert_eq!((steady.shapes, steady.breaks), (0, 0), "{steady:?}");
+    assert!(steady.cache_hits > 0);
+    Ok(())
+}
+
 fn style(size: f32) -> TextStyle {
     TextStyle {
         size,
@@ -363,18 +422,7 @@ fn style(size: f32) -> TextStyle {
 }
 
 fn shaped(content: &str, max_width: Option<f32>) -> TextLayout {
-    laid_out(&mut TextSystem::new(), content, &style(16.0), max_width)
-}
-
-fn laid_out(
-    text: &mut TextSystem,
-    content: &str,
-    style: &TextStyle,
-    max_width: Option<f32>,
-) -> TextLayout {
-    let mut layout = text.layout(content, style);
-    layout.break_lines(max_width);
-    layout
+    TextSystem::new().layout(content, &style(16.0), max_width)
 }
 
 fn monospace() -> TextStyle {
@@ -387,7 +435,7 @@ fn monospace() -> TextStyle {
 }
 
 fn last_glyph_x(text: &mut TextSystem, content: &str, style: &TextStyle) -> f32 {
-    let layout = laid_out(text, content, style, None);
+    let layout = text.layout(content, style, None);
     let mut x = 0.0;
     layout.for_each_glyph(|glyph| x = glyph.x);
     x
@@ -402,7 +450,7 @@ fn code(wrap_indent: WrapIndent) -> TextStyle {
 }
 
 fn column_width(text: &mut TextSystem) -> f32 {
-    laid_out(text, "0123456789", &monospace(), None).size().0 / 10.0
+    text.layout("0123456789", &monospace(), None).size().0 / 10.0
 }
 
 fn line_starts(layout: &TextLayout) -> Vec<f32> {
@@ -413,4 +461,37 @@ fn line_starts(layout: &TextLayout) -> Vec<f32> {
         }
     });
     starts.into_iter().map(|(_, x)| x).collect()
+}
+
+fn tinted(color: Color) -> TextStyle {
+    TextStyle {
+        spans: vec![(0..3, span(color))],
+        ..style(16.0)
+    }
+}
+
+fn span(color: Color) -> SpanStyle {
+    SpanStyle {
+        color: Some(color),
+        ..SpanStyle::default()
+    }
+}
+
+fn paragraph(tint: Signal<Color>) -> Canvas {
+    let run = move |width: f32| {
+        let style = TextStyle {
+            spans: vec![(0..8, span(tint.get()))],
+            ..TextStyle::default()
+        };
+        TextRun::new(
+            "Measured canvases wrap their runs to the width they are given",
+            Point::ZERO,
+            &style,
+            Color::BLACK,
+        )
+        .wrap(width)
+    };
+    canvas(move |painter| painter.run(run(painter.size().width)))
+        .w(140.0)
+        .measure(move |measure, width| measure.text(&run(width)).max().y)
 }

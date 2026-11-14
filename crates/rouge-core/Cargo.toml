@@ -1,6 +1,6 @@
 [package]
 name = "rouge-core"
-description = "Element tree, styles, layout and views for Rouge."
+description = "Element tree, styles, layout, text, views and the layer compositor for Rouge."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,16 +12,23 @@ rouge-reactive.workspace = true
 rouge-render.workspace = true
 rouge-theme.workspace = true
 tracing.workspace = true
-rouge-text.workspace = true
 taffy.workspace = true
 slotmap.workspace = true
-tokio.workspace = true
+rustc-hash.workspace = true
 thiserror.workspace = true
 zeno.workspace = true
 image.workspace = true
+swash = "0.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+parley = "0.12"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+parley = { version = "0.12", default-features = false, features = ["std"] }
 web-time.workspace = true
+
+[dev-dependencies]
+wgpu.workspace = true
 
 [lints]
 workspace = true
@@ -29,3 +36,7 @@ workspace = true
 [[test]]
 name = "tree_edit_test"
 path = "tests/tree/edit_test.rs"
+
+[[test]]
+name = "tree_fragment_test"
+path = "tests/tree/fragment_test.rs"
