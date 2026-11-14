@@ -1,4 +1,4 @@
-use crate::fuzzy::fuzzy_filter;
+use crate::fuzzy::FuzzyFilter;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -73,24 +73,30 @@ impl PickerRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PickerState<T = PickerOption> {
     options: Vec<T>,
+    groups: Vec<Option<usize>>,
     filtered: bool,
     limit: Option<usize>,
     query: String,
     matches: Vec<usize>,
+    positions: Vec<Option<usize>>,
     highlighted: usize,
+    filter: FuzzyFilter,
 }
 
 impl<T: PickerEntry> PickerState<T> {
     pub fn new(options: Vec<T>) -> Self {
         let mut state = Self {
-            options,
+            options: Vec::new(),
+            groups: Vec::new(),
             filtered: true,
             limit: None,
             query: String::new(),
             matches: Vec::new(),
+            positions: Vec::new(),
             highlighted: 0,
+            filter: FuzzyFilter::default(),
         };
-        state.refilter();
+        state.set_options(options);
         state
     }
 
@@ -121,6 +127,17 @@ impl<T: PickerEntry> PickerState<T> {
 
     pub fn set_options(&mut self, options: Vec<T>) {
         self.options = options;
+        let mut order = HashMap::new();
+        self.groups = self
+            .options
+            .iter()
+            .map(|option| {
+                option.group().map(|group| {
+                    let next = order.len();
+                    *order.entry(group).or_insert(next)
+                })
+            })
+            .collect();
         self.refilter();
     }
 
@@ -136,7 +153,7 @@ impl<T: PickerEntry> PickerState<T> {
     }
 
     pub fn highlight(&mut self, index: usize) -> bool {
-        let Some(position) = self.matches.iter().position(|&matched| matched == index) else {
+        let Some(position) = self.positions.get(index).copied().flatten() else {
             return false;
         };
         let enabled = !self.options[index].disabled();
@@ -180,23 +197,22 @@ impl<T: PickerEntry> PickerState<T> {
     }
 
     fn refilter(&mut self) {
-        self.matches = if self.filtered {
-            fuzzy_filter(&self.query, self.options.iter().map(PickerEntry::text))
+        if self.filtered {
+            let keys = self.options.iter().map(PickerEntry::text);
+            self.filter.filter(&self.query, keys, &mut self.matches);
         } else {
-            (0..self.options.len()).collect()
-        };
-        let mut order = HashMap::new();
-        for option in &self.options {
-            if let Some(group) = option.group() {
-                let next = order.len();
-                order.entry(group).or_insert(next);
-            }
+            self.matches.clear();
+            self.matches.extend(0..self.options.len());
         }
-        let options = &self.options;
-        self.matches
-            .sort_by_key(|&index| options[index].group().map(|group| order[group]));
+        let groups = &self.groups;
+        self.matches.sort_by_key(|&index| groups[index]);
         if let Some(limit) = self.limit {
             self.matches.truncate(limit);
+        }
+        self.positions.clear();
+        self.positions.resize(self.options.len(), None);
+        for (position, &index) in self.matches.iter().enumerate() {
+            self.positions[index] = Some(position);
         }
         self.highlighted = self.enabled_from(0, 1).unwrap_or(0);
     }

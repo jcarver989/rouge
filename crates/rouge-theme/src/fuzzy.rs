@@ -2,28 +2,61 @@ use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
-use std::cmp::Reverse;
+use std::{cmp::Reverse, fmt};
 
-#[must_use]
-pub(crate) fn fuzzy_filter<T: AsRef<str>>(
-    query: &str,
-    keys: impl IntoIterator<Item = T>,
-) -> Vec<usize> {
-    let keys = keys.into_iter();
-    if query.trim().is_empty() {
-        return (0..keys.count()).collect();
+#[derive(Default)]
+pub(crate) struct FuzzyFilter {
+    matcher: Option<Matcher>,
+    pattern: Pattern,
+    haystack: Vec<char>,
+    scored: Vec<(u32, usize)>,
+}
+
+impl FuzzyFilter {
+    pub(crate) fn filter<T: AsRef<str>>(
+        &mut self,
+        query: &str,
+        keys: impl ExactSizeIterator<Item = T>,
+        output: &mut Vec<usize>,
+    ) {
+        output.clear();
+        if query.trim().is_empty() {
+            output.extend(0..keys.len());
+            return;
+        }
+        let matcher = self
+            .matcher
+            .get_or_insert_with(|| Matcher::new(Config::DEFAULT));
+        self.pattern
+            .reparse(query, CaseMatching::Smart, Normalization::Smart);
+        self.scored.clear();
+        for (index, key) in keys.enumerate() {
+            let haystack = Utf32Str::new(key.as_ref(), &mut self.haystack);
+            if let Some(score) = self.pattern.score(haystack, matcher) {
+                self.scored.push((score, index));
+            }
+        }
+        self.scored.sort_by_key(|&(score, _)| Reverse(score));
+        output.extend(self.scored.iter().map(|&(_, index)| index));
     }
-    let mut matcher = Matcher::new(Config::DEFAULT);
-    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
-    let mut buf = Vec::new();
-    let mut scored: Vec<(u32, usize)> = keys
-        .enumerate()
-        .filter_map(|(index, key)| {
-            pattern
-                .score(Utf32Str::new(key.as_ref(), &mut buf), &mut matcher)
-                .map(|score| (score, index))
-        })
-        .collect();
-    scored.sort_by_key(|&(score, _)| Reverse(score));
-    scored.into_iter().map(|(_, index)| index).collect()
+}
+
+impl Clone for FuzzyFilter {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for FuzzyFilter {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for FuzzyFilter {}
+
+impl fmt::Debug for FuzzyFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FuzzyFilter").finish_non_exhaustive()
+    }
 }

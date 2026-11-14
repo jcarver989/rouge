@@ -84,6 +84,58 @@ fn a_limited_picker_keeps_only_its_best_matches() {
     assert_eq!(limited.matches(), &everything.matches()[..2]);
 }
 
+#[test]
+fn only_matching_options_can_be_highlighted() {
+    let mut state = PickerState::new(options(["Submit review", "Stage all", "Show split"]));
+    state.set_query("split");
+    assert!(!state.highlight(0));
+    assert!(state.highlight(2));
+    assert_eq!(state.highlighted(), Some(2));
+    state.set_query("");
+    assert!(state.highlight(0));
+    assert_eq!(state.highlighted(), Some(0));
+}
+
+#[test]
+fn replacing_options_keeps_the_query_and_regroups() {
+    let mut state = PickerState::new(options(["gate", "beta"]));
+    state.set_query("ga");
+    assert_eq!(state.matches(), [0]);
+    state.set_options(vec![
+        PickerOption::new("delta").group("Sooner"),
+        PickerOption::new("gamma").group("Later"),
+        PickerOption::new("alpha").group("Sooner"),
+    ]);
+    assert_eq!(state.query(), "ga");
+    assert_eq!(state.rows(), [PickerRow::Group(1), PickerRow::Option(1)]);
+    assert!(!state.highlight(0));
+    assert!(state.highlight(1));
+    state.set_query("");
+    assert_eq!(
+        state.rows(),
+        [
+            PickerRow::Group(0),
+            PickerRow::Option(0),
+            PickerRow::Option(2),
+            PickerRow::Group(1),
+            PickerRow::Option(1),
+        ]
+    );
+}
+
+#[test]
+fn a_cloned_picker_filters_like_the_original() {
+    let texts = ["Submit review", "Stage all", "Show split"];
+    let mut original = PickerState::new(options(texts));
+    original.set_query("s");
+    let mut cloned = original.clone();
+    assert_eq!(cloned, original);
+    original.set_query("sp");
+    cloned.set_query("sp");
+    assert_eq!(cloned.matches(), original.matches());
+    assert_eq!(cloned, original);
+}
+
 fn options<const N: usize>(texts: [&str; N]) -> Vec<PickerOption> {
     texts.into_iter().map(PickerOption::new).collect()
 }
