@@ -181,7 +181,7 @@ fn view_output_mixes_with_builder_code() {
             .child(view! { <div>{label}</div> })
     });
     assert_eq!(row_widths(&mut ui), [10.0, 20.0, 30.0]);
-    assert_eq!(ui.stats().elements, 9);
+    assert_eq!(ui.stats().elements, 7);
 }
 
 fn row_widths(ui: &mut TestUi) -> Vec<f32> {

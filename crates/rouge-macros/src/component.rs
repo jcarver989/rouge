@@ -70,6 +70,7 @@ pub(crate) fn component(args: TokenStream, item: TokenStream) -> syn::Result<Tok
     let vis = &function.vis;
     Ok(quote! {
         #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+        #[track_caller]
         #function
 
         #[doc(hidden)]

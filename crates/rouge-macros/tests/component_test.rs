@@ -1,6 +1,7 @@
 use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::{Color, Div, IntoProp, Point, Prop, Styled, View, component, div, text, view};
 use rouge_reactive::{Runtime, signal};
+use std::panic::Location;
 
 #[test]
 fn attributes_matching_parameters_become_arguments_in_declaration_order() -> TestResult {
@@ -36,7 +37,7 @@ fn a_bare_attribute_naming_a_parameter_is_shorthand_for_a_variable() {
 #[test]
 fn view_children_are_passed_as_one_argument() -> TestResult {
     let _rt = Runtime::new().enter();
-    let mut ui = TestUi::new(|| {
+    let ui = TestUi::new(|| {
         view! {
             <div flex size_full items_start>
                 <labeled name="pair">
@@ -173,6 +174,11 @@ fn branches_of_different_view_types_are_erased() {
     assert_eq!(row_widths(&mut ui), [10.0, 30.0, 5.0]);
 }
 
+#[test]
+fn components_see_their_call_site_as_the_caller() {
+    assert_eq!(located().line(), line!());
+}
+
 mod parts {
     use rouge_core::{Div, Styled, component, div};
 
@@ -207,6 +213,11 @@ fn caption<U>(children: impl IntoProp<String, U>) -> Div {
 #[component]
 fn row() -> Div {
     div().flex().size_full()
+}
+
+#[component]
+fn located() -> &'static Location<'static> {
+    Location::caller()
 }
 
 fn row_widths(ui: &mut TestUi) -> Vec<f32> {
