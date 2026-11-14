@@ -4,20 +4,20 @@ use common::builder;
 use rouge_core::testing::{TestError, TestResult, TestUi, assert_near};
 use rouge_core::{Color, Styled, UiPalette, div, view};
 use rouge_reactive::{Runtime, signal};
-use rouge_widgets::{text_area, text_input};
+use rouge_widgets::text_input;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 #[test]
-fn text_area_forwards_selection_row_limits_and_shift_enter_submission() -> TestResult {
+fn multiline_text_input_forwards_selection_row_limits_and_shift_enter_submission() -> TestResult {
     let _entered = Runtime::new().enter();
     let value = signal("first".to_owned());
     let selected = signal(0..0);
     let submitted = signal(String::new());
     let mut ui = builder().build(|| {
         view! {
-            <text_area value min_rows=1 max_rows=2 selection=selected submit_on_enter w=200.0
-                       on_submit={move |text: String| submitted.set(text)}/>
+            <text_input multiline value min_rows=1 max_rows=2 selection=selected submit_on_enter w=200.0
+                        on_submit={move |text: String| submitted.set(text)}/>
         }
     });
     ui.click_at(20.0, 20.0);
@@ -66,7 +66,7 @@ fn text_input_edits_its_signal_shows_focus_and_submits() -> TestResult {
 }
 
 #[test]
-fn placeholder_is_shown_only_while_empty_and_text_area_takes_newlines() -> TestResult {
+fn placeholder_is_shown_only_while_empty_and_multiline_input_takes_newlines() -> TestResult {
     let _entered = Runtime::new().enter();
     let (name, notes) = (signal(String::new()), signal(String::new()));
     let mut ui = builder().build(move || {
@@ -76,7 +76,7 @@ fn placeholder_is_shown_only_while_empty_and_text_area_takes_newlines() -> TestR
             .col()
             .gap(10.0)
             .child(view! { <text_input value=name placeholder="MMMMMM" w=200.0/> })
-            .child(view! { <text_area value=notes w=200.0/> })
+            .child(view! { <text_input multiline value=notes w=200.0/> })
     });
     let dark = |ui: &mut TestUi| -> Result<usize, TestError> {
         let img = ui.render()?;

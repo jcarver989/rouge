@@ -1,5 +1,3 @@
-use rouge_core::root_font_size;
-
 pub const BASE_SIZE: f32 = 16.0;
 
 pub const ROW_HEIGHT: f32 = 28.0;
@@ -34,8 +32,3 @@ pub const PICKER_PREVIEW_HEIGHT: f32 = PICKER_PREVIEW_WIDTH / 2.0;
 pub const POPOVER_WIDTH: f32 = 520.0;
 pub const MENU_WIDTH: f32 = 224.0;
 pub const MODAL_TOP_OFFSET: f32 = 96.0;
-
-pub fn scaled(design_px: f32) -> impl Fn() -> f32 {
-    let size = root_font_size();
-    move || design_px * size.get() / BASE_SIZE
-}

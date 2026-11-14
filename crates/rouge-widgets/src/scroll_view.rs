@@ -1,8 +1,8 @@
 use crate::tokens::{SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH};
 use rouge_core::component;
 use rouge_core::{
-    BuildCx, Div, DragPhase, ElementId, Length, Point, PointerButton, PointerEvent, ScrollLinked,
-    ScrollState, Scrollable, Styled, Theme, View, div, px, root_font_size, show, styled,
+    BuildCx, Div, DragPhase, Point, PointerButton, PointerEvent, ScrollLinked, ScrollState,
+    Scrollable, Styled, Theme, View, div, show, styled,
 };
 use rouge_reactive::{Signal, memo, signal};
 use std::cell::Cell;
@@ -48,13 +48,13 @@ impl<T: Scrollable + Styled> Scrollable for ScrollView<T> {
 styled!(ScrollView<T> => root);
 
 impl<T: Scrollable + Styled> View for ScrollView<T> {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let state = self.state.unwrap_or_else(|| signal(ScrollState::default()));
         let bars = [Axis::Vertical, Axis::Horizontal].map(|axis| scrollbar_if_needed(state, axis));
         self.root
             .child(self.content.size_full().scroll_state(state))
             .children(bars)
-            .build(cx)
+            .build(cx);
     }
 }
 
@@ -100,15 +100,11 @@ impl Axis {
 
 fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
     let theme = Theme::current();
-    let root = root_font_size();
     let length = memo(move || {
         let state = state.get();
         let viewport = axis.viewport(state);
         (viewport * viewport / axis.content(state).max(1.0))
-            .clamp(
-                viewport.min(Length::design(SCROLLBAR_MIN_THUMB_HEIGHT).resolve(root.get())),
-                viewport,
-            )
+            .clamp(viewport.min(SCROLLBAR_MIN_THUMB_HEIGHT), viewport)
             .round()
     });
     let extent = memo(move || {
@@ -128,7 +124,7 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
     let thumb = div()
         .absolute()
         .rounded(THUMB_RADIUS)
-        .bg(move || theme.text_muted.get().with_alpha(0.5))
+        .bg(move || theme.get().text_muted.with_alpha(0.5))
         .on_pointer_down(PointerEvent::stop_propagation)
         .on_drag(move |event| {
             let current = state.get_untracked();
@@ -155,7 +151,7 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
                 .top(0.0)
                 .right(THUMB_INSET)
                 .w(THUMB_WIDTH)
-                .h(move || px(length.get()))
+                .h(move || length.get())
                 .scroll_linked(state, link),
         ),
         Axis::Horizontal => (
@@ -170,7 +166,7 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
                 .left(0.0)
                 .bottom(THUMB_INSET)
                 .h(THUMB_WIDTH)
-                .w(move || px(length.get()))
+                .w(move || length.get())
                 .scroll_linked(state, link),
         ),
     };

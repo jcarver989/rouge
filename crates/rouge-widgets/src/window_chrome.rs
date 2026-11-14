@@ -19,7 +19,7 @@ where
             .flex()
             .items_center()
             .justify_center()
-            .hover(move |s| s.bg(theme.surface_hover.get_untracked()))
+            .hover(|style| style.bg(theme.surface_hover()))
             .on_pointer_down(PointerEvent::stop_propagation)
             .on_click(move |_| click(window))
             .child(text(label))
@@ -31,8 +31,8 @@ where
         .flex_none()
         .flex()
         .items_center()
-        .bg(theme.elevated)
-        .text_color(theme.text)
+        .bg(theme.elevated())
+        .text_color(theme.text())
         .on_pointer_down(move |event| match (event.button, event.click_count) {
             (PointerButton::Primary, 2) => window.zoom(),
             (PointerButton::Primary, _) => window.start_drag(),

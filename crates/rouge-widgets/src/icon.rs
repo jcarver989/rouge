@@ -1,5 +1,6 @@
 use crate::tokens::ICON_SIZE;
-use rouge_core::{BuildCx, Color, ElementId, IntoProp, Path, Prop, Styled, View, div, icon, view};
+use rouge_core::{BuildCx, Color, IntoProp, Path, Prop, Styled, View, div, icon, view};
+use std::cell::OnceCell;
 
 macro_rules! icons {
     ($($name:ident => $file:literal,)*) => {
@@ -93,7 +94,15 @@ icons! {
 
 impl From<IconName> for Path {
     fn from(name: IconName) -> Self {
-        Path::svg(name.geometry())
+        thread_local! {
+            static PATHS: [OnceCell<Path>; IconName::ALL.len()] =
+                const { [const { OnceCell::new() }; IconName::ALL.len()] };
+        }
+        PATHS.with(|paths| {
+            paths[name as usize]
+                .get_or_init(|| Path::svg(name.geometry()))
+                .clone()
+        })
     }
 }
 
@@ -119,13 +128,13 @@ impl Icon {
 }
 
 impl View for Icon {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let color = self.color;
         view! {
             <div flex_none w=self.size h=self.size>
                 <icon path=self.path color={move || color.get()} stroke_round=2.0 size_full/>
             </div>
         }
-        .build(cx)
+        .build(cx);
     }
 }

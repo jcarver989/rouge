@@ -7,8 +7,8 @@ use crate::tokens::{MENU_WIDTH, RADIUS_CONTROL, RADIUS_INNER};
 use crate::typography::UiStyles;
 use crate::util::{activates, focus_ring};
 use rouge_core::{
-    BuildCx, Div, ElementId, Key, Menu, Point, PointerButton, Rect, Styled, Theme, View, component,
-    div, pct, px, styled, text, view,
+    BuildCx, Div, Key, Menu, Point, PointerButton, Rect, Styled, Theme, View, component, div, pct,
+    styled, text, view,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
@@ -42,7 +42,7 @@ fn trigger(
     parent_close: Option<Rc<dyn Fn()>>,
 ) -> (Div, Signal<bool>) {
     let (open, anchor) = (signal(false), signal(Rect::ZERO));
-    let hover = Theme::current().surface_hover;
+    let hover = Theme::current().surface_hover();
     let close: Rc<dyn Fn()> = Rc::new(move || {
         open.set(false);
         if let Some(close) = &parent_close {
@@ -55,7 +55,7 @@ fn trigger(
         .track_bounds(anchor)
         .px(10.0)
         .py(4.0)
-        .hover(move |style| style.bg(hover.get_untracked()))
+        .hover(|style| style.bg(hover))
         .on_click(move |event| {
             event.stop_propagation();
             open.update(|open| *open = !*open);
@@ -84,7 +84,7 @@ fn render_items(
     let mut index = 0;
     let rows = items.iter().cloned().map(|item| {
         if matches!(item, MenuItem::Separator) {
-            return div().h(px(1.0)).my(4.0).bg(theme.border);
+            return div().h(1.0).my(4.0).bg(theme.border());
         }
         let current = index;
         index += 1;
@@ -109,9 +109,9 @@ fn render_items(
                 });
                 let clicked = activate.clone();
                 let fg = if destructive {
-                    theme.destructive
+                    theme.destructive()
                 } else {
-                    theme.text
+                    theme.text()
                 };
                 let id = id.clone().unwrap_or_else(|| format!("menu-item-{title}"));
                 let icon = icon.clone().map(|icon| Icon::new(icon, fg));
@@ -133,7 +133,7 @@ fn render_items(
             let handles = handles.clone();
             row = row
                 .track_focus(handles.handle(current))
-                .focus(move |style| style.bg(theme.surface_hover.get_untracked()))
+                .focus(|style| style.bg(theme.surface_hover()))
                 .on_key_down(move |event| {
                     match event.key {
                         Key::ArrowDown | Key::ArrowUp | Key::Home | Key::End => {
@@ -195,18 +195,18 @@ impl ContextMenu {
 styled!(ContextMenu => root);
 
 impl View for ContextMenu {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let (items, focus, dropdown) = (self.items, self.focus, self.dropdown);
         let (open, at, anchor) = (signal(false), signal(Point::ZERO), signal(Rect::ZERO));
         let body = move || {
             let menu = render_items(&items, open, focus, Rc::new(move || open.set(false)));
             if dropdown {
-                let width = move || px(anchor.get().size.width);
+                let width = move || anchor.get().size.width;
                 Placement::Below.place(menu.min_w(width), anchor)
             } else {
                 menu.absolute()
-                    .left(move || px(at.get().x))
-                    .top(move || px(at.get().y))
+                    .left(move || at.get().x)
+                    .top(move || at.get().y)
             }
         };
         let root = if dropdown {
@@ -232,12 +232,11 @@ impl View for ContextMenu {
                 }
             })
         };
-        root.child(popup(open, |layer| layer, body)).build(cx)
+        root.child(popup(open, |layer| layer, body)).build(cx);
     }
 }
 
 #[component]
-#[track_caller]
 pub fn select<T: Clone + PartialEq + 'static>(
     value: Signal<T>,
     options: impl IntoIterator<Item = (T, String)>,
@@ -261,7 +260,7 @@ pub fn select<T: Clone + PartialEq + 'static>(
     let label = view! {
         <div flex flex_1 items_center justify_between gap=8.0>
             <text body primary no_wrap>{current}</text>
-            {Icon::new(IconName::ChevronDown, theme.text_muted).size(14.0)}
+            {Icon::new(IconName::ChevronDown, theme.text_muted()).size(14.0)}
         </div>
     };
     let mut menu = context_menu(label, items).dropdown();
@@ -271,10 +270,10 @@ pub fn select<T: Clone + PartialEq + 'static>(
         .px(10.0)
         .py(6.0)
         .min_w(120.0)
-        .border(px(1.0))
-        .border_color(theme.border)
+        .border(1.0)
+        .border_color(theme.border())
         .rounded(RADIUS_CONTROL)
-        .bg(theme.elevated)
-        .hover(move |style| style.bg(theme.surface_hover.get_untracked()));
+        .bg(theme.elevated())
+        .hover(|style| style.bg(theme.surface_hover()));
     menu
 }

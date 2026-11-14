@@ -1,10 +1,22 @@
 use rouge_core::testing::TestResult;
 use rouge_core::{Length, View, div, text, view};
 use rouge_reactive::{Runtime, signal};
+use rouge_theme::PickerEntry;
 use rouge_widgets::testing::component_test;
 use rouge_widgets::*;
 
 use SearchPickerEvent::{Chose, Highlighted};
+
+#[test]
+fn an_item_searches_its_visible_text_and_keywords_in_display_order() {
+    let item = PickerItem::new("id", "Label")
+        .keywords("hidden")
+        .detail("first")
+        .subtitle("Sub")
+        .prefix("p")
+        .detail("second");
+    assert_eq!(item.text(), "p Label Sub first second hidden");
+}
 
 #[test]
 fn search_filters_details_and_skips_disabled_rows() -> TestResult {

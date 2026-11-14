@@ -2,8 +2,8 @@ use crate::material::{Material, MaterialExt};
 use crate::typography::UiStyles;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, BuildCx, Div, ElementId, Key, PointerEvent, Pose, Rect, Styled, Theme, Tween, View,
-    div, overlay, px, show, styled, text, window_size,
+    AnyView, BuildCx, Div, Key, PointerEvent, Pose, Rect, Styled, Theme, Tween, View, div, overlay,
+    show, styled, text, window_size,
 };
 use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -58,8 +58,8 @@ impl Placement {
         };
         panel
             .absolute()
-            .max_w(move || px(window.get().width))
-            .max_h(move || px(window.get().height))
+            .max_w(move || window.get().width)
+            .max_h(move || window.get().height)
             .track_bounds(measured)
             .left(0.0)
             .top(0.0)
@@ -142,7 +142,7 @@ impl Popover {
 styled!(Popover => root);
 
 impl View for Popover {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let (anchor, placement, content, material) =
             (self.anchor, self.placement, self.content, self.material);
         let body = move || {
@@ -155,7 +155,7 @@ impl View for Popover {
         };
         self.root
             .child(popup(self.open, |layer| layer, body))
-            .build(cx)
+            .build(cx);
     }
 }
 
@@ -202,7 +202,7 @@ impl Tooltip {
 styled!(Tooltip => root);
 
 impl View for Tooltip {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let theme = Theme::current();
         let (label, delay, anchor) = (self.label, self.delay, self.anchor);
         let open = signal(false);
@@ -217,13 +217,16 @@ impl View for Tooltip {
         });
         let bubble = overlay(move || {
             let tip = move || {
-                let caption = text(label.clone()).small().color(theme.elevated).no_wrap();
+                let caption = text(label.clone())
+                    .small()
+                    .color(theme.elevated())
+                    .no_wrap();
                 let bubble = div()
                     .pass_through()
                     .px(8.0)
                     .py(4.0)
                     .rounded(6.0)
-                    .bg(theme.text)
+                    .bg(theme.text())
                     .child(caption);
                 Placement::Below.place(bubble, anchor)
             };
@@ -246,6 +249,6 @@ impl View for Tooltip {
                 }
             })
             .child(bubble)
-            .build(cx)
+            .build(cx);
     }
 }

@@ -31,16 +31,16 @@ mod window_chrome;
 pub use choice::{radio, toggle};
 pub use components::{
     action_bar, backdrop, button, checkbox, disclosure, empty_state, icon_button, list_row, modal,
-    modal_width, muted_text, notification, section_header, segment, segmented_control,
+    muted_text, notification, section_header, segment, segmented_control,
 };
 pub use fonts::{CODE_FONT, UI_FONT, bundled_fonts};
 pub use icon::{Icon, IconName};
 pub use inline_edit::inline_edit;
-pub use input::{text_area, text_input};
+pub use input::text_input;
 pub use interface_size::{DEFAULT_INTERFACE_SIZE, InterfaceSize, SizeAction};
 #[cfg(feature = "markdown")]
 pub use markdown::{MarkdownAction, MarkdownPaint, MarkdownRow, MarkdownRows, markdown};
-pub use material::{Material, MaterialExt, scroll_edge};
+pub use material::{Material, MaterialExt};
 pub use menu::{ContextMenu, MenuFocus, MenuItem, context_menu, select};
 pub use menu_bar::menu_bar;
 pub use picker::{

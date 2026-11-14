@@ -3,11 +3,11 @@ mod common;
 use common::builder;
 use rouge_core::testing::{TestError, TestResult, TestUi, WHITE};
 use rouge_core::{
-    Point, PointerButton, ScrollState, Scrollable, Styled, div, px, scroll, virtual_list,
+    Point, PointerButton, ScrollState, Scrollable, Styled, div, scroll, virtual_list,
 };
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
-use rouge_widgets::{InterfaceSize, scroll_view, vertical_scrollbar};
+use rouge_widgets::{scroll_view, vertical_scrollbar};
 
 #[test]
 fn two_axis_thumbs_capture_drags_and_tracks_jump_without_cross_axis_changes() -> TestResult {
@@ -141,22 +141,21 @@ fn scroll_view_wraps_a_virtual_list_and_shares_its_scroll_state() -> TestResult 
 }
 
 #[test]
-fn overflow_shows_a_scaled_thumb_that_tracks_only_its_own_list() -> TestResult {
+fn overflow_shows_a_thumb_that_tracks_only_its_own_list() -> TestResult {
     let _entered = Runtime::new().enter();
-    let (mut ui, (state, other, size)) = component_test().size(360.0, 200.0).build_with(|| {
-        let size = InterfaceSize::install(16.0);
+    let (mut ui, (state, other)) = component_test().size(360.0, 200.0).build_with(|| {
         let state = signal(ScrollState::default());
         let other = signal(ScrollState::default());
         let panel = |state, height| {
             div()
                 .relative()
-                .w(px(160.0))
-                .h(px(160.0))
+                .w(160.0)
+                .h(160.0)
                 .child(
                     scroll()
                         .size_full()
                         .scroll_state(state)
-                        .child(div().h(px(height))),
+                        .child(div().h(height)),
                 )
                 .child(vertical_scrollbar(state))
         };
@@ -165,7 +164,7 @@ fn overflow_shows_a_scaled_thumb_that_tracks_only_its_own_list() -> TestResult {
                 .flex()
                 .child(panel(state, 900.0))
                 .child(panel(other, 60.0)),
-            (state, other, size),
+            (state, other),
         )
     });
     assert_eq!(ui.bounds_of_all("scroll-thumb-vertical").len(), 1);
@@ -175,8 +174,5 @@ fn overflow_shows_a_scaled_thumb_that_tracks_only_its_own_list() -> TestResult {
     ui.drag_on("scroll-thumb-vertical", Point::new(thumb.x, 180.0))?;
     assert!((state.get().offset.y - 740.0).abs() < 1.0);
     assert!(other.get().offset.y.abs() < 0.01);
-    size.set(24.0);
-    ui.advance(0.0);
-    assert!(ui.center_of("scroll-thumb-vertical")?.x < thumb.x);
     Ok(())
 }

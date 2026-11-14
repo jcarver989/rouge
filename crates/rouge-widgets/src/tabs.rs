@@ -1,7 +1,7 @@
 use crate::typography::UiStyles;
 use rouge_core::{
-    AnyView, BuildCx, Color, Cursor, Div, ElementId, Key, Styled, Theme, View, component, div,
-    dynamic, px, styled, text, view,
+    AnyView, BuildCx, Color, Cursor, Div, Key, Styled, Theme, View, component, div, dynamic,
+    styled, text, view,
 };
 use rouge_reactive::Signal;
 use std::rc::Rc;
@@ -39,14 +39,14 @@ impl Tabs {
 styled!(Tabs => root);
 
 impl View for Tabs {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let (theme, selected) = (Theme::current(), self.selected);
         let count = self.tabs.len().max(1);
         let (labels, contents): (Vec<_>, Vec<_>) = self.tabs.into_iter().unzip();
         let headers = labels.into_iter().enumerate().map(move |(index, label)| {
             let on = move || selected.get() == index;
             let header = view! {
-                <div px=12.0 py=8.0 border_b=px(2.0) focusable
+                <div px=12.0 py=8.0 border_b=2.0 focusable
                      cursor=Cursor::Pointer on_click={move |_| selected.set(index)}
                      on_key_down={move |event| {
                          let current = selected.get_untracked().min(count - 1);
@@ -57,16 +57,16 @@ impl View for Tabs {
                          }
                          event.stop_propagation();
                      }}>
-                    <text body no_wrap color={move || if on() { theme.text.get() } else { theme.text_muted.get() }}>
+                    <text body no_wrap color={move || if on() { theme.get().text } else { theme.get().text_muted }}>
                         {label}
                     </text>
                 </div>
             };
             header
-                .focus_visible(move |style| style.bg(theme.surface_hover.get_untracked()))
+                .focus_visible(|style| style.bg(theme.surface_hover()))
                 .border_color(move || {
                     if on() {
-                        theme.accent.get()
+                        theme.get().accent
                     } else {
                         Color::TRANSPARENT
                     }
@@ -77,8 +77,8 @@ impl View for Tabs {
             None => div().into_any(),
         });
         self.root
-            .child(view! { <div flex flex_none border_b=px(1.0) border_color=theme.border>{..headers}</div> })
+            .child(view! { <div flex flex_none border_b=1.0 border_color=theme.border()>{..headers}</div> })
             .child(view! { <div flex_1 min_h=0.0>{body}</div> })
-            .build(cx)
+            .build(cx);
     }
 }

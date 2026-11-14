@@ -46,8 +46,8 @@ pub fn button(
     let foreground = move || style.get().foreground;
     let root = view! {
         <div test_id=id flex items_center justify_center flex_none gap=6.0 rounded=tokens::RADIUS_CONTROL
-             track_interaction=state border=px(1.0) h=height px=padding when:w_full=full_width
-             border_color={move || if state.get().focus_visible() { theme.accent.get() } else { Color::TRANSPARENT }}
+             track_interaction=state border=1.0 h=height px=padding when:w_full=full_width
+             border_color={move || if state.get().focus_visible() { theme.get().accent } else { Color::TRANSPARENT }}
              bg={move || style.get().background.unwrap_or(Color::TRANSPARENT)}>
             {icon.map(|icon| Icon::new(icon, foreground))}
             <text label no_wrap weight={move || if style.get().emphasized { 600.0 } else { 500.0 }} color=foreground>
@@ -74,9 +74,9 @@ pub fn icon_button(
     let state = signal(Interactions::default());
     let foreground = move || {
         if selected || (enabled && state.get().hovered) {
-            theme.text.get()
+            theme.get().text
         } else {
-            theme.text_muted.get()
+            theme.get().text_muted
         }
     };
     let root = view! {
@@ -85,9 +85,9 @@ pub fn icon_button(
              bg={move || {
                  let state = state.get();
                  if selected || state.focus_visible() {
-                     theme.surface_selected.get()
+                     theme.get().surface_selected
                  } else if enabled && state.hovered {
-                     theme.surface_hover.get()
+                     theme.get().surface_hover
                  } else {
                      Color::TRANSPARENT
                  }
@@ -128,18 +128,18 @@ pub fn checkbox(
                 Path::builder().move_to(ax, ay).line_to(bx, by).build()
             }
         };
-        painter.stroke_round(&path, size.width / 6.0, theme.text.get());
+        painter.stroke_round(&path, size.width / 6.0, theme.get().text);
     })
     .size_full();
     let root = view! {
-        <div test_id=id flex_none size=tokens::CHECKBOX_SIZE rounded=2.0 border=px(1.0) bg=theme.canvas
+        <div test_id=id flex_none size=tokens::CHECKBOX_SIZE rounded=2.0 border=1.0 bg=theme.canvas()
              track_interaction=interaction when:opacity=(disabled, tokens::DISABLED_OPACITY)
              border_color={move || {
                  let state = interaction.get();
                  if enabled && (state.hovered || state.focus_visible()) {
-                     theme.accent.get()
+                     theme.get().accent
                  } else {
-                     theme.text_muted.get()
+                     theme.get().text_muted
                  }
              }}>
             {mark}
@@ -151,7 +151,7 @@ pub fn checkbox(
 #[component]
 pub fn segmented_control(#[prop(into)] id: String) -> Div {
     view! {
-        <div test_id=id flex items_center gap=2.0 p=2.0 rounded=tokens::RADIUS_CONTROL bg=Theme::current().chrome/>
+        <div test_id=id flex items_center gap=2.0 p=2.0 rounded=tokens::RADIUS_CONTROL bg=Theme::current().chrome()/>
     }
 }
 
@@ -169,9 +169,9 @@ pub fn segment(
     let interaction = signal(Interactions::default());
     let foreground = move || {
         if selected || interaction.get().hovered {
-            theme.text.get()
+            theme.get().text
         } else {
-            theme.text_muted.get()
+            theme.get().text_muted
         }
     };
     let padding = if icon.is_some() {
@@ -193,7 +193,7 @@ pub fn segment(
     };
     let root = view! {
         <div test_id=id h=24.0 flex items_center gap=4.0 px=padding rounded=tokens::RADIUS_INNER
-             when:bg=(selected, theme.surface_selected) when:opacity=(disabled, tokens::DISABLED_OPACITY)
+             when:bg=(selected, theme.surface_selected()) when:opacity=(disabled, tokens::DISABLED_OPACITY)
              track_interaction=interaction>
             {icon.map(|icon| Icon::new(icon, foreground))}
             {detail}
@@ -225,7 +225,7 @@ pub(crate) fn chevron(expanded: bool) -> Icon {
     } else {
         IconName::ChevronRight
     };
-    Icon::new(icon, Theme::current().text_muted).size(tokens::ICON_SIZE_SMALL)
+    Icon::new(icon, Theme::current().text_muted()).size(tokens::ICON_SIZE_SMALL)
 }
 
 #[component]
@@ -254,10 +254,10 @@ pub fn section_header(
     let toggle = format!("{id}-toggle");
     view! {
         <div test_id=id flex items_center justify_between px=8.0 h=tokens::GROUP_HEIGHT
-             bg=Theme::current().chrome track_interaction=interaction>
+             bg=Theme::current().chrome() track_interaction=interaction>
             <disclosure id=toggle expanded on_toggle>
                 <div flex items_center gap=6.0>
-                    {icon.map(|icon| Icon::new(icon, Theme::current().text_muted))}
+                    {icon.map(|icon| Icon::new(icon, Theme::current().text_muted()))}
                     <text title primary>{title}</text>
                     {detail.map(|detail| view! { <muted_text>{detail}</muted_text> })}
                     {badge}
@@ -285,16 +285,23 @@ pub fn list_row(
         }
     });
     let interaction = signal(Interactions::default());
+    let style = memo(move || {
+        let state = selection.get();
+        theme.with(|palette| (palette.selection_style(state), palette.surface_hover))
+    });
     let root = view! {
         <div flex items_center group={format!("{id}-row")} test_id=id min_h=tokens::ROW_HEIGHT
              pl={8.0 + indent(depth)} pr=8.0 gap=6.0 rounded=tokens::RADIUS_INNER
              track_interaction=interaction
-             bg={move || match selection.get() {
-                 SelectionState::None if interaction.get().hovered => theme.surface_hover.get(),
-                 SelectionState::None | SelectionState::Disabled => Color::TRANSPARENT,
-                 state => theme.selection_style(state).background.unwrap_or(Color::TRANSPARENT),
+             bg={move || {
+                 let (style, hover) = style.get();
+                 match selection.get() {
+                     SelectionState::None if interaction.get().hovered => hover,
+                     SelectionState::None | SelectionState::Disabled => Color::TRANSPARENT,
+                     _ => style.background.unwrap_or(Color::TRANSPARENT),
+                 }
              }}
-             text_color={move || theme.selection_style(selection.get()).foreground}/>
+             text_color={move || style.get().0.foreground}/>
     };
     pressable(root, true, state != SelectionState::Disabled, on_click)
         .enabled(move || selection.get() != SelectionState::Disabled)
@@ -303,7 +310,7 @@ pub fn list_row(
 #[component]
 pub fn action_bar() -> Div {
     view! {
-        <div flex items_center justify_end gap=8.0 min_h=tokens::BAR_HEIGHT px=12.0 bg=Theme::current().chrome/>
+        <div flex items_center justify_end gap=8.0 min_h=tokens::BAR_HEIGHT px=12.0 bg=Theme::current().chrome()/>
     }
 }
 
@@ -331,7 +338,7 @@ pub fn backdrop(
         let (root, inner) = if let Some(anchor) = anchor_below {
             (root, Placement::Below.place(inner, anchor))
         } else {
-            let root = root.items_center().p(16.0).bg(theme.scrim);
+            let root = root.items_center().p(16.0).bg(theme.scrim());
             let root = if align_top {
                 root.justify_start().pt(tokens::MODAL_TOP_OFFSET)
             } else {
@@ -343,8 +350,8 @@ pub fn backdrop(
     })
 }
 
-pub fn modal_width(size: ModalSize) -> Length {
-    Length::design(match size {
+fn modal_width(size: ModalSize) -> Length {
+    px(match size {
         ModalSize::Compact => tokens::MODAL_WIDTH_COMPACT,
         ModalSize::Medium => tokens::MODAL_WIDTH,
         ModalSize::Wide => tokens::MODAL_WIDTH_WIDE,
@@ -382,7 +389,7 @@ pub fn empty_state(
 ) -> Div {
     view! {
         <div flex col items_center justify_center p=16.0 gap=6.0>
-            {Icon::new(icon, Theme::current().text_muted)}
+            {Icon::new(icon, Theme::current().text_muted())}
             <text title primary>{title}</text>
             <muted_text>{detail}</muted_text>
         </div>

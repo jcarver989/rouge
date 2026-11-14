@@ -5,7 +5,7 @@ use rouge_widgets::testing::component_test;
 use rouge_widgets::*;
 
 #[test]
-fn mounted_rem_layout_follows_shortcuts_and_preview_transactions() -> TestResult {
+fn interface_size_zooms_the_window_through_shortcuts_and_preview_transactions() -> TestResult {
     let _entered = Runtime::new().enter();
     let (mut ui, size) = component_test().build_with(|| {
         let size = InterfaceSize::install(18.0);
@@ -13,26 +13,33 @@ fn mounted_rem_layout_follows_shortcuts_and_preview_transactions() -> TestResult
             size.bind(
                 div()
                     .autofocus()
+                    .size_full()
                     .child(div().test_id("ruler").w(32.0).h(16.0)),
             ),
             size,
         )
     });
-    let width = |ui: &mut TestUi| ui.rect_of("ruler").map(|ruler| ruler.size.width);
-    assert!((width(&mut ui)? - 36.0).abs() < 0.1);
+    let zoom = |ui: &mut TestUi| {
+        ui.advance(0.0);
+        ui.scale() * tokens::BASE_SIZE
+    };
+    assert_eq!(zoom(&mut ui), 18.0);
+    assert_eq!(ui.rect_of("ruler")?.size.width, 32.0);
     ui.press("secondary-=");
-    assert!((width(&mut ui)? - 38.0).abs() < 0.1);
+    assert_eq!(zoom(&mut ui), 19.0);
     size.preview(22.0);
-    assert!((size.committed() - 19.0).abs() < 0.1);
-    assert!((width(&mut ui)? - 44.0).abs() < 0.1);
+    assert_eq!(size.committed(), 19.0);
+    assert_eq!(zoom(&mut ui), 22.0);
     size.cancel();
-    assert!((width(&mut ui)? - 38.0).abs() < 0.1);
+    assert_eq!(zoom(&mut ui), 19.0);
     size.preview(100.0);
     size.commit();
-    assert!((width(&mut ui)? - 64.0).abs() < 0.1);
+    assert_eq!(zoom(&mut ui), 32.0);
+    assert_eq!(ui.bounds(1.0, 1.0)?.size.width, 32.0);
     size.set(-100.0);
-    assert!((width(&mut ui)? - 20.0).abs() < 0.1);
+    assert_eq!(zoom(&mut ui), 10.0);
     size.apply(SizeAction::Reset);
-    assert!((width(&mut ui)? - 36.0).abs() < 0.1);
+    assert_eq!(zoom(&mut ui), 18.0);
+    assert_eq!(ui.rect_of("ruler")?.size.width, 32.0);
     Ok(())
 }

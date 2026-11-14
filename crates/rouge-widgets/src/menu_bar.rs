@@ -12,8 +12,8 @@ pub fn menu_bar(menus: Vec<Menu>) -> Div {
         .flex()
         .flex_none()
         .h(28.0)
-        .bg(theme.elevated)
-        .text_color(theme.text)
+        .bg(theme.elevated())
+        .text_color(theme.text())
         .children(
             menus
                 .into_iter()

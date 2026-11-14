@@ -45,7 +45,7 @@ pub fn tree_row(
         Icon::new(icon, move || {
             icon_color
                 .as_ref()
-                .map_or_else(|| theme.text_muted.get(), Prop::get)
+                .map_or_else(|| theme.get().text_muted, Prop::get)
         })
     });
     let label_id = format!("{id}-label");
@@ -55,7 +55,7 @@ pub fn tree_row(
             {leading}
             {icon}
             <div test_id=label_id flex_1 min_w=0.0 overflow_hidden>
-                <text body no_wrap color={move || label_color.as_ref().map_or_else(|| theme.text.get(), Prop::get)}>
+                <text body no_wrap color={move || label_color.as_ref().map_or_else(|| theme.get().text, Prop::get)}>
                     {label}
                 </text>
             </div>

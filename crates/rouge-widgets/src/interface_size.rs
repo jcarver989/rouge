@@ -1,5 +1,5 @@
 use crate::tokens::BASE_SIZE;
-use rouge_core::{Div, root_font_size, set_design_unit};
+use rouge_core::{Div, zoom};
 use rouge_reactive::{Signal, batch, effect, expect_context, provide_context, signal};
 
 pub const DEFAULT_INTERFACE_SIZE: f32 = if cfg!(target_os = "macos") {
@@ -27,15 +27,14 @@ pub struct InterfaceSize {
 impl InterfaceSize {
     pub fn install(default: f32) -> Self {
         let default = clamp(default);
-        set_design_unit(Some(BASE_SIZE));
         let size = Self {
             saved: signal(default),
             preview: signal(None),
             default,
         };
-        let root = root_font_size();
+        let zoom = zoom();
         effect(move || {
-            root.set_if_changed(size.get());
+            zoom.set_if_changed(size.get() / BASE_SIZE);
         });
         provide_context(size);
         size

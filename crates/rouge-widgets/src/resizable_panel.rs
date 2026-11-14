@@ -2,12 +2,17 @@ use crate::components::icon_button;
 use crate::icon::IconName;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, BuildCx, Cursor, Div, DragPhase, ElementId, Styled, View, div, px, root_font_size,
-    styled,
+    AnyView, BuildCx, Color, Cursor, Div, DragPhase, IntoProp, Length, Prop, Styled, Theme, View,
+    div, styled, view,
 };
-use rouge_reactive::{Callback, Signal, effect};
+use rouge_reactive::{Callback, Memo, Signal, effect, memo, signal};
 use std::cell::Cell;
 use std::rc::Rc;
+
+const HANDLE_SIZE: f32 = 6.0;
+const DIVIDER_SIZE: f32 = 1.0;
+const ACTIVE_DIVIDER_SIZE: f32 = 4.0;
+const ACTIVE_DIVIDER_ALPHA: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
@@ -24,6 +29,7 @@ pub struct ResizablePanel {
     min: f32,
     max: f32,
     reset: f32,
+    divider_color: Option<Prop<Color>>,
     on_reset: Option<Rc<dyn Fn()>>,
     on_resize: Option<Rc<dyn Fn(f32)>>,
 }
@@ -37,6 +43,7 @@ pub fn resizable_panel(edge: Side, size: Signal<f32>) -> ResizablePanel {
         min: 0.0,
         max: f32::MAX,
         reset: size.get_untracked(),
+        divider_color: None,
         on_reset: None,
         on_resize: None,
     }
@@ -53,6 +60,10 @@ impl ResizablePanel {
     }
     pub fn reset_size(mut self, size: f32) -> Self {
         self.reset = size;
+        self
+    }
+    pub fn divider_color<T>(mut self, color: impl IntoProp<Color, T>) -> Self {
+        self.divider_color = Some(color.into_prop());
         self
     }
     pub fn on_resize(mut self, f: impl Fn(f32) + 'static) -> Self {
@@ -77,7 +88,7 @@ impl ResizablePanel {
 styled!(ResizablePanel => root);
 
 impl View for ResizablePanel {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         let Self {
             mut root,
             side,
@@ -85,13 +96,11 @@ impl View for ResizablePanel {
             min,
             max,
             reset,
+            divider_color,
             on_reset,
             on_resize,
         } = self;
         let max = max.max(min);
-        let unit = root_font_size();
-        let scale = move || unit.get().max(0.001);
-        let dimension = move || px(size.get() * scale());
         effect(move || {
             size.set_if_changed(size.get().clamp(min, max));
         });
@@ -106,6 +115,8 @@ impl View for ResizablePanel {
         });
         let reset_to = set.clone();
         let origin = Cell::new(0.0);
+        let (hovered, dragging) = (signal(false), signal(false));
+        let engaged = memo(move || hovered.get() || dragging.get());
         let handle = div()
             .absolute()
             .test_id("panel-resize-handle")
@@ -119,9 +130,15 @@ impl View for ResizablePanel {
                 }
                 event.stop_propagation();
             })
+            .on_hover(move |inside| hovered.set(inside))
             .on_drag(move |event| {
-                if event.phase == DragPhase::Start {
-                    origin.set(size.get_untracked());
+                match event.phase {
+                    DragPhase::Start => {
+                        origin.set(size.get_untracked());
+                        dragging.set(true);
+                    }
+                    DragPhase::Move => {}
+                    DragPhase::End => dragging.set(false),
                 }
                 let delta = match side {
                     Side::Left => event.translation.x,
@@ -129,37 +146,22 @@ impl View for ResizablePanel {
                     Side::Top => event.translation.y,
                     Side::Bottom => -event.translation.y,
                 };
-                set(origin.get() + delta / scale());
+                set(origin.get() + delta);
             });
-        let handle = match side {
+        let cursor = match side {
             Side::Left | Side::Right => {
-                root = root.w(dimension);
-                let handle = handle
-                    .top(0.0)
-                    .bottom(0.0)
-                    .w(move || px(6.0 * scale() / 16.0))
-                    .cursor(Cursor::ResizeHorizontal);
-                if side == Side::Left {
-                    handle.right(0.0)
-                } else {
-                    handle.left(0.0)
-                }
+                root = root.w(size);
+                Cursor::ResizeHorizontal
             }
             Side::Top | Side::Bottom => {
-                root = root.h(dimension);
-                let handle = handle
-                    .left(0.0)
-                    .right(0.0)
-                    .h(move || px(6.0 * scale() / 16.0))
-                    .cursor(Cursor::ResizeVertical);
-                if side == Side::Top {
-                    handle.bottom(0.0)
-                } else {
-                    handle.top(0.0)
-                }
+                root = root.h(size);
+                Cursor::ResizeVertical
             }
         };
-        root.child(handle).build(cx)
+        let handle = thickness(pin_to_edge(handle, side), side, HANDLE_SIZE)
+            .cursor(cursor)
+            .child(divider(side, divider_color, engaged));
+        root.child(handle).build(cx);
     }
 }
 
@@ -177,5 +179,42 @@ pub fn panel_toggle(
         Side::Top | Side::Bottom => IconName::Rows2,
     };
     let label = format!("{} {name}", if open { "Hide" } else { "Show" });
-    icon_button(id, icon, label, None, false, open, true, on_click)
+    view! { <icon_button id icon label selected=open keyboard_focusable on_click/> }
+}
+
+fn divider(side: Side, color: Option<Prop<Color>>, engaged: Memo<bool>) -> Div {
+    let theme = Theme::current();
+    let accent = theme.accent();
+    let resting = color.unwrap_or_else(|| theme.border().into_prop());
+    let line = pin_to_edge(div().absolute(), side).bg(move || {
+        if engaged.get() {
+            accent.get().with_alpha(ACTIVE_DIVIDER_ALPHA)
+        } else {
+            resting.get()
+        }
+    });
+    let weight = move || {
+        if engaged.get() {
+            ACTIVE_DIVIDER_SIZE
+        } else {
+            DIVIDER_SIZE
+        }
+    };
+    thickness(line, side, weight)
+}
+
+fn pin_to_edge(element: Div, side: Side) -> Div {
+    match side {
+        Side::Left => element.top(0.0).bottom(0.0).right(0.0),
+        Side::Right => element.top(0.0).bottom(0.0).left(0.0),
+        Side::Top => element.left(0.0).right(0.0).bottom(0.0),
+        Side::Bottom => element.left(0.0).right(0.0).top(0.0),
+    }
+}
+
+fn thickness<T>(element: Div, side: Side, extent: impl IntoProp<Length, T>) -> Div {
+    match side {
+        Side::Left | Side::Right => element.w(extent),
+        Side::Top | Side::Bottom => element.h(extent),
+    }
 }

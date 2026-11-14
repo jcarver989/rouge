@@ -1,33 +1,32 @@
 use crate::util::focus_ring;
 use rouge_core::{
-    Color, Cursor, Div, Key, PointerButton, Rect, Styled, Theme, component, div, pct, px, view,
+    Color, Cursor, Div, Key, PointerButton, Styled, Theme, component, div, pct, view,
 };
-use rouge_reactive::{Signal, signal};
+use rouge_reactive::Signal;
 use std::cell::Cell;
 use std::rc::Rc;
 
 const THUMB: f32 = 16.0;
+const BORDER: f32 = 1.0;
 
 #[component]
-#[track_caller]
 pub fn slider(value: Signal<f32>, range: Option<(f32, f32)>, step: Option<f32>) -> Div {
     let theme = Theme::current();
     let (min, max) = range.unwrap_or((0.0, 1.0));
     let max = max.max(min + f32::EPSILON);
     let step = step.filter(|step| *step > 0.0);
-    let bounds = signal(Rect::ZERO);
     let snap = move |raw: f32| {
         let stepped = step.map_or(raw, |step| min + ((raw - min) / step).round() * step);
         stepped.clamp(min, max)
     };
     let fraction = move || ((value.get() - min) / (max - min)).clamp(0.0, 1.0);
-    let place = move |x: f32| {
-        let travel = (bounds.get_untracked().size.width - THUMB).max(1.0);
+    let place = move |x: f32, width: f32| {
+        let travel = (width - THUMB).max(1.0);
         let at = ((x - THUMB / 2.0) / travel).clamp(0.0, 1.0);
         value.set_if_changed(snap(min + at * (max - min)));
     };
-    let dragging = Rc::new(Cell::new(false));
-    let (started, ended) = (dragging.clone(), dragging.clone());
+    let pressed = Rc::new(Cell::new((0.0, 0.0)));
+    let origin = pressed.clone();
     let nudge = step.unwrap_or((max - min) / 20.0);
     let track = div()
         .absolute()
@@ -35,41 +34,44 @@ pub fn slider(value: Signal<f32>, range: Option<(f32, f32)>, step: Option<f32>) 
         .right(0.0)
         .h(4.0)
         .rounded(2.0)
-        .bg(theme.border);
+        .bg(theme.border());
     let fill = div()
         .h_full()
         .rounded(2.0)
-        .bg(theme.accent)
+        .bg(theme.accent())
         .w(move || pct(fraction() * 100.0));
     let thumb = div()
         .absolute()
-        .size(px(THUMB))
-        .rounded(px(THUMB / 2.0))
+        .size(THUMB)
+        .rounded(THUMB / 2.0)
         .bg(Color::WHITE)
         .border(1.0)
-        .border_color(theme.border)
-        .left(move || px((bounds.get().size.width - THUMB).max(0.0) * fraction()));
+        .border_color(theme.border())
+        .left(move || pct(fraction() * 100.0));
+    let rail = div()
+        .absolute()
+        .left(0.0)
+        .right(THUMB - 2.0 * BORDER)
+        .h(THUMB)
+        .child(thumb);
     let root = view! {
-        <div relative flex items_center h=px(THUMB) min_w=40.0 rounded=px(THUMB / 2.0) border=px(1.0)
+        <div relative flex items_center h=THUMB min_w=40.0 rounded={THUMB / 2.0} border=BORDER
              border_color=Color::TRANSPARENT/>
     };
     focus_ring(root)
-        .track_bounds(bounds)
         .focusable()
         .cursor(Cursor::Pointer)
         .on_pointer_down(move |event| {
             if event.button == PointerButton::Primary {
-                event.capture();
-                started.set(true);
-                place(event.local().x);
+                let (x, width) = (event.local().x, event.size().width);
+                pressed.set((x, width));
+                place(x, width);
             }
         })
-        .on_pointer_move(move |event| {
-            if dragging.get() {
-                place(event.local().x);
-            }
+        .on_drag(move |event| {
+            let (x, width) = origin.get();
+            place(x + event.translation.x, width);
         })
-        .on_pointer_up(move |_| ended.set(false))
         .on_key_down(move |event| {
             let current = value.get_untracked();
             let next = match event.key {
@@ -83,5 +85,5 @@ pub fn slider(value: Signal<f32>, range: Option<(f32, f32)>, step: Option<f32>) 
             event.stop_propagation();
         })
         .child(track.child(fill))
-        .child(thumb)
+        .child(rail)
 }

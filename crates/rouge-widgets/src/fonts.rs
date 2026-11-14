@@ -12,6 +12,6 @@ const FACES: [&[u8]; 8] = [
     include_bytes!("../assets/fonts/lilex/Lilex-BoldItalic.ttf"),
 ];
 
-pub fn bundled_fonts() -> impl Iterator<Item = Vec<u8>> {
-    FACES.into_iter().map(<[u8]>::to_vec)
+pub fn bundled_fonts() -> impl Iterator<Item = &'static [u8]> {
+    FACES.into_iter()
 }

@@ -6,14 +6,17 @@ use crate::{
     typography::UiStyles,
 };
 use rouge_core::{
-    AnyView, BuildCx, Color, Div, ElementId, Key, Length, RowKey, ScrollState, Scrollable, Styled,
-    Theme, View, component, div, dynamic, editable, pct, px, scroll, show, text, view,
-    virtual_list, virtual_list_handle,
+    AnyView, BuildCx, Color, Div, Key, Length, RowKey, ScrollState, Scrollable, Styled, Theme,
+    View, component, div, dynamic, editable, pct, px, scroll, show, text, view, virtual_list,
+    virtual_list_handle,
 };
 use rouge_reactive::{Callback, Memo, Signal, batch, effect, memo, signal};
 use rouge_theme::{PickerEntry, PickerRow, PickerState, SelectionState};
 use std::borrow::Cow;
+use std::mem;
 use std::rc::Rc;
+
+type Picker = PickerState<PickerItem>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PickerMarker {
@@ -22,14 +25,14 @@ pub enum PickerMarker {
 }
 
 impl View for PickerMarker {
-    fn build(self, cx: &mut BuildCx<'_>) -> ElementId {
+    fn build(self, cx: &mut BuildCx<'_>) {
         match self {
             PickerMarker::Dot(color) => view! { <div size=7.0 rounded=4.0 bg=color/> },
             PickerMarker::Pending => view! {
-                <div size=10.0 rounded=5.0 border=px(1.0) border_color=Theme::current().text_muted/>
+                <div size=10.0 rounded=5.0 border=1.0 border_color=Theme::current().text_muted()/>
             },
         }
-        .build(cx)
+        .build(cx);
     }
 }
 
@@ -46,6 +49,7 @@ pub struct PickerItem {
     keywords: Option<String>,
     disabled: bool,
     checked: bool,
+    search: String,
 }
 
 impl PickerItem {
@@ -62,7 +66,9 @@ impl PickerItem {
             keywords: None,
             disabled: false,
             checked: false,
+            search: String::new(),
         }
+        .indexed()
     }
 
     pub const fn marker(mut self, marker: PickerMarker) -> Self {
@@ -82,22 +88,22 @@ impl PickerItem {
 
     pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
         self.prefix = Some(prefix.into());
-        self
+        self.indexed()
     }
 
     pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
         self.subtitle = Some(subtitle.into());
-        self
+        self.indexed()
     }
 
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.details.push(detail.into());
-        self
+        self.indexed()
     }
 
     pub fn keywords(mut self, keywords: impl Into<String>) -> Self {
         self.keywords = Some(keywords.into());
-        self
+        self.indexed()
     }
 
     pub const fn disabled(mut self, disabled: bool) -> Self {
@@ -109,11 +115,10 @@ impl PickerItem {
         self.checked = checked;
         self
     }
-}
 
-impl PickerEntry for PickerItem {
-    fn text(&self) -> Cow<'_, str> {
-        let text = [
+    fn indexed(mut self) -> Self {
+        self.search.clear();
+        let parts = [
             self.prefix.as_ref(),
             Some(&self.label),
             self.subtitle.as_ref(),
@@ -121,11 +126,20 @@ impl PickerEntry for PickerItem {
         .into_iter()
         .flatten()
         .chain(&self.details)
-        .chain(self.keywords.as_ref())
-        .map(String::as_str)
-        .collect::<Vec<&str>>()
-        .join(" ");
-        Cow::Owned(text)
+        .chain(self.keywords.as_ref());
+        for (index, part) in parts.enumerate() {
+            if index > 0 {
+                self.search.push(' ');
+            }
+            self.search.push_str(part);
+        }
+        self
+    }
+}
+
+impl PickerEntry for PickerItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.search)
     }
 
     fn group(&self) -> Option<&str> {
@@ -159,7 +173,7 @@ pub fn picker_list(
             let index = row.index();
             entry(
                 row,
-                picker.options()[index].clone(),
+                &picker.options()[index],
                 &columns,
                 move || highlighted == Some(index),
                 Callback::from(move || on_choose.call(index)),
@@ -169,7 +183,7 @@ pub fn picker_list(
         view! { <div flex col>{..rows}</div> }
     };
     view! {
-        <scroll test_id=id max_h={max_height.unwrap_or_else(|| Length::design(tokens::PICKER_LIST_HEIGHT))}
+        <scroll test_id=id max_h={max_height.unwrap_or(px(tokens::PICKER_LIST_HEIGHT))}
                 scroll_state=state>
             {list}
         </scroll>
@@ -205,14 +219,14 @@ impl Columns {
 
 fn entry(
     row: PickerRow,
-    item: PickerItem,
+    item: &PickerItem,
     columns: &Columns,
     highlighted: impl Fn() -> bool + 'static,
     choose: Callback,
     hover: Callback,
 ) -> AnyView {
     if let PickerRow::Group(_) = row {
-        return group(&item).into_any();
+        return group(item).into_any();
     }
     let disabled = item.disabled;
     let state = if disabled {
@@ -237,7 +251,7 @@ fn entry(
 }
 
 fn item_row(
-    item: PickerItem,
+    item: &PickerItem,
     columns: &Columns,
     state: SelectionState,
     selection: Memo<SelectionState>,
@@ -251,39 +265,39 @@ fn item_row(
             .test_id(format!("{}-marker", item.id))
             .child(item.marker)
     });
-    let prefix = columns.prefix.clone().map(|widest| {
-        let code = |value: String| view! { <text code muted no_wrap>{value}</text> };
+    let prefix = columns.prefix.as_deref().map(|widest| {
+        let code = |value: &str| view! { <text code muted no_wrap>{value.to_owned()}</text> };
         view! {
             <div relative flex_none>
                 <div opacity=0.0 pass_through>{code(widest)}</div>
-                {item.prefix.map(|value| view! { <div absolute left=0.0 top=0.0>{code(value)}</div> })}
+                {item.prefix.as_deref().map(|value| view! { <div absolute left=0.0 top=0.0>{code(value)}</div> })}
             </div>
         }
     });
-    let subtitle = item.subtitle.map(|subtitle| {
+    let subtitle = item.subtitle.as_deref().map(|subtitle| {
         view! {
-            <div test_id={format!("{}-subtitle", item.id)}><text small muted no_wrap>{subtitle}</text></div>
+            <div test_id={format!("{}-subtitle", item.id)}><text small muted no_wrap>{subtitle.to_owned()}</text></div>
         }
     });
     let details = (!item.details.is_empty()).then(|| {
-        let details = item.details.into_iter().map(move |detail| {
-            view! { <text caption muted no_wrap>{detail}</text> }
+        let details = item.details.iter().map(|detail| {
+            view! { <text caption muted no_wrap>{detail.clone()}</text> }
         });
         view! { <div flex items_center gap=6.0>{..details}</div> }
     });
     let check = columns.checked.then(|| {
         let icon = item
             .checked
-            .then(|| Icon::new(IconName::Check, theme.accent).size(12.0));
+            .then(|| Icon::new(IconName::Check, theme.accent()).size(12.0));
         slot().test_id(format!("{}-check", item.id)).child(icon)
     });
     view! {
         <list_row id={item.id.clone()} state selection on_click>
             {marker}
-            {item.icon.map(|icon| Icon::new(icon, theme.text_secondary))}
+            {item.icon.map(|icon| Icon::new(icon, theme.text_secondary()))}
             {prefix}
             <div flex col flex_1 min_w=0.0 overflow_hidden when:py=(subtitle.is_some(), 4.0)>
-                <div test_id={format!("{}-label", item.id)}><text body no_wrap>{item.label}</text></div>
+                <div test_id={format!("{}-label", item.id)}><text body no_wrap>{item.label.clone()}</text></div>
                 {subtitle}
             </div>
             {details}
@@ -311,7 +325,7 @@ impl<T: Fn(usize) -> AnyView + 'static> From<T> for Preview {
 
 #[derive(Clone, Copy)]
 pub struct SearchPickerHandle {
-    model: Signal<PickerState<PickerItem>>,
+    model: Signal<Picker>,
     revision: Signal<u64>,
     query: Signal<String>,
     emit: Callback<(SearchPickerEvent,)>,
@@ -328,15 +342,11 @@ impl SearchPickerHandle {
     }
 
     pub fn unfiltered(self) -> Self {
-        self.model
-            .update(|model| *model = model.clone().unfiltered());
-        self
+        self.configure(PickerState::unfiltered)
     }
 
     pub fn max_matches(self, limit: usize) -> Self {
-        self.model
-            .update(|model| *model = model.clone().limit(limit));
-        self
+        self.configure(|model| model.limit(limit))
     }
 
     pub fn highlighted(self, index: usize) -> Self {
@@ -379,7 +389,7 @@ impl SearchPickerHandle {
         self.emit.call(SearchPickerEvent::Dismissed);
     }
 
-    fn update(&self, f: impl FnOnce(&mut PickerState<PickerItem>)) {
+    fn update(&self, f: impl FnOnce(&mut Picker)) {
         let before = self.model.with_untracked(PickerState::highlighted);
         self.model.update(f);
         if let Some(after) = self
@@ -391,9 +401,10 @@ impl SearchPickerHandle {
         }
     }
 
-    fn item(&self, index: usize) -> PickerItem {
+    fn configure(self, f: impl FnOnce(Picker) -> Picker) -> Self {
         self.model
-            .with_untracked(|model| model.options()[index].clone())
+            .update(|model| *model = f(mem::replace(model, PickerState::new(Vec::new()))));
+        self
     }
 }
 
@@ -424,7 +435,7 @@ pub fn search_picker(
     let entries = memo(move || model.with(PickerState::rows));
     let focus_root = searchable.is_none();
     let empty = empty.unwrap_or_else(|| "No matching items".into());
-    let list_height = max_list_height.unwrap_or_else(|| Length::design(tokens::PICKER_LIST_HEIGHT));
+    let list_height = max_list_height.unwrap_or(px(tokens::PICKER_LIST_HEIGHT));
     let list = results(handle, entries, highlight, empty, list_height);
     let status = status.unwrap_or_else(|| signal(None));
     let list = match preview {
@@ -434,7 +445,7 @@ pub fn search_picker(
         None => list.into_any(),
     };
     let root = view! {
-        <div test_id=id flex col min_h=0.0 w={width.unwrap_or_else(|| Length::design(tokens::PICKER_WIDTH))}
+        <div test_id=id flex col min_h=0.0 w={width.unwrap_or(px(tokens::PICKER_WIDTH))}
              max_w=pct(100.0) gap=6.0 p=8.0 h?=height when:autofocus=focus_root
              when:tab_index=(focus_root, -1)
              on_key_down={move |event| {
@@ -453,7 +464,7 @@ pub fn search_picker(
             {searchable.map(|hint| view! { <query_input hint handle/> })}
             {list}
             <show when={move || status.with(Option::is_some)}>
-                <text caption color=Theme::current().warning>{move || status.get().unwrap_or_default()}</text>
+                <text caption color=Theme::current().warning()>{move || status.get().unwrap_or_default()}</text>
             </show>
             {footer.map(|footer| view! { <muted_text>{footer}</muted_text> })}
         </div>
@@ -470,8 +481,8 @@ fn with_preview(
 ) -> impl View {
     view! {
         <div flex row flex_1 min_h=0.0>
-            <div flex_none w=tokens::PICKER_PREVIEW_LIST_WIDTH max_w=pct(50.0) min_h=0.0 pr=6.0 border_r=px(1.0)
-                 border_color=Theme::current().border_subtle>
+            <div flex_none w=tokens::PICKER_PREVIEW_LIST_WIDTH max_w=pct(50.0) min_h=0.0 pr=6.0 border_r=1.0
+                 border_color=Theme::current().border_subtle()>
                 {children}
             </div>
             <div test_id={format!("{id}-preview")} flex_1 min_w=0.0 min_h=0.0 flex col>
@@ -486,8 +497,8 @@ fn query_input(hint: String, handle: SearchPickerHandle) -> impl View {
     let query = handle.query;
     view! {
         <div p=6.0 material=Material::Surface>
-            <editable value=query test_id="picker-query" autofocus body color=Theme::current().text w_full
-                      placeholder=(hint, Theme::current().text_muted) on_submit={move |_| handle.choose()}/>
+            <editable value=query test_id="picker-query" autofocus body color=Theme::current().text() w_full
+                      placeholder=(hint, Theme::current().text_muted()) on_submit={move |_| handle.choose()}/>
         </div>
     }
 }
@@ -518,17 +529,18 @@ fn results(
         move |position| {
             let row = entries.with_untracked(|rows| rows[position]);
             let index = row.index();
-            entry(
-                row,
-                handle.item(index),
-                &columns.get_untracked(),
-                move || highlight.get() == Some(index),
-                Callback::from(move || {
-                    handle.highlight(index);
-                    handle.choose();
-                }),
-                Callback::from(move || handle.highlight(index)),
-            )
+            let choose = Callback::from(move || {
+                handle.highlight(index);
+                handle.choose();
+            });
+            let hover = Callback::from(move || handle.highlight(index));
+            let highlighted = move || highlight.get() == Some(index);
+            columns.with_untracked(|columns| {
+                model.with_untracked(|model| {
+                    let item = &model.options()[index];
+                    entry(row, item, columns, highlighted, choose, hover)
+                })
+            })
         },
     )
     .row_identity(move |position| RowKey::new(entries.with(|rows| rows[position]), revision.get()))

@@ -17,8 +17,7 @@ pub(crate) fn interaction(state: Interactions, enabled: bool) -> InteractionStat
 }
 
 pub(crate) fn focus_ring(root: Div) -> Div {
-    let accent = Theme::current().accent;
-    root.focus_visible(move |style| style.border_color(accent.get_untracked()))
+    root.focus_visible(|style| style.border_color(Theme::current().accent()))
 }
 
 pub(crate) fn pressable(root: Div, keyboard: bool, enabled: bool, action: Callback) -> Div {

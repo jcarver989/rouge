@@ -7,8 +7,7 @@ use rouge_widgets::*;
 #[test]
 fn nested_tree_keeps_full_hit_width_and_separates_toggle_from_selection() -> TestResult {
     let _entered = Runtime::new().enter();
-    let (mut ui, (size, counts)) = component_test().build_with(|| {
-        let size = InterfaceSize::install(16.0);
+    let (mut ui, counts) = component_test().build_with(|| {
         let counts = signal((0, 0));
         let root = view! {
             <div flex col w_full>
@@ -18,15 +17,12 @@ fn nested_tree_keeps_full_hit_width_and_separates_toggle_from_selection() -> Tes
                           on_toggle={move || counts.update(|v| v.1 += 1)}/>
             </div>
         };
-        (root, (size, counts))
+        (root, counts)
     });
     assert!(ui.center_of("child-toggle")?.x > ui.center_of("root-toggle")?.x + 20.0);
     ui.click_on("child-toggle")?;
     let child = ui.center_of("child")?;
     ui.click_at(190.0, child.y);
     assert_eq!(counts.get(), (1, 1));
-    let height = ui.center_of("child")?.y;
-    size.set(24.0);
-    assert!(ui.center_of("child")?.y > height);
     Ok(())
 }
