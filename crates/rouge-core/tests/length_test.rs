@@ -1,5 +1,5 @@
-use rouge_core::testing::{TestResult, TestUi, TestUiBuilder};
-use rouge_core::{Length, Rect, Styled, auto, div, pct, px, rem, root_font_size, text};
+use rouge_core::testing::{TestResult, TestUi};
+use rouge_core::{Declaration, Length, Prop, Rect, Slot, Styled, auto, div, pct, px};
 use rouge_reactive::Runtime;
 
 #[test]
@@ -23,92 +23,68 @@ fn lengths_resolve_as_pixels_fractions_of_the_parent_or_automatically() -> TestR
 }
 
 #[test]
-fn rem_dimensions_follow_the_per_window_root_size() -> TestResult {
-    let _rt = Runtime::new().enter();
-    let (mut ui, root_size) =
-        TestUiBuilder::default().build_with(|| (div().w(rem(2.0)).h(10.0), root_font_size()));
-    assert_eq!(ui.bounds(1.0, 1.0)?.size.width, 32.0);
-    root_size.set(20.0);
-    ui.advance(0.0);
-    assert_eq!(ui.bounds(1.0, 1.0)?.size.width, 40.0);
-    let mut other = TestUi::new(|| div().w(rem(2.0)).h(10.0));
-    assert_eq!(other.bounds(1.0, 1.0)?.size.width, 32.0);
-    Ok(())
-}
-
-#[test]
-fn rem_spacing_constraints_and_text_relayout_together() -> TestResult {
-    let _rt = Runtime::new().enter();
-    let (mut ui, root_size) = TestUiBuilder::default().build_with(|| {
-        let view = div()
-            .flex()
-            .col()
-            .p(rem(0.5))
-            .border(rem(0.25))
-            .gap(rem(0.25))
-            .child(div().w(1.0).min_w(rem(2.0)).h(rem(1.0)).ml(rem(0.5)))
-            .child(text("Rem").text_size(rem(1.0)));
-        (view, root_font_size())
-    });
-    let first = ui.bounds(21.0, 13.0)?;
-    assert_eq!(first, Rect::new(20.0, 12.0, 32.0, 16.0));
-    assert_eq!(ui.bounds(13.0, 34.0)?.size.height, 23.0);
-    root_size.set(20.0);
-    ui.advance(0.0);
-    assert_eq!(ui.bounds(26.0, 16.0)?, Rect::new(25.0, 15.0, 40.0, 20.0));
-    assert_eq!(ui.bounds(16.0, 42.0)?.size.height, 28.0);
-    Ok(())
-}
-
-#[test]
-fn later_style_setters_override_rem_declarations() -> TestResult {
-    let _rt = Runtime::new().enter();
-    let (mut ui, root_size) = TestUiBuilder::default()
-        .build_with(|| (div().w(rem(2.0)).w_full().h(10.0), root_font_size()));
-    root_size.set(20.0);
-    ui.advance(0.0);
-    assert_eq!(ui.bounds(1.0, 1.0)?.size.width, 200.0);
-    Ok(())
-}
-
-#[test]
-fn every_length_setter_tracks_rem_and_clears_it_for_absolute_overrides() {
+fn every_length_setter_declares_its_slots_in_pixels_or_fractions() {
     macro_rules! check {
-        ($($setter:ident => $field:ident $(.$side:ident)?),* $(,)?) => {$({
-            let mut view = div().$setter(rem(2.0));
-            assert_eq!(view.style_mut().rem_lengths.get(stringify!($field $(.$side)?)), Some(&2.0));
-            let mut view = view.$setter(7.0);
-            let style = view.style_mut();
-            assert!(style.rem_lengths.is_empty(), stringify!($setter));
-            assert_eq!(style.layout.$field $(.$side)?, Length::Px(7.0).into());
+        ($($setter:ident => $($slot:ident),+;)*) => {$({
+            let slots: &[Slot] = &[$(Slot::$slot),+];
+            assert_eq!(
+                Recorder::default().$setter(7.0).$setter(pct(50.0)).0,
+                [
+                    Declaration::Length(slots, px(7.0)),
+                    Declaration::Length(slots, pct(50.0)),
+                ],
+                stringify!($setter)
+            );
         })*};
     }
     check! {
-        w => size.width, h => size.height,
-        min_w => min_size.width, min_h => min_size.height,
-        max_w => max_size.width, max_h => max_size.height,
-        flex_basis => flex_basis, gap_x => gap.width, gap_y => gap.height,
-        pt => padding.top, pr => padding.right, pb => padding.bottom, pl => padding.left,
-        mt => margin.top, mr => margin.right, mb => margin.bottom, ml => margin.left,
-        top => inset.top, right => inset.right, bottom => inset.bottom, left => inset.left,
-        border_t => border.top, border_r => border.right, border_b => border.bottom, border_l => border.left,
+        w => Width; h => Height;
+        min_w => MinWidth; min_h => MinHeight;
+        max_w => MaxWidth; max_h => MaxHeight;
+        flex_basis => Basis; gap_x => GapX; gap_y => GapY;
+        pt => PaddingTop; pr => PaddingRight; pb => PaddingBottom; pl => PaddingLeft;
+        mt => MarginTop; mr => MarginRight; mb => MarginBottom; ml => MarginLeft;
+        top => Top; right => Right; bottom => Bottom; left => Left;
+        border_t => BorderTop; border_r => BorderRight; border_b => BorderBottom; border_l => BorderLeft;
+        size => Width, Height; gap => GapX, GapY;
+        px => PaddingLeft, PaddingRight; py => PaddingTop, PaddingBottom;
+        mx => MarginLeft, MarginRight; my => MarginTop, MarginBottom;
+        p => PaddingTop, PaddingRight, PaddingBottom, PaddingLeft;
+        m => MarginTop, MarginRight, MarginBottom, MarginLeft;
+        inset => Top, Right, Bottom, Left;
+        border => BorderTop, BorderRight, BorderBottom, BorderLeft;
     }
-    let mut view = div()
-        .size(rem(2.0))
-        .size_full()
-        .p(rem(2.0))
-        .px(3.0)
-        .py(4.0)
-        .m(rem(2.0))
-        .mx(3.0)
-        .my(4.0)
-        .inset(rem(2.0))
-        .inset(5.0)
-        .border(rem(2.0))
-        .border(1.0)
-        .gap(rem(2.0))
-        .gap(6.0)
-        .flex_basis(rem(2.0))
-        .flex_1();
-    assert!(view.style_mut().rem_lengths.is_empty());
+}
+
+#[test]
+fn shorthand_setters_lay_out_every_side() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::new(|| {
+        div().size_full().child(
+            div()
+                .flex()
+                .w(100.0)
+                .h(60.0)
+                .p(3.0)
+                .m(4.0)
+                .border(1.0)
+                .gap(6.0)
+                .child(div().flex_1().h_full())
+                .child(div().flex_1().h_full()),
+        )
+    });
+    assert_eq!(ui.bounds(5.0, 5.0)?, Rect::new(4.0, 4.0, 100.0, 60.0));
+    assert_eq!(ui.bounds(10.0, 10.0)?, Rect::new(8.0, 8.0, 43.0, 52.0));
+    assert_eq!(ui.bounds(60.0, 10.0)?, Rect::new(57.0, 8.0, 43.0, 52.0));
+    Ok(())
+}
+
+#[derive(Default)]
+struct Recorder(Vec<Declaration>);
+
+impl Styled for Recorder {
+    fn declare(mut self, declaration: Prop<Declaration>) -> Self {
+        self.0.push(declaration.get());
+        self
+    }
 }
