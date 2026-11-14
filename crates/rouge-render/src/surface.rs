@@ -1,6 +1,7 @@
-use crate::{Gpu, Rect};
+use crate::gpu::create_texture;
 #[cfg(target_os = "macos")]
-use rouge_interop::{InteropError, IoSurface, import_io_surface};
+use crate::interop::{InteropError, IoSurface, import_io_surface};
+use crate::{Gpu, Rect};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::mem::take;
@@ -16,10 +17,7 @@ use tokio::sync::oneshot::{self, error::TryRecvError as FenceError};
 use web_time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
 use wgpu::PollType;
-use wgpu::{
-    AdapterInfo, Device, Extent3d, Queue, Texture, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages,
-};
+use wgpu::{AdapterInfo, Device, Queue, Texture, TextureFormat, TextureUsages};
 
 const RELEASE_POLL: Duration = Duration::from_millis(2);
 
@@ -51,18 +49,6 @@ pub enum QueueMode {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SurfaceOptions {
-    queue: QueueMode,
-}
-
-impl SurfaceOptions {
-    pub fn queue(mut self, queue: QueueMode) -> Self {
-        self.queue = queue;
-        self
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Origin {
     #[default]
     TopLeft,
@@ -74,13 +60,6 @@ pub enum AlphaMode {
     #[default]
     Premultiplied,
     Opaque,
-}
-
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ColorSpace {
-    #[default]
-    Srgb,
 }
 
 pub struct Fence(oneshot::Receiver<()>);
@@ -111,11 +90,8 @@ pub struct Frame {
     region: Option<Rect>,
     origin: Origin,
     alpha: AlphaMode,
-    color: ColorSpace,
-    damage: Option<Rect>,
     acquire: Acquire,
     present_at: Option<Instant>,
-    config: u64,
 }
 
 impl Frame {
@@ -125,11 +101,8 @@ impl Frame {
             region: None,
             origin: Origin::TopLeft,
             alpha: AlphaMode::Premultiplied,
-            color: ColorSpace::Srgb,
-            damage: None,
             acquire: Acquire::Ready,
             present_at: None,
-            config: 0,
         }
     }
 
@@ -148,16 +121,6 @@ impl Frame {
         self
     }
 
-    pub fn color(mut self, color: ColorSpace) -> Self {
-        self.color = color;
-        self
-    }
-
-    pub fn damage(mut self, damage: Rect) -> Self {
-        self.damage = Some(damage);
-        self
-    }
-
     pub fn after(mut self, fence: Fence) -> Self {
         self.acquire = Acquire::Fence(fence);
         self
@@ -165,11 +128,6 @@ impl Frame {
 
     pub fn present_at(mut self, at: Instant) -> Self {
         self.present_at = Some(at);
-        self
-    }
-
-    pub fn config(mut self, seq: u64) -> Self {
-        self.config = seq;
         self
     }
 
@@ -262,11 +220,11 @@ pub enum Sharing {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BufferDesc {
-    width: u32,
-    height: u32,
-    format: TextureFormat,
-    count: u32,
-    sharing: Sharing,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: TextureFormat,
+    pub(crate) count: u32,
+    pub(crate) sharing: Sharing,
 }
 
 impl BufferDesc {
@@ -375,20 +333,13 @@ impl SurfaceCx {
     }
 
     fn device_texture(&self, desc: &BufferDesc) -> Texture {
-        self.device.create_texture(&TextureDescriptor {
-            label: Some("rouge surface buffer"),
-            size: Extent3d {
-                width: desc.width.max(1),
-                height: desc.height.max(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: desc.format,
-            usage: buffer_usage(),
-            view_formats: &[],
-        })
+        create_texture(
+            &self.device,
+            "rouge surface buffer",
+            (desc.width.max(1), desc.height.max(1)),
+            desc.format,
+            buffer_usage(),
+        )
     }
 }
 
@@ -438,7 +389,7 @@ pub struct SurfaceProducer {
 
 pub struct SurfaceSource {
     id: SurfaceId,
-    options: SurfaceOptions,
+    queue: QueueMode,
     messages: UnboundedReceiver<Message>,
     events: UnboundedSender<SurfaceEvent>,
 }
@@ -449,7 +400,7 @@ impl SurfaceSource {
     }
 }
 
-pub fn surface_channel(options: SurfaceOptions) -> (SurfaceProducer, SurfaceSource) {
+pub fn surface_channel(queue: QueueMode) -> (SurfaceProducer, SurfaceSource) {
     let id = SurfaceId(NEXT_SURFACE.fetch_add(1, Ordering::Relaxed));
     let (messages, inbox) = unbounded_channel();
     let (events, outbox) = unbounded_channel();
@@ -463,7 +414,7 @@ pub fn surface_channel(options: SurfaceOptions) -> (SurfaceProducer, SurfaceSour
     };
     let source = SurfaceSource {
         id,
-        options,
+        queue,
         messages: inbox,
         events,
     };
@@ -546,39 +497,6 @@ impl SurfaceProducer {
     }
 }
 
-enum Op {
-    Attach(SurfaceSource, StatusSink),
-    Place(SurfaceId, Placement),
-    Detach(SurfaceId),
-    Bind(SurfaceId),
-    Unbind(SurfaceId),
-}
-
-#[derive(Clone)]
-pub struct SurfaceRegistrar(UnboundedSender<Op>);
-
-impl SurfaceRegistrar {
-    pub fn attach(&self, source: SurfaceSource, status: impl Fn(SurfaceStatus) + 'static) {
-        let _ = self.0.send(Op::Attach(source, Box::new(status)));
-    }
-
-    pub fn place(&self, id: SurfaceId, placement: Placement) {
-        let _ = self.0.send(Op::Place(id, placement));
-    }
-
-    pub fn detach(&self, id: SurfaceId) {
-        let _ = self.0.send(Op::Detach(id));
-    }
-
-    pub fn bind(&self, id: SurfaceId) {
-        let _ = self.0.send(Op::Bind(id));
-    }
-
-    pub fn unbind(&self, id: SurfaceId) {
-        let _ = self.0.send(Op::Unbind(id));
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SurfaceStats {
     pub surfaces: usize,
@@ -605,7 +523,7 @@ struct Pending {
 }
 
 struct Entry {
-    options: SurfaceOptions,
+    queue: QueueMode,
     messages: UnboundedReceiver<Message>,
     events: UnboundedSender<SurfaceEvent>,
     status: StatusSink,
@@ -707,7 +625,7 @@ impl Entry {
     }
 
     fn choose(&self, target: Instant) -> Option<usize> {
-        let due = |pending: &Pending| match self.options.queue {
+        let due = |pending: &Pending| match self.queue {
             QueueMode::Mailbox => true,
             QueueMode::Timed => pending.frame.present_at.is_none_or(|at| at <= target),
         };
@@ -786,8 +704,6 @@ pub struct Surfaces {
     queue: Queue,
     adapter: AdapterInfo,
     waker: Option<Waker>,
-    ops: UnboundedReceiver<Op>,
-    registrar: UnboundedSender<Op>,
     entries: HashMap<SurfaceId, Entry>,
     binds: HashMap<SurfaceId, usize>,
     retired: Vec<Retired>,
@@ -797,14 +713,11 @@ pub struct Surfaces {
 
 impl Surfaces {
     pub fn new(gpu: &Gpu) -> Self {
-        let (registrar, ops) = unbounded_channel();
         Surfaces {
             device: gpu.device.clone(),
             queue: gpu.queue.clone(),
             adapter: gpu.adapter.get_info(),
             waker: None,
-            ops,
-            registrar,
             entries: HashMap::new(),
             binds: HashMap::new(),
             retired: Vec::new(),
@@ -818,10 +731,6 @@ impl Surfaces {
         self
     }
 
-    pub fn registrar(&self) -> SurfaceRegistrar {
-        SurfaceRegistrar(self.registrar.clone())
-    }
-
     pub fn stats(&self) -> SurfaceStats {
         SurfaceStats {
             surfaces: self.entries.len(),
@@ -830,7 +739,6 @@ impl Surfaces {
     }
 
     pub fn latch(&mut self, target: Instant) -> bool {
-        self.apply_ops();
         let mut changed = false;
         for entry in self.entries.values_mut() {
             changed |= entry.latch(target, &mut self.retired, &mut self.stats);
@@ -913,52 +821,50 @@ impl Surfaces {
         })
     }
 
-    fn apply_ops(&mut self) {
-        while let Ok(op) = self.ops.try_recv() {
-            match op {
-                Op::Attach(source, status) => self.attach(source, status),
-                Op::Place(id, placement) => {
-                    if let Some(entry) = self.entries.get_mut(&id)
-                        && entry.placement != Some(placement)
-                        && !entry.detached
-                    {
-                        entry.placement = Some(placement);
-                        entry.seq += 1;
-                        entry.emit(SurfaceEvent::Configure(SurfaceConfig {
-                            seq: entry.seq,
-                            width: placement.width,
-                            height: placement.height,
-                            scale: placement.scale,
-                            visible: placement.visible,
-                        }));
-                    }
-                }
-                Op::Detach(id) => {
-                    if let Some(entry) = self.entries.get_mut(&id)
-                        && !entry.detached
-                    {
-                        entry.detached = true;
-                        entry.wants_frame = false;
-                        for pending in take(&mut entry.pending) {
-                            entry.discard(pending, &mut self.stats);
-                        }
-                        entry.emit(SurfaceEvent::Detached);
-                    }
-                }
-                Op::Bind(id) => *self.binds.entry(id).or_default() += 1,
-                Op::Unbind(id) => {
-                    if let Some(count) = self.binds.get_mut(&id) {
-                        *count = count.saturating_sub(1);
-                    }
-                }
-            }
+    pub fn place(&mut self, id: SurfaceId, placement: Placement) {
+        if let Some(entry) = self.entries.get_mut(&id)
+            && entry.placement != Some(placement)
+            && !entry.detached
+        {
+            entry.placement = Some(placement);
+            entry.seq += 1;
+            entry.emit(SurfaceEvent::Configure(SurfaceConfig {
+                seq: entry.seq,
+                width: placement.width,
+                height: placement.height,
+                scale: placement.scale,
+                visible: placement.visible,
+            }));
         }
     }
 
-    fn attach(&mut self, source: SurfaceSource, status: StatusSink) {
+    pub fn detach(&mut self, id: SurfaceId) {
+        if let Some(entry) = self.entries.get_mut(&id)
+            && !entry.detached
+        {
+            entry.detached = true;
+            entry.wants_frame = false;
+            for pending in take(&mut entry.pending) {
+                entry.discard(pending, &mut self.stats);
+            }
+            entry.emit(SurfaceEvent::Detached);
+        }
+    }
+
+    pub fn bind(&mut self, id: SurfaceId) {
+        *self.binds.entry(id).or_default() += 1;
+    }
+
+    pub fn unbind(&mut self, id: SurfaceId) {
+        if let Some(count) = self.binds.get_mut(&id) {
+            *count = count.saturating_sub(1);
+        }
+    }
+
+    pub fn attach(&mut self, source: SurfaceSource, status: impl Fn(SurfaceStatus) + 'static) {
         let SurfaceSource {
             id,
-            options,
+            queue,
             messages,
             events,
         } = source;
@@ -973,10 +879,10 @@ impl Surfaces {
         self.entries.insert(
             id,
             Entry {
-                options,
+                queue,
                 messages,
                 events,
-                status,
+                status: Box::new(status),
                 sets: HashMap::new(),
                 pending: VecDeque::new(),
                 current: None,

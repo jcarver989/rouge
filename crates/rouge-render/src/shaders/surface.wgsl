@@ -1,8 +1,7 @@
 fn effect(in: EffectInput) -> vec4<f32> {
-    let map = layer.content_map;
-    let limit = layer.content_bounds;
-    let uv = clamp(map.xy + in.uv * map.zw, limit.xy, limit.zw);
-    var color = textureSampleLevel(content_texture, content_sampler, uv, 0.0);
+    let map = row(ROW_CONTENT_MAP);
+    let uv = map.xy + in.uv * map.zw;
+    var color = sample_within(content_texture, content_sampler, uv, row(ROW_CONTENT_BOUNDS), vec2<f32>(0.0), false);
     if (param(0).x > 0.5) {
         color = vec4<f32>(color.rgb, 1.0);
     }

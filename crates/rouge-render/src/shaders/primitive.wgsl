@@ -1,18 +1,23 @@
 @group(0) @binding(0) var atlas: texture_2d<f32>;
 @group(0) @binding(1) var atlas_sampler: sampler;
 
+const ROW_FILL: u32 = 4u;
+const KIND: u32 = 3u;
 const SHADOW: u32 = 1u;
 const GLYPH: u32 = 2u;
 const IMAGE: u32 = 3u;
+const LAYER_FILL: u32 = 4u;
+const LAYER_RADII: u32 = 8u;
+const ALPHA_MASK: u32 = 16u;
 
 struct Instance {
     @location(0) bounds: vec4<f32>,
     @location(1) clip: vec4<f32>,
-    @location(2) color: vec4<f32>,
-    @location(3) border_color: vec4<f32>,
-    @location(4) radii: vec4<f32>,
-    @location(5) params: vec4<f32>,
-    @location(6) kind: vec4<f32>,
+    @location(2) radii: vec4<f32>,
+    @location(3) params: vec4<f32>,
+    @location(4) color: vec4<f32>,
+    @location(5) border_color: vec4<f32>,
+    @location(6) flags: u32,
 };
 
 struct VsOut {
@@ -26,12 +31,13 @@ struct VsOut {
     @location(6) @interpolate(flat) kind: u32,
     @location(7) local: vec2<f32>,
     @location(8) texel: vec2<f32>,
+    @location(9) @interpolate(flat) opacity: f32,
 };
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOut {
-    let unit = vec2<f32>(f32(vertex_index & 1u), f32((vertex_index >> 1u) & 1u));
-    let kind = u32(instance.kind.x);
+    let unit = select_record(vertex_index);
+    let kind = instance.flags & KIND;
     var origin = instance.bounds.xy * scale_factor();
     var size = instance.bounds.zw * scale_factor();
     var params = instance.params * scale_factor();
@@ -54,22 +60,23 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOu
     out.rect = vec4<f32>(origin + size * 0.5, size * 0.5);
     out.clip = vec4<f32>(clip_min, clip_min + instance.clip.zw * scale_factor());
     out.color = premultiply(instance.color);
-    if (instance.kind.y > 0.5) {
-        out.color = layer.fill;
+    if ((instance.flags & LAYER_FILL) != 0u) {
+        out.color = row(ROW_FILL);
     }
     out.border_color = premultiply(instance.border_color);
     if (kind == IMAGE) {
         out.texel = instance.params.xy + (position - origin) / max(size, vec2<f32>(1e-5)) * instance.params.zw;
         out.border_color = instance.params;
-        params = vec4<f32>(instance.kind.w, 0.0, 0.0, 0.0);
+        params = vec4<f32>(select(0.0, 1.0, (instance.flags & ALPHA_MASK) != 0u), 0.0, 0.0, 0.0);
     }
     var radii = instance.radii;
-    if (instance.kind.z > 0.5) {
-        radii = max(layer.radii + instance.radii, vec4<f32>(0.0));
+    if ((instance.flags & LAYER_RADII) != 0u) {
+        radii = max(row(ROW_RADII) + instance.radii, vec4<f32>(0.0));
     }
     out.radii = radii * scale_factor();
     out.params = params;
     out.kind = kind;
+    out.opacity = layer_opacity();
     return out;
 }
 
@@ -136,7 +143,7 @@ fn quad_color(in: VsOut, p: vec2<f32>, half_size: vec2<f32>, radius: f32, span: 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let span = pixel_span(in.local);
-    let visible = clip_coverage(in.local, in.clip) * layer_opacity();
+    let visible = clip_coverage(in.local, in.clip) * in.opacity;
     if (in.kind == GLYPH) {
         let uv = in.texel / vec2<f32>(textureDimensions(atlas));
         return in.color * textureSampleLevel(atlas, atlas_sampler, uv, 0.0).r * visible;

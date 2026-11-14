@@ -1,12 +1,12 @@
 use crate::{Color, Corners, Point, Rect};
-use std::any::TypeId;
-use std::hash::{Hash, Hasher};
+use std::ptr;
 
 const SHADOW_REACH: f32 = 28.0;
 /// From the upper left, so the top and left edges catch the light.
 const DIAGONAL_RIM_ANGLE: f32 = -0.643_501_1;
+pub(crate) const PASSTHROUGH_WGSL: &str = include_str!("shaders/passthrough.wgsl");
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Inputs(u8);
 
 impl Inputs {
@@ -23,14 +23,12 @@ impl Inputs {
     }
 }
 
-pub trait Effect: 'static {
+pub trait ShaderEffect: 'static {
     const WGSL: &'static str;
     const INPUTS: Inputs;
     const CLOCK: Option<usize> = None;
 
-    fn uniforms(&self) -> Vec<f32> {
-        Vec::new()
-    }
+    fn uniforms(&self, _uniforms: &mut [f32; EffectInstance::UNIFORMS]) {}
 
     fn margin(&self) -> f32 {
         0.0
@@ -45,26 +43,58 @@ pub trait Effect: 'static {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Shader {
-    id: TypeId,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectInstance {
     wgsl: &'static str,
     inputs: Inputs,
     clock: Option<usize>,
+    values: [f32; EffectInstance::VALUES],
 }
 
-impl Shader {
-    pub fn of<T: Effect>() -> Self {
-        Shader {
-            id: TypeId::of::<T>(),
+impl EffectInstance {
+    pub const UNIFORMS: usize = 16;
+    pub const VALUES: usize = Self::UNIFORMS + 3;
+
+    pub fn new<T: ShaderEffect>(effect: &T) -> Self {
+        assert!(
+            T::CLOCK.is_none_or(|index| index < Self::UNIFORMS),
+            "rouge: an effect's clock is one of its {} uniform values",
+            Self::UNIFORMS
+        );
+        let mut uniforms = [0.0; Self::UNIFORMS];
+        effect.uniforms(&mut uniforms);
+        let mut values = [0.0; Self::VALUES];
+        values[0] = effect.margin().max(0.0);
+        values[1] = effect.content_blur().max(0.0);
+        values[2] = effect.backdrop_blur().max(0.0);
+        values[3..].copy_from_slice(&uniforms);
+        EffectInstance {
             wgsl: T::WGSL,
             inputs: T::INPUTS,
             clock: T::CLOCK,
+            values,
         }
+    }
+
+    pub fn with_values(self, values: [f32; Self::VALUES]) -> Self {
+        EffectInstance { values, ..self }
+    }
+
+    pub fn at(mut self, seconds: f32) -> Self {
+        if let Some(index) = self.clock {
+            self.values[3 + index] = seconds;
+        }
+        self
     }
 
     pub fn wgsl(&self) -> &'static str {
         self.wgsl
+    }
+
+    pub fn same_shader(&self, other: &EffectInstance) -> bool {
+        self.inputs == other.inputs
+            && self.clock == other.clock
+            && (ptr::eq(self.wgsl, other.wgsl) || self.wgsl == other.wgsl)
     }
 
     pub fn inputs(&self) -> Inputs {
@@ -73,69 +103,6 @@ impl Shader {
 
     pub fn clock(&self) -> Option<usize> {
         self.clock
-    }
-}
-
-impl PartialEq for Shader {
-    fn eq(&self, other: &Shader) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Shader {}
-
-impl Hash for Shader {
-    fn hash<T: Hasher>(&self, state: &mut T) {
-        self.id.hash(state);
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EffectInstance {
-    shader: Shader,
-    values: [f32; EffectInstance::VALUES],
-}
-
-impl EffectInstance {
-    pub const UNIFORMS: usize = 16;
-    pub const VALUES: usize = Self::UNIFORMS + 3;
-
-    pub fn new<T: Effect>(effect: &T) -> Self {
-        let uniforms = effect.uniforms();
-        assert!(
-            uniforms.len() <= Self::UNIFORMS,
-            "rouge: an effect has at most {} uniform values",
-            Self::UNIFORMS
-        );
-        assert!(
-            T::CLOCK.is_none_or(|index| index < Self::UNIFORMS),
-            "rouge: an effect's clock is one of its {} uniform values",
-            Self::UNIFORMS
-        );
-        let mut values = [0.0; Self::VALUES];
-        values[0] = effect.margin().max(0.0);
-        values[1] = effect.content_blur().max(0.0);
-        values[2] = effect.backdrop_blur().max(0.0);
-        values[3..3 + uniforms.len()].copy_from_slice(&uniforms);
-        EffectInstance {
-            shader: Shader::of::<T>(),
-            values,
-        }
-    }
-
-    pub fn from_values(shader: Shader, values: [f32; Self::VALUES]) -> Self {
-        EffectInstance { shader, values }
-    }
-
-    pub fn at(mut self, seconds: f32) -> Self {
-        if let Some(index) = self.shader.clock {
-            self.values[3 + index] = seconds;
-        }
-        self
-    }
-
-    pub fn shader(&self) -> Shader {
-        self.shader
     }
 
     pub fn values(&self) -> &[f32; Self::VALUES] {
@@ -154,12 +121,14 @@ impl EffectInstance {
         self.values[2]
     }
 
-    pub fn uniforms(&self) -> &[f32] {
-        &self.values[3..]
+    pub fn uniforms(&self) -> [f32; Self::UNIFORMS] {
+        let mut uniforms = [0.0; Self::UNIFORMS];
+        uniforms.copy_from_slice(&self.values[3..]);
+        uniforms
     }
 }
 
-impl<T: Effect> From<&T> for EffectInstance {
+impl<T: ShaderEffect> From<&T> for EffectInstance {
     fn from(effect: &T) -> Self {
         EffectInstance::new(effect)
     }
@@ -173,7 +142,7 @@ pub struct EffectDraw {
 }
 
 impl EffectDraw {
-    pub fn new<T: Effect>(effect: &T, bounds: Rect) -> Self {
+    pub fn new<T: ShaderEffect>(effect: &T, bounds: Rect) -> Self {
         EffectDraw {
             effect: EffectInstance::new(effect),
             bounds,
@@ -184,16 +153,22 @@ impl EffectDraw {
 
 pub(crate) struct Passthrough;
 
-impl Effect for Passthrough {
-    const WGSL: &'static str = include_str!("shaders/passthrough.wgsl");
+impl ShaderEffect for Passthrough {
+    const WGSL: &'static str = PASSTHROUGH_WGSL;
     const INPUTS: Inputs = Inputs::CONTENT;
 }
 
-pub(crate) struct SurfaceSample;
+pub(crate) struct SurfaceSample {
+    pub opaque: bool,
+}
 
-impl Effect for SurfaceSample {
+impl ShaderEffect for SurfaceSample {
     const WGSL: &'static str = include_str!("shaders/surface.wgsl");
     const INPUTS: Inputs = Inputs::CONTENT;
+
+    fn uniforms(&self, uniforms: &mut [f32; EffectInstance::UNIFORMS]) {
+        uniforms[0] = f32::from(u8::from(self.opaque));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -207,8 +182,8 @@ impl Blur {
     }
 }
 
-impl Effect for Blur {
-    const WGSL: &'static str = include_str!("shaders/passthrough.wgsl");
+impl ShaderEffect for Blur {
+    const WGSL: &'static str = PASSTHROUGH_WGSL;
     const INPUTS: Inputs = Inputs::CONTENT;
 
     fn content_blur(&self) -> f32 {
@@ -227,7 +202,7 @@ impl BackdropBlur {
     }
 }
 
-impl Effect for BackdropBlur {
+impl ShaderEffect for BackdropBlur {
     const WGSL: &'static str = include_str!("shaders/backdrop_blur.wgsl");
     const INPUTS: Inputs = Inputs::BACKDROP;
 
@@ -318,12 +293,12 @@ impl ColorMatrix {
     }
 }
 
-impl Effect for ColorMatrix {
+impl ShaderEffect for ColorMatrix {
     const WGSL: &'static str = include_str!("shaders/color_matrix.wgsl");
     const INPUTS: Inputs = Inputs::CONTENT;
 
-    fn uniforms(&self) -> Vec<f32> {
-        self.rows.as_flattened().to_vec()
+    fn uniforms(&self, uniforms: &mut [f32; EffectInstance::UNIFORMS]) {
+        uniforms[..12].copy_from_slice(self.rows.as_flattened());
     }
 }
 
@@ -373,24 +348,23 @@ impl Mask {
     }
 }
 
-impl Effect for Mask {
+impl ShaderEffect for Mask {
     const WGSL: &'static str = include_str!("shaders/mask.wgsl");
     const INPUTS: Inputs = Inputs::CONTENT;
 
-    fn uniforms(&self) -> Vec<f32> {
+    fn uniforms(&self, uniforms: &mut [f32; EffectInstance::UNIFORMS]) {
         let (kind, shape) = match self.kind {
             MaskKind::Linear { from, to } => (0.0, [from.x, from.y, to.x, to.y]),
             MaskKind::Radial { center, radius } => (1.0, [center.x, center.y, radius, 0.0]),
             MaskKind::Shape => (2.0, [0.0; 4]),
         };
-        let mut uniforms = vec![
+        uniforms[..4].copy_from_slice(&[
             kind,
             f32::from(u8::from(self.inverted)),
             self.stops.0,
             self.stops.1,
-        ];
-        uniforms.extend(shape);
-        uniforms
+        ]);
+        uniforms[4..8].copy_from_slice(&shape);
     }
 }
 
@@ -410,12 +384,12 @@ pub enum BlendMode {
     PlusLighter,
 }
 
-impl Effect for BlendMode {
+impl ShaderEffect for BlendMode {
     const WGSL: &'static str = include_str!("shaders/blend.wgsl");
     const INPUTS: Inputs = Inputs::BOTH;
 
-    fn uniforms(&self) -> Vec<f32> {
-        vec![f32::from(*self as u8)]
+    fn uniforms(&self, uniforms: &mut [f32; EffectInstance::UNIFORMS]) {
+        uniforms[0] = f32::from(*self as u8);
     }
 }
 
@@ -535,13 +509,13 @@ impl Glass {
     }
 }
 
-impl Effect for Glass {
+impl ShaderEffect for Glass {
     const WGSL: &'static str = include_str!("shaders/glass.wgsl");
     const INPUTS: Inputs = Inputs::BACKDROP;
 
-    fn uniforms(&self) -> Vec<f32> {
-        let mut uniforms = self.tint.to_array().to_vec();
-        uniforms.extend([
+    fn uniforms(&self, uniforms: &mut [f32; EffectInstance::UNIFORMS]) {
+        uniforms[..4].copy_from_slice(&self.tint.to_array());
+        uniforms[4..].copy_from_slice(&[
             self.refraction,
             self.dispersion,
             self.highlight,
@@ -555,7 +529,6 @@ impl Effect for Glass {
             self.rim_angle,
             self.rim_fill,
         ]);
-        uniforms
     }
 
     fn margin(&self) -> f32 {

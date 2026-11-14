@@ -1,7 +1,8 @@
+use crate::gpu::{PipelineDesc, begin_pass, create_pipeline};
 use crate::surface::{
     BufferDesc, BufferRef, BufferSetId, Fence, FenceSignal, Frame, FrameId, QueueMode,
     SharedBuffer, Sharing, SurfaceConfig, SurfaceCx, SurfaceError, SurfaceEvent, SurfaceId,
-    SurfaceOptions, SurfaceProducer, SurfaceSource, surface_channel,
+    SurfaceProducer, SurfaceSource, surface_channel,
 };
 use bytemuck::{Pod, Zeroable, bytes_of};
 use std::collections::VecDeque;
@@ -9,12 +10,9 @@ use thiserror::Error;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
-    BindingType, BufferBindingType, BufferUsages, Color as ClearColor, ColorTargetState,
-    ColorWrites, CommandEncoderDescriptor, FragmentState, LoadOp, MultisampleState, Operations,
-    PipelineCompilationOptions, PipelineLayoutDescriptor, PrimitiveState,
-    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureFormat,
-    TextureViewDescriptor, VertexState,
+    BindingType, BufferBindingType, BufferUsages, Color as ClearColor, CommandEncoderDescriptor,
+    LoadOp, PipelineLayoutDescriptor, RenderPipeline, ShaderModuleDescriptor, ShaderSource,
+    ShaderStages, TextureFormat, TextureViewDescriptor,
 };
 
 const PATTERN_WGSL: &str = include_str!("shaders/test_pattern.wgsl");
@@ -68,20 +66,16 @@ pub enum TestSurfaceError {
 
 #[derive(Clone, Copy, Debug)]
 pub struct TestSurfaceBuilder {
-    options: SurfaceOptions,
-    buffers: u32,
-    sharing: Sharing,
-    format: TextureFormat,
+    queue: QueueMode,
+    desc: BufferDesc,
     size: Option<(u32, u32)>,
 }
 
 impl Default for TestSurfaceBuilder {
     fn default() -> Self {
         TestSurfaceBuilder {
-            options: SurfaceOptions::default(),
-            buffers: 3,
-            sharing: Sharing::Device,
-            format: TextureFormat::Bgra8Unorm,
+            queue: QueueMode::default(),
+            desc: BufferDesc::new(0, 0),
             size: None,
         }
     }
@@ -89,22 +83,22 @@ impl Default for TestSurfaceBuilder {
 
 impl TestSurfaceBuilder {
     pub fn queue(mut self, queue: QueueMode) -> Self {
-        self.options = self.options.queue(queue);
+        self.queue = queue;
         self
     }
 
     pub fn buffers(mut self, buffers: u32) -> Self {
-        self.buffers = buffers;
+        self.desc = self.desc.count(buffers);
         self
     }
 
     pub fn sharing(mut self, sharing: Sharing) -> Self {
-        self.sharing = sharing;
+        self.desc = self.desc.sharing(sharing);
         self
     }
 
     pub fn format(mut self, format: TextureFormat) -> Self {
-        self.format = format;
+        self.desc = self.desc.format(format);
         self
     }
 
@@ -114,7 +108,7 @@ impl TestSurfaceBuilder {
     }
 
     pub fn build(self) -> (TestSurface, SurfaceSource) {
-        let (producer, source) = surface_channel(self.options);
+        let (producer, source) = surface_channel(self.queue);
         let surface = TestSurface {
             producer,
             settings: self,
@@ -258,10 +252,11 @@ impl TestSurface {
         if self.chain.as_ref().is_some_and(|chain| chain.size == size) {
             return Ok(());
         }
-        let desc = BufferDesc::new(size.0, size.1)
-            .format(self.settings.format)
-            .count(self.settings.buffers)
-            .sharing(self.settings.sharing);
+        let desc = BufferDesc {
+            width: size.0,
+            height: size.1,
+            ..self.settings.desc
+        };
         let buffers = cx.allocate(&desc)?;
         let set = self.producer.register(&buffers);
         if let Some(old) = self.chain.take() {
@@ -317,32 +312,15 @@ impl TestSurface {
         });
         let view = texture.create_view(&TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
-        {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("rouge test pattern"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(ClearColor::TRANSPARENT),
-                        store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+        let mut pass = begin_pass(&mut encoder, &view, LoadOp::Clear(ClearColor::TRANSPARENT));
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+        drop(pass);
         cx.queue().submit([encoder.finish()]);
-        let seq = self.config.map_or(0, |config| config.seq);
         Ok(self
             .producer
-            .submit(frame(Frame::new(BufferRef { set, index }).config(seq))))
+            .submit(frame(Frame::new(BufferRef { set, index }))))
     }
 }
 
@@ -370,29 +348,15 @@ fn pattern_pipeline(cx: &SurfaceCx, format: TextureFormat) -> RenderPipeline {
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    device.create_render_pipeline(&RenderPipelineDescriptor {
-        label: Some("rouge test pattern"),
-        layout: Some(&pipeline_layout),
-        vertex: VertexState {
+    create_pipeline(
+        device,
+        &PipelineDesc {
+            layout: &pipeline_layout,
             module: &module,
-            entry_point: Some("vs_main"),
-            compilation_options: PipelineCompilationOptions::default(),
+            fragment: "fs_main",
+            format,
+            blend: None,
             buffers: &[],
         },
-        primitive: PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: MultisampleState::default(),
-        fragment: Some(FragmentState {
-            module: &module,
-            entry_point: Some("fs_main"),
-            compilation_options: PipelineCompilationOptions::default(),
-            targets: &[Some(ColorTargetState {
-                format,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }

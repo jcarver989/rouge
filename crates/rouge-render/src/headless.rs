@@ -1,3 +1,4 @@
+use crate::gpu::create_texture;
 use crate::{Atlas, Color, Gpu, GpuError, Item, RenderStats, Renderer, Surfaces, Viewport};
 use image::ExtendedColorType::Rgba8;
 use image::codecs::png::PngEncoder;
@@ -6,9 +7,9 @@ use pollster::block_on;
 use thiserror::Error;
 use wgpu::{
     BufferDescriptor, BufferUsages, COPY_BYTES_PER_ROW_ALIGNMENT, CommandEncoderDescriptor,
-    Extent3d, Instance, InstanceDescriptor, InstanceFlags, MapMode, PollType, TexelCopyBufferInfo,
-    TexelCopyBufferLayout, Texture, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureUsages, TextureView, TextureViewDescriptor,
+    Instance, InstanceDescriptor, InstanceFlags, MapMode, PollType, TexelCopyBufferInfo,
+    TexelCopyBufferLayout, Texture, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor,
 };
 
 #[derive(Debug, Error)]
@@ -71,20 +72,13 @@ impl Headless {
 
     pub fn with_gpu(gpu: Gpu, viewport: Viewport) -> Self {
         let format = TextureFormat::Rgba8Unorm;
-        let texture = gpu.device.create_texture(&TextureDescriptor {
-            label: Some("rouge headless target"),
-            size: Extent3d {
-                width: viewport.width,
-                height: viewport.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
+        let texture = create_texture(
+            &gpu.device,
+            "rouge headless target",
+            (viewport.width, viewport.height),
             format,
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+        );
         let view = texture.create_view(&TextureViewDescriptor::default());
         let renderer = Renderer::new(&gpu.device, &gpu.queue, format);
         let surfaces = Surfaces::new(&gpu);

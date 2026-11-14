@@ -403,6 +403,49 @@ fn many_layers_grow_the_uniform_buffer() -> Result<(), GpuError> {
 }
 
 #[test]
+fn layers_spanning_many_uniform_pages_each_keep_their_own_transform() -> Result<(), GpuError> {
+    let list = quads([Quad::new(Rect::new(0.0, 0.0, 1.0, 1.0), Color::WHITE)]);
+    let layers: Vec<_> = (0..1600)
+        .map(|i| LayerDraw {
+            transform: Affine::translate((i % 40) as f32, (i / 40) as f32),
+            ..LayerDraw::new(&list)
+        })
+        .collect();
+    let img = render_layers(40, &layers)?;
+    for (x, y) in (0..40).flat_map(|y| (0..40).map(move |x| (x, y))) {
+        assert_near(img.pixel(x, y), WHITE, "every layer lands on its own pixel");
+    }
+    Ok(())
+}
+
+#[test]
+fn lists_uploaded_before_the_instance_buffer_grows_still_draw() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let early = square(Color::BLUE);
+    canvas.frame(&[LayerDraw::new(&early)]);
+
+    let mut late = DrawList::new();
+    for i in 0..2000 {
+        let at = Rect::new((i % 50) as f32, (40 + i / 50 % 20) as f32, 1.0, 1.0);
+        late.push_quad(Quad::new(at, Color::RED));
+    }
+    let stats = canvas.frame(&[LayerDraw::new(&early), LayerDraw::new(&late)]);
+    assert_eq!(
+        stats.instance_bytes_uploaded,
+        2000 * INSTANCE_BYTES,
+        "only the new list is uploaded"
+    );
+    let img = canvas.image()?;
+    assert_near(
+        img.pixel(20, 20),
+        BLUE,
+        "the earlier list survives the growth",
+    );
+    assert_near(img.pixel(49, 59), RED, "the new list is drawn");
+    Ok(())
+}
+
+#[test]
 fn backdrop_passes_are_counted_and_absent_without_effects() -> Result<(), GpuError> {
     let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
     let (scene, empty) = (split_scene(), DrawList::new());
@@ -694,4 +737,4 @@ fn square(color: Color) -> DrawList {
     quads([Quad::new(Rect::new(10.0, 10.0, 20.0, 20.0), color)])
 }
 
-const INSTANCE_BYTES: u64 = 112;
+const INSTANCE_BYTES: u64 = 84;

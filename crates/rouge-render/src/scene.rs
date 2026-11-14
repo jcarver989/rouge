@@ -1,11 +1,12 @@
 use crate::atlas::AtlasRect;
 use crate::image::{ImageData, ImageFormat};
-use crate::renderer::upload;
 use crate::{Color, Corners, Edges, Point, Rect, Size};
-use bytemuck::{Pod, Zeroable, cast_slice};
-use std::cell::{Cell, Ref, RefCell};
+use bytemuck::{Pod, Zeroable};
 use std::ops::Range;
-use wgpu::{Buffer, Device, Queue};
+use std::sync::atomic::{AtomicU64, Ordering};
+use wgpu::{VertexAttribute, vertex_attr_array};
+
+static NEXT_LIST: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quad {
@@ -98,31 +99,62 @@ pub(crate) struct Batch {
     pub instances: Range<u32>,
 }
 
-const QUAD: f32 = 0.0;
-const SHADOW: f32 = 1.0;
-const GLYPH: f32 = 2.0;
-const IMAGE: f32 = 3.0;
+const SHADOW: u32 = 1;
+const GLYPH: u32 = 2;
+const IMAGE: u32 = 3;
+const LAYER_FILL: u32 = 4;
+const LAYER_RADII: u32 = 8;
+const ALPHA_MASK: u32 = 16;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
 pub(crate) struct Instance {
     bounds: [f32; 4],
     clip: [f32; 4],
-    color: [f32; 4],
-    border_color: [f32; 4],
     radii: [f32; 4],
     params: [f32; 4],
-    kind: [f32; 4],
+    color: [u16; 4],
+    border_color: [u16; 4],
+    flags: u32,
 }
 
-#[derive(Default)]
+impl Instance {
+    pub(crate) const ATTRIBUTES: [VertexAttribute; 7] = vertex_attr_array![
+        0 => Float32x4,
+        1 => Float32x4,
+        2 => Float32x4,
+        3 => Float32x4,
+        4 => Unorm16x4,
+        5 => Unorm16x4,
+        6 => Uint32,
+    ];
+    pub(crate) const SIZE: u64 = size_of::<Instance>() as u64;
+}
+
+fn unorm(color: Color) -> [u16; 4] {
+    color
+        .to_array()
+        .map(|channel| (channel.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16)
+}
+
 pub struct DrawList {
+    id: u64,
     instances: Vec<Instance>,
     batches: Vec<Batch>,
     extent: Option<Rect>,
     revision: u64,
-    buffer: RefCell<Option<Buffer>>,
-    uploaded: Cell<bool>,
+}
+
+impl Default for DrawList {
+    fn default() -> Self {
+        DrawList {
+            id: NEXT_LIST.fetch_add(1, Ordering::Relaxed),
+            instances: Vec::new(),
+            batches: Vec::new(),
+            extent: None,
+            revision: 0,
+        }
+    }
 }
 
 impl DrawList {
@@ -134,14 +166,20 @@ impl DrawList {
         self.instances.clear();
         self.batches.clear();
         self.extent = None;
-        self.changed();
+        self.revision += 1;
     }
 
     pub fn replace(&mut self, other: DrawList) {
-        self.instances = other.instances;
-        self.batches = other.batches;
+        self.instances.clear();
+        self.instances.extend_from_slice(&other.instances);
+        self.batches.clear();
+        self.batches.extend(other.batches);
         self.extent = other.extent;
-        self.changed();
+        self.revision += 1;
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
     }
 
     pub fn extent(&self) -> Option<Rect> {
@@ -150,11 +188,6 @@ impl DrawList {
 
     pub fn revision(&self) -> u64 {
         self.revision
-    }
-
-    fn changed(&mut self) {
-        self.revision += 1;
-        self.uploaded.set(false);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -169,18 +202,22 @@ impl DrawList {
         if quad.bounds.is_empty() || quad.clip.intersect(&quad.bounds).is_empty() {
             return;
         }
-        let backing = f32::from(u8::from(quad.backing));
+        let backing = if quad.backing {
+            LAYER_FILL | LAYER_RADII
+        } else {
+            0
+        };
         self.push(
             None,
             quad.bounds.inflate(1.0).intersect(&quad.clip),
             Instance {
                 bounds: quad.bounds.to_array(),
                 clip: quad.clip.to_array(),
-                color: quad.background.to_array(),
-                border_color: quad.border_color.to_array(),
                 radii: quad.corner_radii.to_array(),
                 params: quad.border_widths.to_array(),
-                kind: [QUAD, backing, backing, 0.0],
+                color: unorm(quad.background),
+                border_color: unorm(quad.border_color),
+                flags: backing,
             },
         );
     }
@@ -196,10 +233,10 @@ impl DrawList {
             Instance {
                 bounds: shadow.bounds.to_array(),
                 clip: shadow.clip.to_array(),
-                color: shadow.color.to_array(),
                 radii: shadow.corner_radii.to_array(),
                 params: [shadow.blur_radius.max(0.0) * 0.5, 0.0, 0.0, 0.0],
-                kind: [SHADOW, 0.0, f32::from(u8::from(shadow.backing)), 0.0],
+                color: unorm(shadow.color),
+                flags: SHADOW | if shadow.backing { LAYER_RADII } else { 0 },
                 ..Default::default()
             },
         );
@@ -220,14 +257,14 @@ impl DrawList {
             Instance {
                 bounds: [glyph.origin.x, glyph.origin.y, 0.0, 0.0],
                 clip: glyph.clip.to_array(),
-                color: glyph.color.to_array(),
                 params: [
                     mask.x as f32,
                     mask.y as f32,
                     mask.width as f32,
                     mask.height as f32,
                 ],
-                kind: [GLYPH, 0.0, 0.0, 0.0],
+                color: unorm(glyph.color),
+                flags: GLYPH,
                 ..Default::default()
             },
         );
@@ -245,17 +282,21 @@ impl DrawList {
         if bounds.is_empty() || clip.intersect(&bounds).is_empty() || tint.a <= 0.0 {
             return;
         }
-        let mask = f32::from(u8::from(image.format() == ImageFormat::Alpha8));
+        let mask = if image.format() == ImageFormat::Alpha8 {
+            ALPHA_MASK
+        } else {
+            0
+        };
         self.push(
             Some(image),
             bounds.inflate(1.0).intersect(&clip),
             Instance {
                 bounds: bounds.to_array(),
                 clip: clip.to_array(),
-                color: tint.to_array(),
                 radii: corner_radii.to_array(),
                 params: source.to_array(),
-                kind: [IMAGE, 0.0, 0.0, mask],
+                color: unorm(tint),
+                flags: IMAGE | mask,
                 ..Default::default()
             },
         );
@@ -272,26 +313,14 @@ impl DrawList {
         }
         self.instances.push(instance);
         self.extent = Some(self.extent.map_or(reach, |extent| extent.union(&reach)));
-        self.changed();
+        self.revision += 1;
     }
 
-    pub(crate) fn sync(&self, device: &Device, queue: &Queue) -> u64 {
-        if self.uploaded.replace(true) {
-            return 0;
-        }
-        upload(
-            &mut self.buffer.borrow_mut(),
-            device,
-            queue,
-            cast_slice(&self.instances),
-        )
+    pub(crate) fn instances(&self) -> &[Instance] {
+        &self.instances
     }
 
     pub(crate) fn batches(&self) -> &[Batch] {
         &self.batches
-    }
-
-    pub(crate) fn buffer(&self) -> Ref<'_, Option<Buffer>> {
-        self.buffer.borrow()
     }
 }
