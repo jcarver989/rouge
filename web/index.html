@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Rouge</title>
+    <link rel="modulepreload" href="./MODULE.js" />
+    <link rel="preload" href="./MODULE_bg.wasm" as="fetch" type="application/wasm" crossorigin />
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+      import init from "./MODULE.js";
+      init({ module_or_path: new URL("./MODULE_bg.wasm", import.meta.url) });
+    </script>
+  </body>
+</html>

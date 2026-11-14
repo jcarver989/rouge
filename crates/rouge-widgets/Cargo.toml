@@ -19,8 +19,6 @@ rouge-theme.workspace = true
 
 [dev-dependencies]
 rouge-render.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rouge.workspace = true
 
 [lints]

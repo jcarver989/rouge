@@ -58,6 +58,12 @@ too_many_lines = "allow"
 unnecessary_wraps = "allow"
 unreadable_literal = "allow"
 
+[profile.wasm-release]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
 [profile.dev]
 debug = "line-tables-only"
 
