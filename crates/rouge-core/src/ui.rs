@@ -17,7 +17,7 @@ use crate::window::{Appearance, Menu, MenuItem, Sent, WindowCommand, WindowHandl
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, expect_context, poll_tasks, provide_context, signal, stats,
 };
-use rouge_render::{Atlas, Item, Point, Rect, Size, Surfaces};
+use rouge_render::{Atlas, Color, Point, Rect, Scene, Size, Surfaces};
 use rouge_theme::UiPalette;
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
@@ -128,8 +128,26 @@ pub struct Ui {
     shortcuts: Vec<(Chord, MenuItem)>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Wake {
+    Idle,
+    At(f64),
+    Now,
+}
+
+impl Wake {
+    pub fn sooner(self, other: Wake) -> Wake {
+        match (self, other) {
+            (Wake::Now, _) | (_, Wake::Now) => Wake::Now,
+            (Wake::At(a), Wake::At(b)) => Wake::At(a.min(b)),
+            (Wake::At(at), Wake::Idle) | (Wake::Idle, Wake::At(at)) => Wake::At(at),
+            (Wake::Idle, Wake::Idle) => Wake::Idle,
+        }
+    }
+}
+
 pub struct Frame<'a> {
-    pub scene: Vec<Item<'a>>,
+    pub scene: Scene<'a>,
     pub atlas: &'a mut Atlas,
 }
 
@@ -167,12 +185,14 @@ impl Ui {
             let keymap = Keymap(signal(Vec::new()));
             provide_context(keymap);
             tree.observe_keymap(keymap);
-            Theme::provide(UiPalette::light());
+            let theme = Theme::provide(UiPalette::light());
+            tree.set_theme(theme);
             let mut cx = BuildCx {
                 parent: tree.content(),
                 tree: &mut tree,
                 queue: &queue,
                 text: &mut text_system,
+                theme: Some((theme, None)),
             };
             root().build(&mut cx);
             (size, zoom, window_handle)
@@ -219,8 +239,14 @@ impl Ui {
         self.tree.tick_caret(now);
         self.flush();
         let animating = self.animate(now);
-        self.publish();
-        self.flush();
+        self.settle_layout();
+        let changed = self.paint();
+        self.tree.place_surfaces(self.cache.scale);
+        self.last_tick = self.tree.compositor.is_animating().then_some(now);
+        animating || changed
+    }
+
+    fn settle_layout(&mut self) {
         self.layout();
         self.publish();
         self.flush();
@@ -228,10 +254,7 @@ impl Ui {
             self.tree.stats.relayouts += 1;
         }
         self.publish();
-        let changed = self.paint();
-        self.tree.place_surfaces(self.cache.scale);
-        self.last_tick = self.tree.compositor.is_animating().then_some(now);
-        animating || changed
+        self.flush();
     }
 
     pub fn flush(&mut self) {
@@ -240,11 +263,13 @@ impl Ui {
             self.scope.run(|| {
                 batch(|| {
                     while let Some(patch) = self.queue.pop() {
+                        let theme = self.tree.theme().map(|theme| (theme, None));
                         patch.apply(&mut BuildCx {
                             parent: self.tree.content(),
                             tree: &mut self.tree,
                             queue: &self.queue,
                             text: &mut self.text_system,
+                            theme,
                         });
                         self.tree.stats.patches += 1;
                     }
@@ -256,6 +281,7 @@ impl Ui {
                 break;
             }
         }
+        self.tree.resolve_styles();
         self.tree.publish_bindings();
     }
 
@@ -265,6 +291,8 @@ impl Ui {
             let dt = self.last_tick.map_or(0.0, |last| (now - last).max(0.0));
             self.tree.compositor.tick(dt as f32);
         }
+        self.publish();
+        self.flush();
         animating
     }
 
@@ -324,11 +352,14 @@ impl Ui {
         self.text_system.add_font(data)
     }
 
-    pub fn needs_frame(&self) -> bool {
-        !self.queue.is_empty()
+    pub fn next_frame(&self) -> Wake {
+        if !self.queue.is_empty()
             || self.tree.dirty() != Dirty::None
             || self.tree.compositor.is_animating()
-            || self.tree.caret_animating(self.now())
+        {
+            return Wake::Now;
+        }
+        self.tree.caret_wake(self.time())
     }
 
     pub fn is_animating(&self) -> bool {
@@ -377,19 +408,26 @@ impl Ui {
         self.tree.set_size(size);
     }
 
+    pub fn clear_color(&self) -> Color {
+        self.tree.root_background().unwrap_or_else(|| {
+            self.scope
+                .run(|| Theme::current().with_untracked(|palette| palette.canvas))
+        })
+    }
+
     pub fn scale(&self) -> f32 {
         self.cache.scale
     }
 
-    fn now(&self) -> f64 {
+    pub fn time(&self) -> f64 {
         self.clock
             .unwrap_or_else(|| self.started.elapsed().as_secs_f64())
     }
 
-    pub fn frame(&mut self) -> Frame<'_> {
+    pub fn frame<'a>(&'a mut self, surfaces: &Surfaces) -> Frame<'a> {
         let _scene = trace_span!("scene").entered();
         Frame {
-            scene: self.tree.compositor.scene(self.cache.scale),
+            scene: self.tree.compositor.scene(self.cache.scale, surfaces),
             atlas: &mut self.cache.atlas,
         }
     }
@@ -613,7 +651,7 @@ impl Ui {
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(position) = self.pointer else { return };
         self.held = Some(button);
-        let now = self.now();
+        let now = self.time();
         self.flush();
         if button == PointerButton::Primary {
             self.tree.press();
@@ -627,7 +665,7 @@ impl Ui {
         let path = self.tree.hover_path().to_vec();
         self.dispatch(&path, On::PointerDown, position, button);
         if button == PointerButton::Primary {
-            let samples = Samples::new(self.now(), position);
+            let samples = Samples::new(self.time(), position);
             let targets = self.tree.listeners(&path, On::Drag);
             self.drag = targets.first().map(|(element, _)| Drag {
                 element: *element,
@@ -764,7 +802,7 @@ impl Ui {
     pub fn scroll_drag(&mut self, delta: Point) {
         let by = Point::ZERO - delta;
         if self.scroll_event(delta) {
-            let now = self.now();
+            let now = self.time();
             let layer = (self.scrolling.as_ref().and_then(|drag| drag.layer))
                 .or_else(|| self.scroll_target(by, true));
             let drag = self.scrolling.get_or_insert_with(|| ScrollDrag {
@@ -786,7 +824,7 @@ impl Ui {
         let Some(drag) = self.scrolling.take() else {
             return;
         };
-        let velocity = drag.samples.velocity(self.now());
+        let velocity = drag.samples.velocity(self.time());
         if let Some(layer) = drag.layer {
             self.tree.scroll_release(layer, velocity);
         }
@@ -819,7 +857,7 @@ impl Ui {
     }
 
     fn drag_moved(&mut self, position: Point) {
-        let now = self.now();
+        let now = self.time();
         let Some(drag) = &mut self.drag else { return };
         drag.samples.push(now, position);
         let travel = position - drag.start;
@@ -853,7 +891,7 @@ impl Ui {
                 Point::ZERO
             },
             translation: position - drag.start,
-            velocity: drag.samples.velocity(self.now()),
+            velocity: drag.samples.velocity(self.time()),
         };
         self.emit(&listeners, Event::Drag(&event));
     }

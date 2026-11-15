@@ -4,7 +4,7 @@ use crate::tree::Kind;
 use crate::view::{AnyView, BuildCx, Div, View, div};
 use rouge_macros::component;
 use rouge_reactive::{Signal, signal};
-use rouge_render::{Placement, SurfaceError, SurfaceId, SurfaceSource, SurfaceStatus};
+use rouge_render::{SurfaceConfig, SurfaceError, SurfaceId, SurfaceSource, SurfaceStatus};
 use std::rc::Rc;
 
 type Fallback = Rc<dyn Fn(SurfaceError) -> AnyView>;
@@ -13,12 +13,12 @@ type StatusSink = Box<dyn Fn(SurfaceStatus)>;
 pub(crate) struct SurfaceSpec {
     pub id: SurfaceId,
     pub attach: Option<(SurfaceSource, StatusSink)>,
-    pub placement: Option<Placement>,
+    pub placement: Option<SurfaceConfig>,
 }
 
 pub(crate) enum SurfaceOp {
     Attach(SurfaceSource, StatusSink),
-    Place(SurfaceId, Placement),
+    Place(SurfaceId, SurfaceConfig),
     Detach(SurfaceId),
 }
 

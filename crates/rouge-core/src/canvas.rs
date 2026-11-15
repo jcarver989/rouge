@@ -3,11 +3,13 @@ use crate::path::Path;
 use crate::prop::{IntoProp, Prop};
 use crate::styled;
 use crate::text::{TextLayout, TextStyle, TextSystem};
+use crate::theme::{Fill, Theme};
 use crate::tree::Kind;
 use crate::view::{BuildCx, Div, Patch, View, div};
 use rouge_macros::component;
-use rouge_reactive::{Scope, Signal, effect, run_in, signal, untrack};
+use rouge_reactive::{Scope, Signal, effect, run_in, signal, untrack, use_context};
 use rouge_render::{Color, ImageData, ImageQuad, Point, Quad, Rect, Size};
+use rouge_theme::Role;
 use std::rc::Rc;
 
 pub(crate) type HitListener = Rc<dyn Fn(Option<TextHit>, Modifiers)>;
@@ -363,7 +365,7 @@ pub struct Icon {
     canvas: Div,
     path: Path,
     view_box: Size,
-    color: Prop<Color>,
+    color: Prop<Fill>,
     stroke: Option<(f32, bool)>,
 }
 
@@ -373,7 +375,7 @@ pub fn icon(path: Path) -> Icon {
         canvas: div(),
         path,
         view_box: Size::new(24.0, 24.0),
-        color: Prop::Static(Color::BLACK),
+        color: Prop::Static(Fill::Role(Role::Text)),
         stroke: None,
     }
 }
@@ -384,7 +386,7 @@ impl Icon {
         self
     }
 
-    pub fn color<U>(mut self, color: impl IntoProp<Color, U>) -> Self {
+    pub fn color<U>(mut self, color: impl IntoProp<Fill, U>) -> Self {
         self.color = color.into_prop();
         self
     }
@@ -411,6 +413,7 @@ impl View for Icon {
             color,
             stroke,
         } = self;
+        let theme = use_context::<Theme>();
         let draw = move |painter: &mut Painter| {
             let size = painter.size();
             if size.width <= 0.0 || size.height <= 0.0 {
@@ -424,10 +427,11 @@ impl View for Icon {
                 },
             );
             let scale = (size.width / view_box.width).min(size.height / view_box.height);
+            let color = theme.map_or(Color::BLACK, |theme| theme.resolve(color.get()));
             match stroke {
-                Some((width, true)) => painter.stroke_round(&fitted, width * scale, color.get()),
-                Some((width, false)) => painter.stroke(&fitted, width * scale, color.get()),
-                None => painter.fill(&fitted, color.get()),
+                Some((width, true)) => painter.stroke_round(&fitted, width * scale, color),
+                Some((width, false)) => painter.stroke(&fitted, width * scale, color),
+                None => painter.fill(&fitted, color),
             }
         };
         Canvas {

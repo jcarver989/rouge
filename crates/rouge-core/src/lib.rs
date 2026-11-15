@@ -33,7 +33,7 @@ pub use compositor::{
     Compositor, Content, EffectSlot, LayerId, LayerPose, MotionId, Nested, ScrollLinked,
     ScrollState,
 };
-pub use control::{Each, Show, dynamic, each, overlay, show, switch};
+pub use control::{Each, IntoItems, Show, dynamic, each, overlay, show, switch};
 pub use editable::{Editable, editable};
 pub use event::{
     Chord, ChordError, Cursor, DragEvent, DragPhase, FileDropEvent, FileDropPhase, FocusEvent,
@@ -47,19 +47,17 @@ pub use length::{Length, auto, pct, px};
 pub use motion::{Animation, Completion, Motion, MotionProp, motion};
 pub use path::{Path, PathBuilder};
 pub use prop::{AnyEffect, IntoProp, Prop, PropFrom};
-pub use rouge_theme::{Rgba, UiPalette};
+pub use rouge_theme::{Rgba, Role, UiPalette};
 pub use scroll::{
     Align, RowHeight, RowKey, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
     virtual_list_handle,
 };
 pub use style::{BoxShadow, Declaration, Slot, StyleDelta, Styled, Typography};
 pub use surface::{Surface, surface};
-pub use theme::{Palette, Theme};
+pub use theme::{Fill, Palette, Theme};
 pub use tree::{FrameStats, PaintRegion};
-pub use ui::{Frame, Ui, window_size, zoom};
-pub use view::{
-    AnyView, Apply, BuildCx, Div, FocusKind, Interactions, Text, View, div, rich_text, text,
-};
+pub use ui::{Frame, Ui, Wake, window_size, zoom};
+pub use view::{AnyView, Apply, BuildCx, Div, FocusPolicy, Text, View, div, rich_text, text};
 
 #[doc(hidden)]
 pub use rouge_macros::__element;

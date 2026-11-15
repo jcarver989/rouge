@@ -1,19 +1,20 @@
 use super::content::TextData;
 use super::edit::CARET_WIDTH;
 use super::layers::{LayerRef, LayerState, Slot};
-use super::{Element, ElementId, Kind, Tree};
+use super::{Element, ElementId, Kind, Tree, theme_at};
 use crate::canvas::{PaintOp, ShapedRun};
 use crate::compositor::{Compositor, Content, Nested};
 use crate::image::{Fit, ImageSpec};
 use crate::path::Path;
 use crate::style::Dirty;
 use crate::text::{GlyphKey, TextLayout, TextRect, TextSystem};
+use crate::theme::Palette;
 use rouge_render::{
     Atlas, AtlasRect, Color, Corners, DrawList, Edges, Glyph, ImageData, ImageQuad, Point, Quad,
     Rect, Shadow, Size,
 };
+use rustc_hash::FxHashMap;
 use slotmap::SlotMap;
-use std::collections::HashMap;
 use std::mem::{replace, take};
 use tracing::trace_span;
 use zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
@@ -39,8 +40,8 @@ struct PathKey {
 pub(crate) struct PaintCache {
     pub atlas: Atlas,
     pub scale: f32,
-    glyphs: HashMap<GlyphKey, Option<CachedGlyph>>,
-    paths: HashMap<PathKey, Option<(ImageData, i32, i32)>>,
+    glyphs: FxHashMap<GlyphKey, Option<CachedGlyph>>,
+    paths: FxHashMap<PathKey, Option<(ImageData, i32, i32)>>,
 }
 
 impl PaintCache {
@@ -48,8 +49,8 @@ impl PaintCache {
         PaintCache {
             atlas: Atlas::new(),
             scale,
-            glyphs: HashMap::new(),
-            paths: HashMap::new(),
+            glyphs: FxHashMap::default(),
+            paths: FxHashMap::default(),
         }
     }
 }
@@ -60,6 +61,8 @@ struct PaintCx<'a> {
     repaint_all: bool,
     layer_paints: u64,
     focused: Option<ElementId>,
+    palette: Palette,
+    fallback: Palette,
 }
 
 struct LayerTarget {
@@ -85,6 +88,8 @@ impl LayerTarget {
 
 impl Tree {
     pub(crate) fn paint(&mut self, cache: &mut PaintCache, text_system: &mut TextSystem) -> bool {
+        self.sync_themes();
+        self.resolve_styles();
         let dirty = replace(&mut self.dirty, Dirty::None);
         if dirty.needs_layout() {
             self.dirty = Dirty::Layout;
@@ -99,6 +104,8 @@ impl Tree {
                 repaint_all,
                 layer_paints: 0,
                 focused,
+                palette: self.palette_at(self.root),
+                fallback: self.palette_at(self.root),
             };
             paint_layers(
                 &mut self.elements,
@@ -136,6 +143,7 @@ fn paint_layers(
     let layer_id = state.id;
     if replace(&mut state.dirty, false) || cx.repaint_all {
         let (id, slot) = layer;
+        cx.palette = theme_at(elements, id).map_or(cx.fallback, |theme| theme.get_untracked());
         let element = &elements[id];
         let mut target = LayerTarget {
             root: layer,
@@ -196,6 +204,25 @@ fn paint(
         target.nest((id, Slot::Own), clip);
         return;
     }
+    let outer = element
+        .extras()
+        .and_then(|extras| extras.theme)
+        .map(|theme| replace(&mut cx.palette, theme.get_untracked()));
+    paint_element(elements, id, clip, target, backing, cx);
+    if let Some(outer) = outer {
+        cx.palette = outer;
+    }
+}
+
+fn paint_element(
+    elements: &SlotMap<ElementId, Element>,
+    id: ElementId,
+    clip: Rect,
+    target: &mut LayerTarget,
+    backing: bool,
+    cx: &mut PaintCx<'_>,
+) {
+    let element = &elements[id];
     let style = element.effective_style();
     let radii = if backing {
         Corners::ZERO
@@ -206,7 +233,7 @@ fn paint(
         origin: element.bounds.origin - target.origin,
         size: element.bounds.size,
     };
-    for shadow in &style.shadows {
+    for shadow in style.shadows.iter() {
         target.out().push_shadow(Shadow {
             bounds: bounds.translate(shadow.offset).inflate(shadow.spread),
             clip,
@@ -223,14 +250,14 @@ fn paint(
         });
     }
 
-    let has_border = !element.border.is_zero() && style.border_color.a > 0.0;
-    let background = style.background.filter(|c| backing || c.a > 0.0);
+    let has_border = !element.border.is_zero() && style.border_color.is_visible();
+    let background = style.background.filter(|fill| backing || fill.is_visible());
     if background.is_some() || has_border {
         target.out().push_quad(Quad {
             bounds,
             clip,
-            background: background.unwrap_or_default(),
-            border_color: style.border_color,
+            background: background.map_or(Color::TRANSPARENT, |fill| fill.resolve(&cx.palette)),
+            border_color: style.border_color.resolve(&cx.palette),
             corner_radii: radii,
             border_widths: if has_border {
                 element.border
@@ -454,13 +481,21 @@ fn paint_text(
         return;
     };
     let Some(edit) = &text.edit else {
-        return paint_glyphs(layout, origin, clip, text.color, out, cx);
+        return paint_glyphs(
+            layout,
+            origin,
+            clip,
+            text.color.resolve(&cx.palette),
+            out,
+            cx,
+        );
     };
     if text.content.is_empty() && !text.placeholder.is_empty() {
         let shaped = cx
             .text_system
             .layout(&text.placeholder, &text.style, text.wrap_width);
-        paint_glyphs(&shaped, origin, clip, text.placeholder_color, out, cx);
+        let color = text.placeholder_color.resolve(&cx.palette);
+        paint_glyphs(&shaped, origin, clip, color, out, cx);
     }
     clip = clip.intersect(
         &Rect {
@@ -487,7 +522,14 @@ fn paint_text(
             });
         }
     }
-    paint_glyphs(layout, origin, clip, text.color, out, cx);
+    paint_glyphs(
+        layout,
+        origin,
+        clip,
+        text.color.resolve(&cx.palette),
+        out,
+        cx,
+    );
     if !focused {
         return;
     }
@@ -500,14 +542,17 @@ fn paint_text(
         let underline = Rect::new(line.origin.x, line.max().y - 1.5, line.size.width, 1.0);
         out.push_quad(Quad {
             clip,
-            ..Quad::new(underline, text.color)
+            ..Quad::new(underline, text.color.resolve(&cx.palette))
         });
     }
     if selection.is_collapsed() && edit.caret_visible {
         let caret = rect(&layout.caret(selection, CARET_WIDTH));
         out.push_quad(Quad {
             clip,
-            ..Quad::new(caret, edit.caret_color.unwrap_or(text.color))
+            ..Quad::new(
+                caret,
+                edit.caret_color.unwrap_or(text.color.resolve(&cx.palette)),
+            )
         });
     }
 }

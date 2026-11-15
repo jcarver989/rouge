@@ -3,18 +3,19 @@ use super::{ElementId, Kind, Tree};
 use crate::canvas::{PaintOp, ShapedRun};
 use crate::style::Dirty;
 use crate::text::{TextLayout, TextStyle, TextSystem};
-use crate::theme::Theme;
+use crate::theme::Fill;
+use crate::view::TextOp;
 use rouge_render::{Color, ImageData, Point, Size};
+use rouge_theme::Role;
 use std::rc::Rc;
 
 pub(crate) struct TextData {
     pub content: String,
     pub style: TextStyle,
-    pub color: Color,
-    pub theme: Option<Theme>,
+    pub color: Fill,
     pub edit: Option<Box<EditState>>,
     pub placeholder: String,
-    pub placeholder_color: Color,
+    pub placeholder_color: Fill,
     pub(super) layout: Option<TextLayout>,
     pub(super) inset: Point,
     pub(super) wrap_width: Option<f32>,
@@ -26,11 +27,10 @@ impl Default for TextData {
         TextData {
             content: String::new(),
             style: TextStyle::default(),
-            color: Color::BLACK,
-            theme: None,
+            color: Fill::Role(Role::Text),
             edit: None,
             placeholder: String::new(),
-            placeholder_color: Color::TRANSPARENT,
+            placeholder_color: Fill::Color(Color::TRANSPARENT),
             layout: None,
             inset: Point::ZERO,
             wrap_width: None,
@@ -78,9 +78,23 @@ impl Tree {
             if let Some(edit) = &mut text.edit {
                 edit.stale = true;
             }
-            self.taffy.mark_dirty(element.taffy).expect("taffy dirty");
+            self.invalidate_layout(id);
         }
         self.mark_element(id, dirty);
+    }
+
+    pub(crate) fn update_text_prop(&mut self, id: ElementId, op: TextOp) {
+        match op {
+            TextOp::Spans(spans) => {
+                self.update_text(id, Dirty::Layout, |text| text.style.spans = spans);
+            }
+            TextOp::Placeholder(placeholder) => {
+                self.update_text(id, Dirty::Paint, |text| text.placeholder = placeholder);
+            }
+            TextOp::PlaceholderColor(color) => {
+                self.update_text(id, Dirty::Paint, |text| text.placeholder_color = color);
+            }
+        }
     }
 
     pub(crate) fn set_text_content(&mut self, id: ElementId, content: String) {
@@ -104,7 +118,7 @@ impl Tree {
             != data.as_ref().map(|data| (data.width(), data.height()));
         image.data = data;
         if resized {
-            self.taffy.mark_dirty(element.taffy).expect("taffy dirty");
+            self.invalidate_layout(id);
         }
         self.mark_element(id, if resized { Dirty::Layout } else { Dirty::Paint });
     }
@@ -152,7 +166,7 @@ impl Tree {
             height != last.height
         });
         if resized {
-            self.taffy.mark_dirty(element.taffy).expect("taffy dirty");
+            self.invalidate_layout(id);
         }
         self.mark_element(id, if resized { Dirty::Layout } else { Dirty::Paint });
     }

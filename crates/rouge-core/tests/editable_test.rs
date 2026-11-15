@@ -1,6 +1,7 @@
 #[path = "tree/edit_test.rs"]
 mod edit;
 
+use rouge_core::Wake;
 use rouge_core::testing::{BLUE, RED, TestResult, TestUi, TestUiBuilder, WHITE, assert_near};
 use rouge_core::{
     ClipboardMedia, Color, EditAction, ImeEvent, Key, MemoryClipboard, Point, Styled, div, editable,
@@ -197,8 +198,35 @@ fn caret_blinks_without_layout_resets_on_activity_and_stops_after_idle_timeout()
     assert_near(ui.pixel(0, 10)?, WHITE, "hidden again");
     ui.advance(10.0);
     assert_near(ui.pixel(0, 10)?, RED, "idle caret stays visible");
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     assert_eq!(ui.stats().layouts, layouts);
+    Ok(())
+}
+
+#[test]
+fn a_blinking_caret_wakes_at_its_next_flip_instead_of_every_frame() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().build(|| editable(signal(String::new())).autofocus());
+    ui.press("a");
+    ui.advance(0.1);
+    let mut wakes = 0;
+    loop {
+        match ui.next_frame() {
+            Wake::Now => ui.advance(0.0),
+            Wake::At(at) => {
+                assert!(
+                    at > ui.time(),
+                    "a deadline in the past: {at} at {}",
+                    ui.time()
+                );
+                ui.advance(at - ui.time())
+            }
+            Wake::Idle => break,
+        };
+        wakes += 1;
+        assert!(wakes < 100, "the caret never settles");
+    }
+    assert!((18..=22).contains(&wakes), "woke {wakes} times in 10 s");
     Ok(())
 }
 

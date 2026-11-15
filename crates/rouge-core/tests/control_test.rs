@@ -1,3 +1,4 @@
+use rouge_core::Wake;
 use rouge_core::testing::{
     BLUE, LINEAR, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
 };
@@ -246,8 +247,9 @@ fn each_builds_disposes_moves_and_updates_only_the_rows_that_changed() {
     assert_eq!(ui.stats().paints, paints + 1, "a kept row updates in place");
     items.set(vec![item(4, 40.0), item(1, 55.0), item(3, 30.0)]);
     ui.flush();
-    assert!(
-        !ui.needs_frame(),
+    assert_eq!(
+        ui.next_frame(),
+        Wake::Idle,
         "an identical list changes nothing at all"
     );
 
@@ -388,7 +390,7 @@ fn show_enter_animates_in_from_a_pose() -> TestResult {
     assert_eq!(ui.first_x(RED, 5)?, 50);
     ui.run(0.55);
     assert_eq!(ui.first_x(RED, 5)?, 0, "ends at its declared position");
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     Ok(())
 }
 
@@ -427,7 +429,7 @@ fn show_exit_disposes_immediately_but_keeps_painting_until_the_animation_ends() 
     assert_eq!(ui.first_x(RED, 5)?, 50, "running its exit animation");
     ui.run(0.55);
     assert_eq!(ui.first_x(RED, 5)?, 200, "until it is done");
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     Ok(())
 }
 

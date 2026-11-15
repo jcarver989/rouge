@@ -243,11 +243,8 @@ impl Tree {
         }
         self.mark_layer(parent, true);
         let range = start..start + count;
-        let p = &mut self.elements[parent];
-        let removed: Vec<_> = p.children.drain(range.clone()).collect();
-        self.taffy
-            .remove_children_range(p.taffy, range)
-            .expect("taffy remove children");
+        let removed: Vec<_> = self.elements[parent].children.drain(range).collect();
+        self.invalidate_layout(parent);
         for id in removed {
             self.elements[id].parent = None;
         }
@@ -271,9 +268,11 @@ impl Tree {
                 _ => false,
             };
             let mut stack = vec![top];
-            while let Some(element) = stack.pop().and_then(|id| self.elements.remove(id)) {
+            while let Some(element) = stack.pop().and_then(|id| {
+                self.layouts.remove(id);
+                self.elements.remove(id)
+            }) {
                 self.stats.elements_removed += 1;
-                self.taffy.remove(element.taffy).expect("taffy remove");
                 if let Kind::Surface(surface) = &element.kind {
                     self.surface_ops.push(SurfaceOp::Detach(surface.id));
                 }

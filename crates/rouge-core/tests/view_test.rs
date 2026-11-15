@@ -1,16 +1,106 @@
+use rouge_core::Wake;
 use rouge_core::testing::{
     BLACK, BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
     counter, recorder,
 };
 use rouge_core::{
-    BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Cursor, Div, Keyframes, LayoutTransition,
-    Mask, Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View, div, dynamic,
-    rich_text, show, text,
+    BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Cursor, Div, FocusPolicy, Keyframes,
+    LayoutTransition, Mask, Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View,
+    div, dynamic, rich_text, show, text,
 };
 use rouge_reactive::{Runtime, Signal, signal, stored};
 use rouge_render::headless::Image;
 use std::cell::Cell;
 use std::rc::Rc;
+
+#[test]
+fn an_activated_control_follows_its_enabled_signal_without_remounting() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let enabled = signal(false);
+    let (activations, activate) = counter();
+    let mut ui = TestUiBuilder::default().build(move || {
+        div().p(10.0).child(
+            div()
+                .test_id("control")
+                .size(20.0)
+                .bg(Color::BLUE)
+                .disabled(|style| style.bg(Color::RED))
+                .enabled(enabled)
+                .on_activate(activate),
+        )
+    });
+    let created = ui.stats().elements_created;
+    ui.hover_on("control")?;
+    assert_eq!(
+        ui.cursor(),
+        Cursor::Default,
+        "a disabled control is not clickable"
+    );
+    assert_near(ui.pixel(20, 20)?, RED, "disabled style");
+    ui.click_on("control")?;
+    ui.press("tab");
+    ui.press("enter");
+    assert_eq!(activations.get(), 0, "pointer and keyboard are rejected");
+    enabled.set(true);
+    ui.advance(0.0);
+    assert_eq!(ui.cursor(), Cursor::Pointer);
+    assert_near(ui.pixel(20, 20)?, BLUE, "enabled style");
+    ui.click_on("control")?;
+    ui.press("tab");
+    ui.press("enter");
+    ui.press("space");
+    assert_eq!(activations.get(), 3);
+    assert_eq!(ui.stats().elements_created, created, "nothing was rebuilt");
+    Ok(())
+}
+
+#[test]
+fn selected_checked_and_conditional_variants_follow_their_signals() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (selected, checked, warn) = (signal(false), signal(false), signal(false));
+    let mut ui = TestUiBuilder::default().size(60.0, 20.0).build(move || {
+        let cell = || div().size(20.0).bg(Color::WHITE);
+        div()
+            .flex()
+            .child(cell().selected(|s| s.bg(Color::RED)).is_selected(selected))
+            .child(cell().checked(|s| s.bg(Color::BLUE)).is_checked(checked))
+            .child(cell().when(warn, |s| s.bg(Color::BLACK)))
+    });
+    let colors = |ui: &mut TestUi| -> Result<_, TestError> {
+        Ok([ui.pixel(10, 10)?, ui.pixel(30, 10)?, ui.pixel(50, 10)?])
+    };
+    assert_eq!(colors(&mut ui)?, [WHITE, WHITE, WHITE]);
+    selected.set(true);
+    checked.set(true);
+    warn.set(true);
+    ui.advance(0.0);
+    assert_eq!(colors(&mut ui)?, [RED, BLUE, BLACK]);
+    warn.set(false);
+    ui.advance(0.0);
+    assert_eq!(colors(&mut ui)?[2], WHITE);
+    Ok(())
+}
+
+#[test]
+fn focus_policy_decides_whether_tab_reaches_a_control() {
+    let _rt = Runtime::new().enter();
+    let (activations, activate) = counter();
+    let mut ui = TestUiBuilder::default().build(move || {
+        let control = |policy| {
+            let activate = activate.clone();
+            div().size(10.0).on_activate(activate).focus_policy(policy)
+        };
+        div()
+            .child(control(FocusPolicy::None))
+            .child(control(FocusPolicy::Roving))
+            .child(control(FocusPolicy::Tab))
+    });
+    ui.press("tab");
+    ui.press("enter");
+    ui.press("tab");
+    ui.press("enter");
+    assert_eq!(activations.get(), 2, "only the tab stop takes focus, twice");
+}
 
 #[test]
 fn text_content_accepts_strings_closures_and_signals() {
@@ -103,7 +193,11 @@ fn content_change_relayouts_but_color_change_only_repaints() -> TestResult {
 
     label.set("a considerably longer label".into());
     ui.flush();
-    assert!(!ui.needs_frame(), "identical content changes nothing");
+    assert_eq!(
+        ui.next_frame(),
+        Wake::Idle,
+        "identical content changes nothing"
+    );
     Ok(())
 }
 
@@ -217,7 +311,7 @@ fn transition_runs_in_the_compositor_and_lands_on_target() -> TestResult {
         "the binding ran once to hand over the target"
     );
     ui.flush();
-    assert!(ui.is_animating() && ui.needs_frame());
+    assert!(ui.is_animating() && (ui.next_frame() == Wake::Now));
 
     ui.update_at(5.0);
     assert_eq!(
@@ -238,7 +332,7 @@ fn transition_runs_in_the_compositor_and_lands_on_target() -> TestResult {
     );
     assert_eq!(positions[19], 100, "lands exactly on target");
     assert!(!ui.is_animating());
-    assert!(!ui.needs_frame(), "idle again once settled");
+    assert_eq!(ui.next_frame(), Wake::Idle, "idle again once settled");
 
     assert_eq!(binding_runs.get(), 2, "no reactive work per frame");
     let work = ui.stats() - stats;
@@ -382,7 +476,7 @@ fn animation_frames_upload_no_instance_data() -> TestResult {
     open.set(true);
     let stats = ui.stats();
     let mut frames = 0;
-    while ui.needs_frame() {
+    while ui.next_frame() == Wake::Now {
         frames += 1;
         ui.update_at(f64::from(frames) / 120.0);
         assert_eq!(
@@ -420,7 +514,7 @@ fn keyframes_play_in_the_compositor_then_hold_their_last_pose_or_repeat() -> Tes
             (0, 0, 0),
             "no layout or paint"
         );
-        Ok::<_, TestError>((positions, ui.needs_frame()))
+        Ok::<_, TestError>((positions, (ui.next_frame() == Wake::Now)))
     };
     let slide = Keyframes::new()
         .at(0.0, |pose| pose.translate_x(0.0))
@@ -645,7 +739,7 @@ fn effect_parameters_follow_the_element_transition() -> TestResult {
     );
     frosted.set(true);
     ui.run(0.5);
-    assert!(ui.needs_frame(), "the radius is still animating");
+    assert_eq!(ui.next_frame(), Wake::Now, "the radius is still animating");
     let partly = ui.pixel(105, 20)?[1];
     ui.run(0.6);
     let fully = ui.pixel(105, 20)?[1];
@@ -653,7 +747,7 @@ fn effect_parameters_follow_the_element_transition() -> TestResult {
         partly < 250 && fully < partly,
         "red spreads further as the radius grows: {partly} then {fully}"
     );
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     Ok(())
 }
 
@@ -985,7 +1079,7 @@ fn fade_to_blue(
         (0, 0, 0),
         "no layout and no paint at any point"
     );
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     Ok((half, done))
 }
 

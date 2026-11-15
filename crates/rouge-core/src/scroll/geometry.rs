@@ -4,8 +4,8 @@ use crate::compositor::ScrollState;
 use crate::prop::Prop;
 use rouge_reactive::{Memo, Signal, batch, effect, memo, signal};
 use rouge_render::Size;
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -73,7 +73,7 @@ impl Rows {
 
 pub(super) struct Keys<T> {
     pub(super) rows: Vec<RowKey<T>>,
-    indices: HashMap<T, usize>,
+    indices: FxHashMap<T, usize>,
 }
 
 impl<T: PartialEq> PartialEq for Keys<T> {
@@ -84,7 +84,7 @@ impl<T: PartialEq> PartialEq for Keys<T> {
 
 impl<T: Clone + Eq + Hash> Keys<T> {
     pub(super) fn new(rows: Vec<RowKey<T>>) -> Self {
-        let indices: HashMap<_, _> = rows
+        let indices: FxHashMap<_, _> = rows
             .iter()
             .enumerate()
             .map(|(i, row)| (row.id.clone(), i))
@@ -107,7 +107,7 @@ impl<T: Clone + Eq + Hash> Keys<T> {
     }
 }
 
-pub(super) type Measurements<T> = Signal<HashMap<usize, (Option<RowKey<T>>, Signal<Size>)>>;
+pub(super) type Measurements<T> = Signal<FxHashMap<usize, (Option<RowKey<T>>, Signal<Size>)>>;
 
 pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
     rows: &Rows,
@@ -180,7 +180,7 @@ pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
                         })
                         .collect()
                 } else {
-                    HashMap::new()
+                    FxHashMap::default()
                 };
                 Heights::Variable(VariableHeights::new(heights, cached))
             }

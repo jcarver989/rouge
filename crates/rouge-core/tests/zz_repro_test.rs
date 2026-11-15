@@ -1,4 +1,5 @@
 use rouge_core::Scrollable;
+use rouge_core::Wake;
 use rouge_core::testing::TestUi;
 use rouge_core::{ScrollState, Styled, div, scroll};
 use rouge_reactive::{Runtime, Signal, signal};
@@ -40,9 +41,15 @@ fn repro_macos_flick_into_bottom_edge() {
         "trace: {:?}",
         trace.iter().map(|v| v.round()).collect::<Vec<_>>()
     );
-    println!("needs_frame before release {}", ui.needs_frame());
+    println!(
+        "needs_frame before release {}",
+        (ui.next_frame() == Wake::Now)
+    );
     ui.scroll_release();
-    println!("needs_frame after release {}", ui.needs_frame());
+    println!(
+        "needs_frame after release {}",
+        (ui.next_frame() == Wake::Now)
+    );
     let mut after = Vec::new();
     for _ in 0..40 {
         ui.advance(dt);
@@ -87,7 +94,7 @@ fn proposed_release_with_finger_velocity_and_drop_momentum() {
     let settled = trace.iter().position(|v| *v == 200.0).unwrap_or(0);
     println!(
         "fixed: peak {peak} settled-frame {settled} needs_frame {}",
-        ui.needs_frame()
+        (ui.next_frame() == Wake::Now)
     );
     println!("fixed trace: {trace:?}");
 }

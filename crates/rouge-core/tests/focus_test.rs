@@ -2,8 +2,8 @@ use rouge_core::testing::{
     BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
 };
 use rouge_core::{
-    Chord, ChordError, Color, Cursor, FocusHandle, ImeEvent, Interactions, Key, KeyEvent,
-    Modifiers, Point, Styled, div, focus_handle, show,
+    Chord, ChordError, Color, Cursor, FocusHandle, ImeEvent, Key, KeyEvent, Modifiers, Point,
+    Styled, div, focus_handle, show,
 };
 use rouge_reactive::{Runtime, signal};
 use std::cell::RefCell;
@@ -258,10 +258,7 @@ fn removing_a_scope_does_not_restore_focus_to_an_element_removed_in_the_same_upd
                 .focus_scope()
                 .child(div().track_focus(editor).autofocus())
         };
-        let trigger = move || {
-            let state = signal(Interactions::default());
-            div().focusable().track_interaction(state)
-        };
+        let trigger = move || div().focusable();
         let root = div()
             .child(show(move || alive.get(), trigger))
             .child(show(move || alive.get() && open.get(), scope));

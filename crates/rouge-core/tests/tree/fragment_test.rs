@@ -1,3 +1,4 @@
+use rouge_core::Wake;
 use rouge_core::testing::{LINEAR, RED, TestResult, TestUi, TestUiBuilder};
 use rouge_core::{
     Color, Key, KeyEvent, Point, Pose, Rect, Styled, View, div, dynamic, each, editable,
@@ -96,7 +97,7 @@ fn a_row_removed_from_an_each_inside_a_show_animates_out_while_the_rest_close_th
     assert_eq!(ui.first_x(RED, 5)?, 50, "running its exit animation");
     ui.run(0.55);
     assert_eq!(ui.first_x(RED, 5)?, 200, "until it is done");
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     Ok(())
 }
 

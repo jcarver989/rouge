@@ -1,23 +1,20 @@
 mod common;
 
-use common::{CHILD, ROOT, Stage, StageBuilder};
+use common::{Stage, StageBuilder};
 use rouge_core::testing::{
     BLUE, GREEN, LINEAR, RED, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
 };
 use rouge_core::{
-    Color, ColorMatrix, EffectSlot, Glass, LayerId, LayerProp, Nested, Pose, Rect, ScrollState,
-    Scrollable, Styled, SurfaceError, SurfaceSource, SurfaceStatus, View, div, scroll, show,
-    surface, text,
+    Color, ColorMatrix, EffectSlot, Glass, LayerProp, Nested, Pose, Rect, ScrollState, Scrollable,
+    Styled, SurfaceError, SurfaceSource, SurfaceStatus, View, div, scroll, show, surface, text,
 };
 use rouge_reactive::{Runtime, signal};
 #[cfg(target_os = "macos")]
 use rouge_render::Sharing;
-#[cfg(target_os = "macos")]
-use rouge_render::interop::IoSurface;
 use rouge_render::testing::{Pattern, TestSurface, TestSurfaceBuilder, TestSurfaceError};
 use rouge_render::{
-    AlphaMode, BufferDesc, BufferRef, DrawList, Frame, GpuError, Origin, Placement, Point,
-    QueueMode, SurfaceConfig, SurfaceEvent, SurfaceId, surface_channel,
+    AlphaMode, BufferDesc, DrawList, Frame, GpuError, Origin, Point, SurfaceConfig, SurfaceEvent,
+    SurfaceId, surface_channel,
 };
 use std::cell::Cell;
 use std::error::Error;
@@ -231,10 +228,10 @@ fn the_region_selects_part_of_the_buffer_and_stretches_it() -> TestResult {
 fn a_surface_layer_is_clipped_transformed_and_faded_like_any_layer() -> TestResult {
     let (mut surface, mut stage) = scene(TestSurface::builder().size(100, 100))?;
     for prop in LayerProp::RADII {
-        stage.set(CHILD, prop, 30.0);
+        stage.set(stage.child, prop, 30.0);
     }
-    stage.set(CHILD, LayerProp::Scale, 0.5);
-    stage.set(CHILD, LayerProp::Opacity, 0.5);
+    stage.set(stage.child, LayerProp::Scale, 0.5);
+    stage.set(stage.child, LayerProp::Opacity, 0.5);
     surface.present(Pattern::Solid(RED))?;
     stage.draw();
     let image = stage.image()?;
@@ -247,7 +244,12 @@ fn a_surface_layer_is_clipped_transformed_and_faded_like_any_layer() -> TestResu
 #[test]
 fn a_content_effect_over_a_surface_refreshes_on_every_frame() -> TestResult {
     let (mut surface, mut stage) = scene(TestSurface::builder().size(100, 100))?;
-    stage.effect(CHILD, EffectSlot::Content(0), &ColorMatrix::IDENTITY, false);
+    stage.effect(
+        stage.child,
+        EffectSlot::Content(0),
+        &ColorMatrix::IDENTITY,
+        false,
+    );
     surface.present(Pattern::Solid(RED))?;
     stage.draw();
     assert_near(stage.image()?.pixel(50, 50), RED, "first frame");
@@ -265,16 +267,15 @@ fn a_content_effect_over_a_surface_refreshes_on_every_frame() -> TestResult {
 #[test]
 fn glass_over_a_surface_does_not_reuse_a_stale_backdrop() -> TestResult {
     let (mut surface, mut stage) = scene(TestSurface::builder().size(100, 100))?;
-    let glass = LayerId(2);
-    stage.compositor.create_layer(glass);
+    let glass = stage.compositor.create_layer();
     stage
         .compositor
         .set_frame(glass, Rect::new(20.0, 20.0, 60.0, 60.0));
     stage.effect(glass, EffectSlot::Backdrop, &Glass::frosted(8.0), false);
     stage.content(glass, vec![DrawList::new()], vec![]);
-    let nested = [CHILD, glass].map(|layer| Nested { layer, clip: None });
+    let nested = [stage.child, glass].map(|layer| Nested { layer, clip: None });
     stage.content(
-        ROOT,
+        stage.root,
         (0..3).map(|_| DrawList::new()).collect(),
         nested.to_vec(),
     );
@@ -296,16 +297,11 @@ fn glass_over_a_surface_does_not_reuse_a_stale_backdrop() -> TestResult {
 #[test]
 fn the_mailbox_keeps_the_newest_frame_and_returns_the_rest() -> TestResult {
     let (mut surface, mut stage) = scene(TestSurface::builder().size(100, 100))?;
-    let first = surface.present(Pattern::Solid(RED))?;
+    surface.present(Pattern::Solid(RED))?;
     surface.present(Pattern::Solid(BLUE))?;
     stage.draw();
     assert_near(stage.image()?.pixel(50, 50), BLUE, "the newest frame");
-    let events = surface.pump()?.to_vec();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, SurfaceEvent::Discarded(frame) if *frame == first))
-    );
+    surface.pump()?;
     assert_eq!(
         surface.free_buffers(),
         2,
@@ -335,53 +331,12 @@ fn a_replaced_buffer_is_released_after_the_gpu_finishes_with_it() -> TestResult 
 }
 
 #[test]
-fn a_frame_waits_for_its_fence() -> TestResult {
-    let (mut surface, mut stage) = scene(TestSurface::builder().size(100, 100))?;
-    surface.present(Pattern::Solid(RED))?;
-    stage.draw();
-    let (signal, fence) = surface.fence();
-    surface.present_frame(Pattern::Solid(BLUE), |frame| frame.after(fence))?;
-    assert!(!stage.surfaces().latch(Instant::now()));
-    signal.signal();
-    assert!(stage.surfaces().latch(Instant::now()));
-    stage.draw();
-    assert_near(stage.image()?.pixel(50, 50), BLUE, "after the fence");
-    Ok(())
-}
-
-#[test]
-fn timed_frames_are_shown_at_their_presentation_time() -> TestResult {
-    let builder = TestSurface::builder()
-        .size(100, 100)
-        .queue(QueueMode::Timed);
-    let (mut surface, mut stage) = scene(builder)?;
-    let start = Instant::now();
-    let at = |ms| start + Duration::from_millis(ms);
-    surface.present_frame(Pattern::Solid(RED), |frame| frame.present_at(at(10)))?;
-    surface.present_frame(Pattern::Solid(GREEN), |frame| frame.present_at(at(20)))?;
-    surface.present_frame(Pattern::Solid(BLUE), |frame| frame.present_at(at(30)))?;
-    let surfaces = stage.surfaces();
-    assert!(!surfaces.latch(at(5)), "nothing is due");
-    assert_eq!(surfaces.next_deadline(), Some(at(10)));
-    assert!(surfaces.latch(at(25)), "the latest due frame wins");
-    assert_eq!(surfaces.stats().frames_discarded, 1);
-    assert_eq!(surfaces.next_deadline(), Some(at(30)));
-    stage.headless.render(
-        Color::TRANSPARENT,
-        &stage.compositor.scene(1.0),
-        &mut stage.atlas,
-    );
-    assert_near(stage.image()?.pixel(50, 50), GREEN, "the frame due at 20ms");
-    Ok(())
-}
-
-#[test]
 fn frame_requests_are_answered_after_presenting_only_while_visible() -> TestResult {
     let (mut surface, mut stage) = scene(TestSurface::builder().size(100, 100))?;
     let now = Instant::now();
     let interval = Duration::from_millis(8);
     surface.request_frame();
-    stage.surfaces().latch(now);
+    stage.surfaces().latch();
     assert!(stage.surfaces().needs_frame());
     stage.surfaces().presented(now, interval);
     assert!(!stage.surfaces().needs_frame());
@@ -392,7 +347,7 @@ fn frame_requests_are_answered_after_presenting_only_while_visible() -> TestResu
 
     place(&mut stage, surface.id(), false);
     surface.request_frame();
-    stage.surfaces().latch(now);
+    stage.surfaces().latch();
     assert!(
         !stage.surfaces().needs_frame(),
         "hidden surfaces are not paced"
@@ -401,20 +356,21 @@ fn frame_requests_are_answered_after_presenting_only_while_visible() -> TestResu
 }
 
 #[test]
-fn configuration_changes_are_numbered_and_sent_once() -> TestResult {
+fn configuration_changes_are_sent_once() -> TestResult {
     let (mut surface, mut stage) = scene(TestSurface::builder())?;
-    assert_eq!(surface.config().map(|config| config.seq), Some(1));
+    assert!(surface.config().is_some());
     place(&mut stage, surface.id(), true);
-    stage.surfaces().latch(Instant::now());
+    stage.surfaces().latch();
     assert!(
         surface.pump()?.is_empty(),
         "an unchanged placement is not resent"
     );
     place(&mut stage, surface.id(), false);
-    stage.surfaces().latch(Instant::now());
-    surface.pump()?;
+    stage.surfaces().latch();
+    let events = surface.pump()?.to_vec();
+    assert_eq!(events.len(), 1);
     let config = surface.config().ok_or("no config")?;
-    assert_eq!((config.seq, config.visible), (2, false));
+    assert!(!config.visible);
     assert_eq!((config.width, config.height), (100, 100));
     Ok(())
 }
@@ -431,17 +387,13 @@ fn a_detached_surface_keeps_its_last_frame_until_its_layer_is_gone() -> TestResu
     assert_near(stage.image()?.pixel(50, 50), RED, "the last frame stays");
     assert_eq!(stage.surfaces().stats().surfaces, 1);
 
-    stage.compositor.remove_layer(CHILD);
+    stage.compositor.remove_layer(stage.child);
     stage.draw();
     stage.headless.wait()?;
     stage.surfaces().maintain();
     assert_eq!(stage.surfaces().stats().surfaces, 0);
-    let events = surface.pump()?.to_vec();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, SurfaceEvent::Released(_)))
-    );
+    surface.pump()?;
+    assert_eq!(surface.free_buffers(), 3, "the last buffer is released");
     Ok(())
 }
 
@@ -479,30 +431,34 @@ fn srgb_buffers_are_rejected() -> TestResult {
 
 #[test]
 fn a_producer_can_drive_the_protocol_directly() -> TestResult {
-    let (mut producer, source) = surface_channel(QueueMode::Mailbox);
+    let (mut producer, source) = surface_channel();
     let mut stage = staged(source)?;
     stage.draw();
-    let Some(SurfaceEvent::Attached(cx)) = producer.try_recv() else {
-        return Err("the producer was not attached".into());
-    };
+    assert_eq!(producer.try_recv(), Some(SurfaceEvent::Attached));
     assert!(matches!(
         producer.try_recv(),
         Some(SurfaceEvent::Configure(_))
     ));
-    let buffers = cx.allocate(&BufferDesc::new(4, 4).count(1))?;
-    let set = producer.register(&buffers);
+    producer.configure(BufferDesc::new(4, 4).count(1))?;
+    let queue = producer
+        .cx()
+        .ok_or("the producer was not attached")?
+        .queue()
+        .clone();
+    let (buffer, shared) = producer.acquire().ok_or("no free buffer")?;
     let pixels: Vec<u8> = [0u8, 0, 255, 255].repeat(16);
-    cx.queue().write_texture(
-        buffers[0].texture().as_image_copy(),
+    queue.write_texture(
+        shared.texture().as_image_copy(),
         &pixels,
         TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(16),
             rows_per_image: None,
         },
-        buffers[0].texture().size(),
+        shared.texture().size(),
     );
-    producer.submit(Frame::new(BufferRef { set, index: 0 }));
+    assert!(producer.acquire().is_none(), "the only buffer is in use");
+    producer.submit(Frame::new(buffer));
     stage.draw();
     assert_near(
         stage.image()?.pixel(50, 50),
@@ -531,13 +487,13 @@ fn io_surface_buffers_are_rendered_into_and_sampled_without_copies() -> TestResu
 #[cfg(target_os = "macos")]
 #[test]
 fn an_io_surface_written_by_the_producer_is_shown_as_is() -> TestResult {
-    let (mut producer, source) = surface_channel(QueueMode::Mailbox);
+    let (mut producer, source) = surface_channel();
     let mut stage = staged(source)?;
     stage.draw();
-    let Some(SurfaceEvent::Attached(cx)) = producer.try_recv() else {
-        return Err("the producer was not attached".into());
-    };
-    let io = IoSurface::new(8, 8)?;
+    assert_eq!(producer.try_recv(), Some(SurfaceEvent::Attached));
+    producer.configure(BufferDesc::new(8, 8).count(1).sharing(Sharing::Native))?;
+    let (buffer, shared) = producer.acquire().ok_or("no free buffer")?;
+    let io = shared.io_surface().ok_or("not an IOSurface")?;
     io.write(|bytes, stride| {
         for row in bytes.chunks_mut(stride) {
             for pixel in row[..32].chunks_mut(4) {
@@ -545,9 +501,7 @@ fn an_io_surface_written_by_the_producer_is_shown_as_is() -> TestResult {
             }
         }
     })?;
-    let buffer = cx.import_io_surface(io)?;
-    let set = producer.register(&[buffer]);
-    producer.submit(Frame::new(BufferRef { set, index: 0 }));
+    producer.submit(Frame::new(buffer));
     let stats = stage.draw();
     assert_near(
         stage.image()?.pixel(50, 50),
@@ -600,11 +554,11 @@ fn staged(source: SurfaceSource) -> Result<Stage, GpuError> {
 }
 
 fn place(stage: &mut Stage, id: SurfaceId, visible: bool) {
-    let placement = Placement {
+    let config = SurfaceConfig {
         width: 100,
         height: 100,
         scale: 1.0,
         visible,
     };
-    stage.surfaces().place(id, placement);
+    stage.surfaces().place(id, config);
 }

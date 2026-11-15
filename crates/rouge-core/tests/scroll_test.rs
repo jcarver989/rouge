@@ -1,3 +1,4 @@
+use rouge_core::Wake;
 use rouge_core::testing::{
     BLACK, BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, WHITE, counter,
 };
@@ -73,13 +74,14 @@ fn scrolling_moves_content_in_the_compositor_and_clamps() -> TestResult {
     let stats = ui.stats();
 
     ui.scroll(Point::new(0.0, -60.0));
-    assert!(
-        !ui.needs_frame(),
+    assert_eq!(
+        ui.next_frame(),
+        Wake::Idle,
         "nothing to scroll without a pointer over it"
     );
     ui.pointer_moved(Point::new(50.0, 50.0));
     ui.scroll(Point::new(0.0, -60.0));
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
     ui.update();
     let img = ui.render()?;
     assert_eq!((img.pixel(50, 30), img.pixel(50, 50)), (RED, BLUE));
@@ -429,17 +431,17 @@ fn dragged_scrolling_rubber_bands_then_springs_back() -> TestResult {
         (WHITE, RED),
         "the content follows the finger"
     );
-    assert!(!ui.needs_frame(), "and holds while it is held");
+    assert_eq!(ui.next_frame(), Wake::Idle, "and holds while it is held");
 
     ui.scroll_release();
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
     ui.run(3.0);
     assert!(
         state.get_untracked().offset.y.abs() < 0.01,
         "sprung back to the top"
     );
     assert_eq!(ui.pixel(50, 10)?, RED);
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     let work = ui.stats() - stats;
     assert_eq!(
         (work.layouts, work.paints, work.layer_paints),
@@ -468,7 +470,7 @@ fn releasing_a_scroll_drag_keeps_the_finger_momentum() {
         (rest - 119.5).abs() < 0.2,
         "20 dragged plus 200/2 of momentum: {rest}"
     );
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
 
     flick(&mut ui, 4000.0, 0.0025);
     ui.run(5.0);
@@ -511,7 +513,7 @@ fn a_flick_into_the_end_bounces_past_it_once_and_settles_without_more_input() {
     );
     ui.run(1.0);
     assert_eq!(state.get_untracked().offset.y, 200.0);
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
 }
 
 #[test]
@@ -532,7 +534,7 @@ fn a_scroll_drag_held_still_before_lifting_does_not_coast() {
         50.0,
         "stays where it was let go"
     );
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
 }
 
 #[test]

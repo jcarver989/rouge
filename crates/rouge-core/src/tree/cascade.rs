@@ -1,37 +1,43 @@
 use super::layers::Slot;
-use super::{ElementId, Interaction, STATES, Tree};
-use crate::style::{Declaration, Dirty, Style, TextProperties};
+use super::{Element, ElementId, Interaction, PendingStyle, STATES, Tree, Trigger};
+use crate::style::{Declaration, Dirty, TextProperties};
 use crate::text::TextStyle;
-use rouge_render::Color;
-use std::mem::replace;
-use taffy::{NodeId, Style as Layout, TaffyTree};
+use crate::theme::Fill;
+use rouge_theme::Role;
+use std::mem::{replace, take};
 
 impl Tree {
+    fn touch(&mut self, id: ElementId) -> Option<&mut Element> {
+        let element = self.elements.get_mut(id)?;
+        if element.pending.is_none() {
+            element.pending = Some(Box::new(PendingStyle {
+                old: element.effective_style().clone(),
+                relayout: false,
+            }));
+            self.dirty_styles.push(id);
+        }
+        Some(element)
+    }
+
     pub(crate) fn update_style(&mut self, id: ElementId, declaration: Declaration) {
-        let Some(element) = self.elements.get_mut(id) else {
+        let Some(element) = self.touch(id) else {
             return;
         };
-        let old = element.effective_style().clone();
         element.style.apply(&declaration);
-        let mut relayout = false;
-        if declaration.is_layout() {
-            let base = element
-                .extras
-                .as_deref_mut()
-                .and_then(|extras| extras.layout.as_deref_mut());
-            if let Some(base) = base {
-                declaration.lay_out(base);
-            } else {
-                let mut layout = self
-                    .taffy
-                    .style(element.taffy)
-                    .expect("taffy style")
-                    .clone();
-                declaration.lay_out(&mut layout);
-                relayout = set_layout(&mut self.taffy, element.taffy, layout);
-            }
+        if !declaration.is_layout() {
+            return;
         }
-        self.apply_style(id, &old, relayout);
+        let base = element
+            .extras
+            .as_deref_mut()
+            .and_then(|extras| extras.layout.as_deref_mut());
+        if let Some(base) = base {
+            declaration.lay_out(base);
+        } else if declaration.lay_out(&mut self.layouts[id].style)
+            && let Some(pending) = self.elements[id].pending.as_deref_mut()
+        {
+            pending.relayout = true;
+        }
     }
 
     pub(crate) fn update_variant(
@@ -41,10 +47,9 @@ impl Tree {
         index: usize,
         declaration: Declaration,
     ) {
-        let Some(element) = self.elements.get_mut(id) else {
+        let Some(element) = self.touch(id) else {
             return;
         };
-        let old = element.effective_style().clone();
         let variant = element
             .extras
             .as_deref_mut()
@@ -52,7 +57,35 @@ impl Tree {
         if let Some(entry) = variant.and_then(|variant| variant.get_mut(index)) {
             *entry = declaration;
         }
-        self.apply_style(id, &old, false);
+    }
+
+    pub(crate) fn resolve_styles(&mut self) {
+        while !self.dirty_styles.is_empty() {
+            let mut dirty = take(&mut self.dirty_styles);
+            dirty.retain(|id| self.elements.get(*id).is_some_and(|e| e.pending.is_some()));
+            dirty.sort_by_cached_key(|id| self.depth(*id));
+            for id in &dirty {
+                self.resolve(*id, false);
+            }
+            dirty.clear();
+            if self.dirty_styles.is_empty() {
+                self.dirty_styles = dirty;
+            }
+        }
+    }
+
+    pub(crate) fn resolve_new(&mut self, id: ElementId) {
+        self.resolve(id, true);
+    }
+
+    fn depth(&self, id: ElementId) -> usize {
+        let mut depth = 0;
+        let mut parent = self.elements[id].parent;
+        while let Some(id) = parent {
+            depth += 1;
+            parent = self.elements[id].parent;
+        }
+        depth
     }
 
     pub(crate) fn refresh_text_subtree(&mut self, id: ElementId) {
@@ -64,6 +97,20 @@ impl Tree {
             parent = element.parent;
         }
         self.refresh_text(id, &inherited);
+    }
+
+    pub(crate) fn set_condition(&mut self, id: ElementId, index: usize, on: bool) {
+        let trigger = self
+            .elements
+            .get_mut(id)
+            .and_then(|element| element.extras.as_deref_mut())
+            .and_then(|extras| extras.triggers.get_mut(index));
+        if let Some((Trigger::When(current), _)) = trigger
+            && *current != on
+        {
+            *current = on;
+            self.refresh_variant(id);
+        }
     }
 
     pub(super) fn set_interaction(&mut self, id: ElementId, which: Interaction, on: bool) {
@@ -93,11 +140,29 @@ impl Tree {
     }
 
     fn refresh_variant(&mut self, id: ElementId) {
-        let old = self.elements[id].effective_style().clone();
-        self.apply_style(id, &old, false);
+        let varies = self
+            .elements
+            .get(id)
+            .and_then(Element::extras)
+            .is_some_and(|extras| {
+                !extras.triggers.is_empty()
+                    || extras.variants.iter().any(|variant| !variant.is_empty())
+            });
+        if varies {
+            self.touch(id);
+        }
     }
 
-    fn apply_style(&mut self, id: ElementId, old: &Style, mut relayout: bool) {
+    fn resolve(&mut self, id: ElementId, fresh: bool) {
+        let Some(pending) = self.elements.get_mut(id).and_then(|e| e.pending.take()) else {
+            if fresh {
+                self.sync_backing(id);
+            }
+            return;
+        };
+        let PendingStyle { old, mut relayout } = *pending;
+        let old = &old;
+        self.stats.style_resolutions += 1;
         let active = self.active_variants(id);
         let element = &mut self.elements[id];
         let extras = element.extras.as_deref();
@@ -114,10 +179,23 @@ impl Tree {
         });
         if let Some(base) = extras.and_then(|extras| extras.layout.as_deref()) {
             let mut layout = base.clone();
-            declarations().for_each(|declaration| declaration.lay_out(&mut layout));
-            relayout |= set_layout(&mut self.taffy, element.taffy, layout);
+            declarations().for_each(|declaration| {
+                declaration.lay_out(&mut layout);
+            });
+            if self.layouts[id].style != layout {
+                self.layouts[id].style = layout;
+                relayout = true;
+            }
         }
         element.resolved = resolved;
+        if relayout {
+            self.invalidate_layout(id);
+        }
+        if fresh {
+            self.sync_backing(id);
+            return;
+        }
+        let element = &self.elements[id];
         let new = element.effective_style();
         let text = !TextProperties::same(new, old);
         let dirty = if relayout {
@@ -151,12 +229,23 @@ impl Tree {
         let disabled = element.disabled();
         let mut active: Vec<usize> = (0..STATES)
             .filter(|slot| element.states[*slot] && !extras.variants[*slot].is_empty())
-            .filter(|slot| !disabled || *slot == Interaction::Disabled as usize)
+            .filter(|slot| !disabled || !Interaction::ALL[*slot].pointer())
             .collect();
-        if extras.groups.is_empty() || self.is_disabled(id) {
+        if extras.triggers.is_empty() {
             return active;
         }
-        for (index, (name, _)) in extras.groups.iter().enumerate() {
+        let disabled = self.is_disabled(id);
+        for (index, (trigger, _)) in extras.triggers.iter().enumerate() {
+            let name = match trigger {
+                Trigger::When(on) => {
+                    if *on {
+                        active.push(STATES + index);
+                    }
+                    continue;
+                }
+                Trigger::GroupHover(_) if disabled => continue,
+                Trigger::GroupHover(name) => name,
+            };
             let mut parent = element.parent;
             while let Some(id) = parent {
                 let ancestor = &self.elements[id];
@@ -188,11 +277,7 @@ impl Tree {
             style.weight = properties.text_weight.unwrap_or(default.weight);
             style.italic = properties.text_italic.unwrap_or(default.italic);
             style.line_height = properties.text_line_height.unwrap_or(default.line_height);
-            let color = properties.text_color.unwrap_or_else(|| {
-                text.theme.map_or(Color::BLACK, |theme| {
-                    theme.with_untracked(|palette| palette.text)
-                })
-            });
+            let color = properties.text_color.unwrap_or(Fill::Role(Role::Text));
             let dirty = if style != text.style {
                 Dirty::Layout
             } else if color != text.color {
@@ -211,12 +296,4 @@ impl Tree {
             self.refresh_text(child, &properties);
         }
     }
-}
-
-fn set_layout(taffy: &mut TaffyTree<ElementId>, node: NodeId, layout: Layout) -> bool {
-    if *taffy.style(node).expect("taffy style") == layout {
-        return false;
-    }
-    taffy.set_style(node, layout).expect("taffy set style");
-    true
 }

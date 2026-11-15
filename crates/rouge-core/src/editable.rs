@@ -2,10 +2,11 @@ use crate::clipboard::ClipboardMedia;
 use crate::event::{Cursor, ImeEvent, Key, KeyEvent, PointerButton};
 use crate::focus::FocusHandle;
 use crate::prop::IntoProp;
-use crate::style::Dirty;
+use crate::theme::Fill;
+
 use crate::text::Movement;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
-use crate::view::{BuildCx, Patch, Text, View, text};
+use crate::view::{BuildCx, Patch, Text, TextOp, View, text};
 use crate::window::EditAction;
 use crate::{Styled, styled};
 use rouge_macros::component;
@@ -94,16 +95,12 @@ impl Editable {
     pub fn placeholder<U, V>(
         mut self,
         placeholder: impl IntoProp<String, U>,
-        color: impl IntoProp<Color, V>,
+        color: impl IntoProp<Fill, V>,
     ) -> Self {
         self.text = self
             .text
-            .text_prop(placeholder, Dirty::Paint, |text, placeholder| {
-                text.placeholder = placeholder;
-            })
-            .text_prop(color, Dirty::Paint, |text, color| {
-                text.placeholder_color = color;
-            });
+            .text_prop(placeholder, TextOp::Placeholder)
+            .text_prop(color, TextOp::PlaceholderColor);
         self
     }
 
@@ -132,7 +129,7 @@ impl Editable {
         self
     }
 
-    pub fn color<U>(mut self, color: impl IntoProp<Color, U>) -> Self {
+    pub fn color<U>(mut self, color: impl IntoProp<Fill, U>) -> Self {
         self.text = self.text.color(color);
         self
     }

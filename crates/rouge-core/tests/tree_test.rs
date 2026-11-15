@@ -1,7 +1,8 @@
+use rouge_core::Wake;
 use rouge_core::testing::{BLACK, BLUE, GREEN, RED, TestResult, TestUi, WHITE, counter};
 use rouge_core::{Color, Div, Glass, Point, Spring, Styled, div};
 use rouge_reactive::{Runtime, signal};
-use rouge_render::Item;
+use rouge_render::Command;
 
 #[test]
 fn elements_get_layers_only_when_they_use_compositor_features() {
@@ -36,7 +37,7 @@ fn compositor_properties_move_content_and_hit_testing_without_layout_or_paint() 
     let stats = ui.stats();
 
     x.set(100.0);
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
     assert!(ui.update_at(0.1));
     let work = ui.stats() - stats;
     assert_eq!(
@@ -54,7 +55,7 @@ fn compositor_properties_move_content_and_hit_testing_without_layout_or_paint() 
     assert_eq!(clicks.get(), 2, "hit at the new position");
 
     x.set(100.0);
-    assert!(!ui.needs_frame(), "same value: nothing to do");
+    assert_eq!(ui.next_frame(), Wake::Idle, "same value: nothing to do");
     Ok(())
 }
 
@@ -189,7 +190,7 @@ fn content_after_a_nested_layer_composites_above_it() -> TestResult {
         "later sibling of the parent layer above the layer"
     );
     assert_eq!(
-        ui.frame().scene.len(),
+        ui.commands()?.len(),
         3,
         "root is split into two segments around the layer"
     );
@@ -210,7 +211,7 @@ fn invisible_layers_are_skipped_and_not_hittable() -> TestResult {
     });
     assert_eq!(ui.pixel(10, 10)?, WHITE);
     assert_eq!(
-        ui.frame().scene.len(),
+        ui.commands()?.len(),
         1,
         "only the root's background is composited"
     );
@@ -274,10 +275,9 @@ fn glass_on_an_element_that_paints_nothing_moves_with_its_layer_transform() -> T
         split_background().child(glass.translate_x(x))
     });
     let backdrops = ui
-        .frame()
-        .scene
+        .commands()?
         .iter()
-        .filter(|item| matches!(item, Item::Layer(layer) if layer.backdrop.is_some()))
+        .filter(|command| matches!(command, Command::Draw(layer) if layer.backdrop.is_some()))
         .count();
     assert_eq!(backdrops, 1, "painting nothing still gets a backdrop");
     assert_eq!(ui.pixel(99, 50)?[0], 0, "glass is elsewhere: edge is sharp");

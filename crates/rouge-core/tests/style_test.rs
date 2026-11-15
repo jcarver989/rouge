@@ -6,6 +6,92 @@ use rouge_core::{
 use rouge_reactive::{Runtime, provide_context, signal};
 
 #[test]
+fn ten_props_changed_in_one_batch_resolve_the_element_once() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let on = signal(false);
+    let mut ui = TestUi::new(move || {
+        let pick = move |a: f32, b: f32| move || if on.get() { b } else { a };
+        div().child(
+            div()
+                .test_id("box")
+                .w(pick(100.0, 120.0))
+                .h(pick(40.0, 48.0))
+                .p(pick(4.0, 6.0))
+                .px(pick(8.0, 10.0))
+                .rounded(pick(2.0, 6.0))
+                .border(pick(1.0, 2.0))
+                .text_size(pick(12.0, 14.0))
+                .gap(pick(1.0, 2.0))
+                .bg(on.pick(Color::RED, Color::BLUE))
+                .border_color(on.pick(Color::BLACK, Color::WHITE)),
+        )
+    });
+    let before = ui.stats();
+    on.set(true);
+    ui.advance(0.0);
+    let work = ui.stats() - before;
+    assert_eq!((work.patches, work.style_resolutions), (10, 1));
+    assert_eq!(
+        ui.bounds_of("box").ok_or("box")?.size,
+        Size::new(120.0, 48.0)
+    );
+    Ok(())
+}
+
+#[test]
+fn declarations_apply_in_the_order_they_are_written() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let wide = signal(20.0);
+    let ui = TestUi::new(move || {
+        div()
+            .flex()
+            .child(
+                div()
+                    .test_id("static-last")
+                    .px(move || wide.get())
+                    .p(4.0)
+                    .child(div().size(10.0)),
+            )
+            .child(
+                div()
+                    .test_id("dynamic-last")
+                    .p(4.0)
+                    .px(move || wide.get())
+                    .child(div().size(10.0)),
+            )
+    });
+    let width = |id| ui.bounds_of(id).map(|bounds| bounds.size.width);
+    assert_eq!(width("static-last"), Some(18.0), "the later p overrides px");
+    assert_eq!(
+        width("dynamic-last"),
+        Some(50.0),
+        "the later px overrides p"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_inherited_text_size_change_resolves_only_the_changed_ancestor() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let size = signal(12.0);
+    let mut ui = TestUi::new(move || {
+        div()
+            .text_size(move || size.get())
+            .children((0..20).map(|index| div().p(1.0).child(text(format!("Item {index}")))))
+    });
+    let before = ui.stats();
+    size.set(20.0);
+    ui.advance(0.0);
+    let work = ui.stats() - before;
+    assert_eq!(
+        work.style_resolutions, 1,
+        "descendants inherit without resolving"
+    );
+    assert_eq!(work.layouts, 1);
+    Ok(())
+}
+
+#[test]
 fn borders_take_layout_space_and_paint() -> TestResult {
     let _rt = Runtime::new().enter();
     let mut ui = TestUi::new(|| {

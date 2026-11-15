@@ -159,11 +159,12 @@ impl Tree {
         true
     }
 
-    pub(crate) fn set_disabled(&mut self, id: ElementId, disabled: bool) {
-        self.set_interaction(id, Interaction::Disabled, disabled);
-        if self
-            .focused
-            .is_some_and(|focused| self.is_disabled(focused))
+    pub(crate) fn set_state(&mut self, id: ElementId, which: Interaction, on: bool) {
+        self.set_interaction(id, which, on);
+        if which == Interaction::Disabled
+            && self
+                .focused
+                .is_some_and(|focused| self.is_disabled(focused))
         {
             self.set_focus(None, false);
         }

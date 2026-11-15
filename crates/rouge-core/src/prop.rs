@@ -1,6 +1,6 @@
 use crate::Cursor;
 use crate::length::Length;
-use rouge_reactive::{ReadSignal, Signal};
+use rouge_reactive::{ReadSignal, Signal, memo};
 use rouge_render::{Color, Corners, EffectInstance, ShaderEffect};
 use std::borrow::Cow;
 
@@ -23,6 +23,18 @@ impl<T: 'static> Prop<T> {
         match self {
             Prop::Static(value) => Prop::Static(f(value)),
             Prop::Dynamic(compute) => Prop::Dynamic(Box::new(move || f(compute()))),
+        }
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> Prop<T> {
+    pub fn memo(self) -> Prop<T> {
+        match self {
+            Prop::Static(value) => Prop::Static(value),
+            Prop::Dynamic(compute) => {
+                let shared = memo(compute);
+                Prop::Dynamic(Box::new(move || shared.get()))
+            }
         }
     }
 }

@@ -3,12 +3,15 @@ use super::{ElementId, TextData, Tree};
 use crate::clipboard::{Clipboard, ClipboardMedia, ClipboardTarget, PasteRequest, Pasted};
 use crate::style::Dirty;
 use crate::text::{Granularity, Movement, TextLayout, TextSelection, TextSystem};
+use crate::ui::Wake;
 use rouge_reactive::{Signal, batch};
 use rouge_render::{Color, Point, Rect, Size};
 use std::ops::Range;
 use std::rc::Rc;
 
 pub(crate) const CARET_WIDTH: f32 = 1.5;
+const CARET_HALF_PERIOD: f64 = 0.5;
+const CARET_IDLE: f64 = 10.0;
 
 pub(crate) type TextHandler = Rc<dyn Fn(&str)>;
 pub(crate) type MediaHandler = Rc<dyn Fn(ClipboardMedia)>;
@@ -320,12 +323,24 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
 }
 
 impl Tree {
-    pub(crate) fn caret_animating(&self, now: f64) -> bool {
-        self.focused
+    pub(crate) fn caret_wake(&self, now: f64) -> Wake {
+        let Some(edit) = self
+            .focused
             .and_then(|id| self.elements.get(id))
             .and_then(|element| element.kind.text())
             .and_then(|text| text.edit.as_ref())
-            .is_some_and(|edit| now - edit.activity < 10.0)
+        else {
+            return Wake::Idle;
+        };
+        let elapsed = (now - edit.activity).max(0.0);
+        if caret_visible(elapsed) != edit.caret_visible {
+            return Wake::Now;
+        }
+        if elapsed >= CARET_IDLE {
+            return Wake::Idle;
+        }
+        let next = (caret_phase(elapsed) + 1) as f64 * CARET_HALF_PERIOD;
+        Wake::At(edit.activity + next.min(CARET_IDLE))
     }
 
     pub(crate) fn tick_caret(&mut self, now: f64) {
@@ -339,8 +354,7 @@ impl Tree {
         else {
             return;
         };
-        let elapsed = (now - edit.activity).max(0.0);
-        let visible = elapsed >= 10.0 || elapsed % 1.0 < 0.5;
+        let visible = caret_visible((now - edit.activity).max(0.0));
         if edit.caret_visible != visible {
             edit.caret_visible = visible;
             self.mark_element(id, Dirty::Paint);
@@ -399,7 +413,7 @@ impl Tree {
         let changed = (text.content != before).then(|| text.content.clone());
         let on_change = text.edit.as_ref().and_then(|edit| edit.on_change.clone());
         if changed.is_some() {
-            self.taffy.mark_dirty(element.taffy).expect("taffy dirty");
+            self.invalidate_layout(id);
         }
         self.mark_element(
             id,
@@ -474,4 +488,12 @@ impl Tree {
         };
         Some(self.to_window(id, rect))
     }
+}
+
+fn caret_phase(elapsed: f64) -> u64 {
+    (elapsed / CARET_HALF_PERIOD + 1.0e-6).floor() as u64
+}
+
+fn caret_visible(elapsed: f64) -> bool {
+    elapsed + 1.0e-6 * CARET_HALF_PERIOD >= CARET_IDLE || caret_phase(elapsed).is_multiple_of(2)
 }

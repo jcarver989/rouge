@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::mem::take;
 
 pub(super) enum Heights {
@@ -71,12 +71,12 @@ impl Heights {
 
 pub(super) struct VariableHeights {
     estimates: Vec<f32>,
-    measured: HashMap<usize, f32>,
+    measured: FxHashMap<usize, f32>,
     sums: Vec<f64>,
 }
 
 impl VariableHeights {
-    pub(super) fn new(estimates: Vec<f32>, measured: HashMap<usize, f32>) -> Self {
+    pub(super) fn new(estimates: Vec<f32>, measured: FxHashMap<usize, f32>) -> Self {
         let count = estimates.len();
         let mut heights = Self {
             estimates,
@@ -93,7 +93,7 @@ impl VariableHeights {
         heights
     }
 
-    pub(super) fn measurements(&self) -> &HashMap<usize, f32> {
+    pub(super) fn measurements(&self) -> &FxHashMap<usize, f32> {
         &self.measured
     }
 

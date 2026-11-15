@@ -3,11 +3,13 @@ use crate::animation::{
 };
 use crate::motion::Completion;
 use rouge_render::{
-    Affine, Corners, DrawList, EffectDraw, EffectInstance, Group, Item, LayerDraw, Point, Rect,
-    Size, SurfaceDraw, SurfaceId, Surfaces, device_rect,
+    Affine, Command, Corners, DrawList, DrawLists, EffectDraw, EffectInstance, Group, LayerDraw,
+    ListKey, Point, Rect, Scene, Size, SurfaceDraw, SurfaceId, Surfaces, device_rect,
 };
+use rustc_hash::FxHashMap;
 use rustc_hash::FxHasher;
-use std::collections::{BTreeMap, HashMap};
+use slotmap::{Key, SlotMap, new_key_type};
+use std::collections::BTreeMap;
 use std::hash::Hasher;
 use std::mem::take;
 
@@ -16,8 +18,9 @@ const BOUNCE: Spring = Spring::new(220.0, 30.0);
 const STAGE_BITS: u32 = 8;
 const CLOCK_PERIOD: f32 = 3600.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct LayerId(pub u64);
+new_key_type! {
+    pub struct LayerId;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MotionId(pub u64);
@@ -145,7 +148,7 @@ impl Motion {
     }
 }
 
-type Motions = HashMap<MotionId, Motion>;
+type Motions = FxHashMap<MotionId, Motion>;
 
 #[derive(Clone, Copy)]
 struct Applied {
@@ -205,7 +208,7 @@ struct Layer {
     source: Option<u64>,
     link: Option<(u64, ScrollLinked)>,
     fling: [Animated; 2],
-    lists: Vec<DrawList>,
+    lists: Vec<ListKey>,
     nested: Vec<Nested>,
     orphans: Vec<LayerId>,
     exiting: bool,
@@ -429,15 +432,16 @@ impl Layer {
 
 #[derive(Default)]
 pub struct Compositor {
-    layers: HashMap<LayerId, Layer>,
+    layers: SlotMap<LayerId, Layer>,
     motions: Motions,
     root: Option<LayerId>,
     animating: Vec<LayerId>,
     moving: Vec<MotionId>,
-    sources: HashMap<u64, LayerId>,
+    sources: FxHashMap<u64, LayerId>,
     surface_uses: Vec<(SurfaceId, bool)>,
     surface_layers: usize,
-    empty: DrawList,
+    lists: DrawLists,
+    commands: Vec<Command>,
 }
 
 impl Compositor {
@@ -468,7 +472,7 @@ impl Compositor {
     }
 
     pub fn pose(&self, id: LayerId) -> Option<LayerPose> {
-        self.layers.get(&id).map(|layer| self.linked_pose(layer))
+        self.layers.get(id).map(|layer| self.linked_pose(layer))
     }
 
     fn linked_pose(&self, layer: &Layer) -> LayerPose {
@@ -477,7 +481,7 @@ impl Compositor {
             && let Some(scroll) = self
                 .sources
                 .get(&key)
-                .and_then(|source| self.layers.get(source))
+                .and_then(|source| self.layers.get(*source))
                 .and_then(|source| source.scroll)
         {
             let (x, y) = link.offset(scroll.offset);
@@ -488,15 +492,15 @@ impl Compositor {
     }
 
     pub fn scroll(&self, id: LayerId) -> Option<ScrollState> {
-        self.layers.get(&id)?.scroll
+        self.layers.get(id)?.scroll
     }
 
     pub fn motion(&self, id: MotionId) -> Option<f32> {
         self.motions.get(&id).map(|motion| motion.value.value())
     }
 
-    pub fn create_layer(&mut self, id: LayerId) {
-        self.layers.insert(id, Layer::default());
+    pub fn create_layer(&mut self) -> LayerId {
+        self.layers.insert(Layer::default())
     }
 
     pub fn set_root(&mut self, id: LayerId) {
@@ -504,7 +508,7 @@ impl Compositor {
     }
 
     fn update(&mut self, id: LayerId, f: impl FnOnce(&mut Layer, &Motions) -> bool) {
-        let Some(layer) = self.layers.get_mut(&id) else {
+        let Some(layer) = self.layers.get_mut(id) else {
             return;
         };
         if f(layer, &self.motions) && !layer.animating {
@@ -585,7 +589,7 @@ impl Compositor {
     }
 
     pub fn set_surface(&mut self, id: LayerId, surface: Option<SurfaceId>) {
-        let Some(layer) = self.layers.get_mut(&id) else {
+        let Some(layer) = self.layers.get_mut(id) else {
             return;
         };
         if layer.surface == surface {
@@ -603,7 +607,7 @@ impl Compositor {
     }
 
     pub fn set_scroll_source(&mut self, id: LayerId, key: u64) {
-        if let Some(layer) = self.layers.get_mut(&id) {
+        if let Some(layer) = self.layers.get_mut(id) {
             layer.source = Some(key);
             self.sources.insert(key, id);
         }
@@ -645,15 +649,20 @@ impl Compositor {
     }
 
     pub fn set_content(&mut self, id: LayerId, content: Content) {
-        let layers = &mut self.layers;
-        let Some(layer) = layers.get_mut(&id) else {
+        let (layers, lists) = (&mut self.layers, &mut self.lists);
+        let Some(layer) = layers.get_mut(id) else {
             return;
         };
-        layer.lists.truncate(content.lists.len());
+        for key in layer
+            .lists
+            .drain(content.lists.len().min(layer.lists.len())..)
+        {
+            lists.remove(key);
+        }
         for (index, list) in content.lists.into_iter().enumerate() {
-            match layer.lists.get_mut(index) {
+            match layer.lists.get(index).and_then(|key| lists.get_mut(*key)) {
                 Some(existing) => existing.replace(list),
-                None => layer.lists.push(list),
+                None => layer.lists.push(lists.insert(list)),
             }
         }
         let kept = |old: &Nested| content.nested.iter().any(|new| new.layer == old.layer);
@@ -666,17 +675,17 @@ impl Compositor {
         layer.nested = content.nested;
         let adopted: Vec<_> = layer.nested.iter().map(|nested| nested.layer).collect();
         for child in adopted {
-            if let Some(child) = layers.get_mut(&child) {
+            if let Some(child) = layers.get_mut(child) {
                 child.parent = Some(id);
             }
         }
         let leaving = |child: &LayerId| {
             layers
-                .get(child)
+                .get(*child)
                 .is_some_and(|c| c.exiting && c.parent == Some(id))
         };
         let orphans: Vec<_> = dropped.into_iter().filter(leaving).collect();
-        if let Some(layer) = layers.get_mut(&id) {
+        if let Some(layer) = layers.get_mut(id) {
             layer.orphans.extend(orphans);
         }
     }
@@ -793,11 +802,11 @@ impl Compositor {
     }
 
     fn unlink(&mut self, id: LayerId) -> Option<Layer> {
-        let layer = self.layers.remove(&id)?;
+        let layer = self.layers.remove(id)?;
         if layer.animating {
             self.animating.retain(|animated| *animated != id);
         }
-        if let Some(parent) = layer.parent.and_then(|parent| self.layers.get_mut(&parent)) {
+        if let Some(parent) = layer.parent.and_then(|parent| self.layers.get_mut(parent)) {
             parent.orphans.retain(|orphan| *orphan != id);
         }
         if self.root == Some(id) {
@@ -806,6 +815,9 @@ impl Compositor {
         if let Some(surface) = layer.surface {
             self.surface_uses.push((surface, false));
             self.surface_layers -= 1;
+        }
+        for key in &layer.lists {
+            self.lists.remove(*key);
         }
         if let Some(key) = layer.source
             && self.sources.get(&key) == Some(&id)
@@ -830,11 +842,7 @@ impl Compositor {
             .map(|nested| nested.layer)
             .chain(layer.orphans);
         for child in children {
-            if self
-                .layers
-                .get(&child)
-                .is_some_and(|c| c.parent == Some(id))
-            {
+            if self.layers.get(child).is_some_and(|c| c.parent == Some(id)) {
                 self.remove_subtree(child);
             }
         }
@@ -859,7 +867,7 @@ impl Compositor {
         });
         let mut exited = Vec::new();
         animating.retain(|id| {
-            let Some(layer) = layers.get_mut(id) else {
+            let Some(layer) = layers.get_mut(*id) else {
                 return false;
             };
             layer.animating = layer.tick(dt);
@@ -874,34 +882,35 @@ impl Compositor {
         }
     }
 
-    pub fn scene(&self, scale: f32) -> Vec<Item<'_>> {
-        let mut items = Vec::new();
+    pub fn scene(&mut self, scale: f32, surfaces: &Surfaces) -> Scene<'_> {
+        let mut commands = take(&mut self.commands);
+        commands.clear();
         if let Some(root) = self.root {
             let parent = Parent {
                 transform: Affine::IDENTITY,
                 opacity: 1.0,
                 scissor: None,
             };
-            self.emit(root, None, scale, &parent, &mut items);
+            let mut out = Out {
+                commands: &mut commands,
+                surfaces,
+                scale,
+            };
+            self.emit(root, None, &parent, &mut out);
         }
-        items
+        self.commands = commands;
+        Scene::new(&self.commands, &self.lists)
     }
 
-    fn emit<'a>(
-        &'a self,
-        id: LayerId,
-        clip: Option<Rect>,
-        scale: f32,
-        parent: &Parent,
-        out: &mut Vec<Item<'a>>,
-    ) {
-        let Some(layer) = self.layers.get(&id) else {
+    fn emit(&self, id: LayerId, clip: Option<Rect>, parent: &Parent, out: &mut Out<'_>) {
+        let Some(layer) = self.layers.get(id) else {
             return;
         };
         let pose = self.linked_pose(layer);
         if pose.opacity <= 0.0 {
             return;
         }
+        let scale = out.scale;
         let scissor = match clip {
             Some(clip) => {
                 let clip = device_rect(&parent.transform, &clip, scale);
@@ -928,8 +937,8 @@ impl Compositor {
             radii,
             backdrop: layer.effects.get(&EffectSlot::Backdrop).map(shaped),
         };
-        let stages: Vec<_> = layer.stages().map(shaped).collect();
-        let grouped = !stages.is_empty()
+        let stages = layer.stages().count();
+        let grouped = stages > 0
             || ((layer.rasterize || (pose.opacity < 1.0 && self.overlaps(layer)))
                 && !self.has_nested_backdrop(layer));
         let opacity = pose.opacity * parent.opacity;
@@ -939,75 +948,74 @@ impl Compositor {
                 opacity,
                 scissor,
             };
-            self.emit_content(layer, style, scale, &this, out);
+            self.emit_content(layer, style, &this, out);
             return;
         }
-        let mut items = Vec::new();
-        let this = Parent {
-            transform,
-            opacity: 1.0,
-            scissor,
-        };
-        self.emit_content(
-            layer,
-            Style {
-                backdrop: None,
-                ..style
-            },
-            scale,
-            &this,
-            &mut items,
+        let offset = (
+            (transform.tx * scale).round() as i32,
+            (transform.ty * scale).round() as i32,
         );
+        let shift = Point::new(offset.0 as f32, offset.1 as f32);
+        let local = transform.then(&Affine::translate(-transform.tx, -transform.ty));
+        let transform = local.then(&Affine::translate(shift.x / scale, shift.y / scale));
+        let local_scissor =
+            scissor.map(|scissor| scissor.translate(Point::new(-shift.x, -shift.y)));
         if style.backdrop.is_some() {
-            let draw = LayerDraw {
-                backdrop: style.backdrop,
-                ..LayerDraw::new(&self.empty)
-            };
-            out.push(Item::Layer(LayerDraw {
+            out.commands.push(Command::Draw(LayerDraw {
                 transform,
                 opacity,
                 scissor,
-                ..draw
+                backdrop: style.backdrop,
+                ..LayerDraw::default()
             }));
         }
-        let last = stages.len().saturating_sub(1);
-        let effects = stages
-            .into_iter()
-            .map(Some)
-            .chain([None])
-            .take(last + 1)
-            .enumerate();
-        for (stage, effect) in effects {
+        let groups = stages.max(1);
+        let first = out.commands.len();
+        for stage in (0..groups).rev() {
+            let outer = stage + 1 == groups;
+            out.commands.push(Command::Group(Group {
+                key: (id.data().as_ffi() << STAGE_BITS) | stage as u64,
+                signature: 0,
+                bounds: Rect::ZERO,
+                offset: if outer { offset } else { (0, 0) },
+                opacity: if outer { opacity } else { 1.0 },
+                scissor: if outer { scissor } else { local_scissor },
+                transform: if outer { transform } else { local },
+                effect: layer.stages().nth(stage).map(shaped),
+                len: 0,
+            }));
+        }
+        let this = Parent {
+            transform: local,
+            opacity: 1.0,
+            scissor: local_scissor,
+        };
+        let content = Style {
+            backdrop: None,
+            ..style
+        };
+        self.emit_content(layer, content, &this, out);
+        for index in (first..first + groups).rev() {
+            let end = out.commands.len();
             let mut hasher = FxHasher::default();
-            let Some(bounds) = summarize(&items, scale, &mut hasher) else {
+            let scene = Scene::new(out.commands, &self.lists);
+            let Some(bounds) = scene.summarize(index + 1..end, scale, &mut hasher) else {
+                out.commands.truncate(first);
                 return;
             };
-            let group = Group {
-                key: (id.0 << STAGE_BITS) | stage as u64,
-                signature: hasher.finish(),
-                bounds,
-                opacity: if stage == last { opacity } else { 1.0 },
-                scissor,
-                transform,
-                effect,
-                items,
-            };
-            items = vec![Item::Group(group)];
+            if let Command::Group(group) = &mut out.commands[index] {
+                group.signature = hasher.finish();
+                group.bounds = bounds;
+                group.len = (end - index - 1) as u32;
+            }
         }
-        out.extend(items);
     }
 
-    fn emit_content<'a>(
-        &'a self,
-        layer: &'a Layer,
-        mut style: Style,
-        scale: f32,
-        this: &Parent,
-        out: &mut Vec<Item<'a>>,
-    ) {
+    fn emit_content(&self, layer: &Layer, mut style: Style, this: &Parent, out: &mut Out<'_>) {
         let mut surface = layer.surface.map(|id| {
-            Item::Surface(SurfaceDraw {
+            Command::Surface(SurfaceDraw {
                 id,
+                frame: out.surfaces.frame(id),
                 bounds: layer.bounds(),
                 transform: this.transform,
                 opacity: this.opacity,
@@ -1015,10 +1023,11 @@ impl Compositor {
                 scissor: this.scissor,
             })
         });
-        for (segment, list) in layer.lists.iter().enumerate() {
-            if !list.is_empty() || style.backdrop.is_some() {
-                out.push(Item::Layer(LayerDraw {
-                    list,
+        for (segment, key) in layer.lists.iter().enumerate() {
+            let empty = self.lists.get(*key).is_none_or(DrawList::is_empty);
+            if !empty || style.backdrop.is_some() {
+                out.commands.push(Command::Draw(LayerDraw {
+                    list: Some(*key),
                     transform: this.transform,
                     opacity: this.opacity,
                     fill: style.fill,
@@ -1027,14 +1036,14 @@ impl Compositor {
                     scissor: this.scissor,
                 }));
             }
-            out.extend(surface.take());
+            out.commands.extend(surface.take());
             if let Some(nested) = layer.nested.get(segment) {
-                self.emit(nested.layer, nested.clip, scale, this, out);
+                self.emit(nested.layer, nested.clip, this, out);
             }
         }
-        out.extend(surface);
+        out.commands.extend(surface);
         for orphan in &layer.orphans {
-            self.emit(*orphan, None, scale, this, out);
+            self.emit(*orphan, None, this, out);
         }
     }
 
@@ -1044,12 +1053,13 @@ impl Compositor {
             .iter()
             .map(|nested| &nested.layer)
             .chain(&layer.orphans);
-        ids.filter_map(|id| self.layers.get(id))
+        ids.filter_map(|id| self.layers.get(*id))
     }
 
     fn primitives(&self, layer: &Layer, limit: usize) -> usize {
-        let mut count: usize = layer.lists.iter().map(DrawList::len).sum::<usize>()
-            + usize::from(layer.surface.is_some());
+        let lists = layer.lists.iter().filter_map(|key| self.lists.get(*key));
+        let mut count =
+            lists.map(DrawList::len).sum::<usize>() + usize::from(layer.surface.is_some());
         for child in self.children(layer) {
             if count >= limit {
                 break;
@@ -1070,6 +1080,12 @@ impl Compositor {
     }
 }
 
+struct Out<'a> {
+    commands: &'a mut Vec<Command>,
+    surfaces: &'a Surfaces,
+    scale: f32,
+}
+
 struct Parent {
     transform: Affine,
     opacity: f32,
@@ -1081,15 +1097,4 @@ struct Style {
     fill: [f32; 4],
     radii: Corners,
     backdrop: Option<EffectDraw>,
-}
-
-fn summarize(items: &[Item<'_>], scale: f32, hasher: &mut FxHasher) -> Option<Rect> {
-    let mut bounds: Option<Rect> = None;
-    for item in items {
-        item.fingerprint(hasher);
-        if let Some(extent) = item.extent(scale) {
-            bounds = Some(bounds.map_or(extent, |bounds| bounds.union(&extent)));
-        }
-    }
-    bounds
 }

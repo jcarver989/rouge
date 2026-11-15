@@ -1,5 +1,5 @@
 use rouge_core::testing::{TestResult, TestUiBuilder, assert_near};
-use rouge_core::{Apply, Color, Interactions, Styled, Typography, div, text};
+use rouge_core::{Apply, Color, Styled, Typography, div, text};
 use rouge_reactive::{Runtime, Signal, expect_context, provide_context, signal};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -48,19 +48,20 @@ fn typography_presets_set_size_weight_and_line_height_together() -> TestResult {
 }
 
 #[test]
-fn on_press_answers_clicks_and_keys_and_interactions_are_tracked() -> TestResult {
+fn on_activate_answers_clicks_and_keys_and_interactions_are_tracked() -> TestResult {
     let _rt = Runtime::new().enter();
     let presses = Rc::new(Cell::new(0));
     let outer = Rc::new(Cell::new(0));
-    let state = signal(Interactions::default());
+    let (hovered, focused) = (signal(false), signal(false));
     let (mut ui, ()) = TestUiBuilder::default().build_with(|| {
         let (presses, outer) = (presses.clone(), outer.clone());
         let button = div()
             .test_id("button")
             .size(20.0)
             .autofocus()
-            .track_interaction(state)
-            .on_press(move || presses.set(presses.get() + 1))
+            .on_hover(move |inside| hovered.set(inside))
+            .on_focus(move |_| focused.set(true))
+            .on_activate(move || presses.set(presses.get() + 1))
             .when(true, |button| button.bg(Color::RED))
             .when_some(None::<f32>, Styled::w);
         let root = div()
@@ -70,12 +71,12 @@ fn on_press_answers_clicks_and_keys_and_interactions_are_tracked() -> TestResult
     });
     ui.advance(0.0);
     ui.hover_on("button")?;
-    assert!(state.get_untracked().hovered);
+    assert!(hovered.get_untracked());
     ui.click_on("button")?;
     ui.press("enter");
     ui.press("space");
     assert_eq!((presses.get(), outer.get()), (3, 0), "presses are consumed");
-    assert!(state.get_untracked().focused());
+    assert!(focused.get_untracked());
     Ok(())
 }
 

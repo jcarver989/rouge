@@ -1,10 +1,11 @@
+use rouge_core::Wake;
 use rouge_core::testing::{
     BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
 };
 use rouge_core::{
-    Color, DragEvent, DragPhase, Interactions, Menu, MenuItem, Modifiers, Point, PointerButton,
-    Rect, ScrollState, Scrollable, Size, Styled, TouchPhase, div, dynamic, pct, scroll, show, text,
-    window_size, zoom,
+    Color, DragEvent, DragPhase, Menu, MenuItem, Modifiers, Point, PointerButton, Rect,
+    ScrollState, Scrollable, Size, Styled, TouchPhase, Ui, UiPalette, canvas, div, dynamic, pct,
+    scroll, show, text, window_size, zoom,
 };
 use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
 use std::time::Duration;
@@ -50,11 +51,11 @@ fn paint_only_change_does_not_relayout() -> TestResult {
     let color = signal(Color::RED);
     let mut ui = TestUi::new(|| div().size_full().bg(color));
     assert_eq!(ui.passes(), (1, 1));
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     assert!(!ui.update(), "nothing changed, nothing to do");
 
     color.set(Color::BLUE);
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
     assert!(ui.update());
     assert_eq!(ui.passes(), (1, 2));
     assert_eq!(ui.pixel(50, 50)?, BLUE);
@@ -90,12 +91,12 @@ fn writes_coalesce_into_one_frame() {
     a.set(Color::BLUE);
     b.set(Color::BLUE);
     a.set(Color::GREEN);
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
     ui.update();
     assert_eq!(ui.stats().paints, 2, "one paint for all three writes");
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
     b.set(Color::RED);
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
 }
 
 #[test]
@@ -131,7 +132,7 @@ fn hovering_elements_without_variants_is_free() {
     ui.pointer_moved(Point::new(150.0, 90.0));
     ui.pointer_down(PointerButton::Primary);
     ui.pointer_up(PointerButton::Primary);
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
 }
 
 #[test]
@@ -363,12 +364,15 @@ fn zoom_shrinks_the_logical_window_and_paints_everything_at_the_higher_scale() -
 #[test]
 fn physical_pointer_positions_divided_by_the_scale_hit_what_is_painted_there() -> TestResult {
     let _rt = Runtime::new().enter();
-    let (left, right) = (
-        signal(Interactions::default()),
-        signal(Interactions::default()),
-    );
+    let (left, right) = (signal(false), signal(false));
     let (mut ui, zoom) = TestUiBuilder::default().scale(2.0).build_with(move || {
-        let half = |color, state| div().w(50.0).h(20.0).bg(color).track_interaction(state);
+        let half = |color, hovered: Signal<bool>| {
+            div()
+                .w(50.0)
+                .h(20.0)
+                .bg(color)
+                .on_hover(move |inside| hovered.set(inside))
+        };
         let row = div()
             .flex()
             .row()
@@ -383,12 +387,12 @@ fn physical_pointer_positions_divided_by_the_scale_hit_what_is_painted_there() -
     let scale = ui.scale();
     ui.pointer_moved(Point::new(180.0 / scale, 30.0 / scale));
     ui.advance(0.0);
-    assert!(right.get_untracked().hovered && !left.get_untracked().hovered);
+    assert!(right.get_untracked() && !left.get_untracked());
     zoom.set(3.0);
     ui.advance(0.0);
     assert_eq!(ui.pixel(180, 30)?, RED);
     assert!(
-        left.get_untracked().hovered && !right.get_untracked().hovered,
+        left.get_untracked() && !right.get_untracked(),
         "a still pointer keeps its physical position across zoom changes"
     );
     Ok(())
@@ -724,7 +728,7 @@ fn a_touch_pan_scrolls_without_clicking_and_flings_on_release() {
     );
     ui.run(5.0);
     assert_eq!(clicks.get(), 0, "a pan is not a tap");
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
 }
 
 #[test]
@@ -810,16 +814,16 @@ fn writes_wait_in_the_queue_until_flushed_and_lay_out_on_the_next_frame() {
     let laid_out = |ui: &TestUi| ui.bounds_of("box").map(|bounds| bounds.size.width);
     width.set(20.0);
     label.set("after".to_owned());
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
     assert_eq!(laid_out(&ui), Some(10.0), "queries read the last frame");
     assert_eq!(ui.text_of("box").as_deref(), Some("before"));
     ui.flush();
     assert_eq!(ui.text_of("box").as_deref(), Some("after"), "flushed");
     assert_eq!(laid_out(&ui), Some(10.0), "a flush does not lay out");
-    assert!(ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Now);
     assert!(ui.update());
     assert_eq!(laid_out(&ui), Some(20.0));
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
 }
 
 #[test]
@@ -838,11 +842,30 @@ fn geometry_observers_feed_back_once_per_frame_and_the_rest_waits_for_the_next()
     assert_eq!(width(&ui, "b"), Some(20.0), "re-laid out in the same frame");
     assert_eq!(width(&ui, "c"), Some(0.0), "a second feedback waits");
     assert_eq!(ui.stats().relayouts, 1);
-    assert!(ui.needs_frame(), "and asks for the next frame");
+    assert_eq!(ui.next_frame(), Wake::Now, "and asks for the next frame");
     ui.update();
     assert_eq!(width(&ui, "c"), Some(10.0));
     assert_eq!(ui.stats().relayouts, 1);
-    assert!(!ui.needs_frame());
+    assert_eq!(ui.next_frame(), Wake::Idle);
+}
+
+#[test]
+fn a_canvas_resized_by_measurement_feedback_draws_at_its_settled_size_in_the_same_frame() {
+    let _rt = Runtime::new().enter();
+    let measured = signal(Size::ZERO);
+    let ui = TestUi::new(move || {
+        let drawn = canvas(|painter| {
+            let size = painter.size();
+            painter.region("drawn", Rect::new(0.0, 0.0, size.width, size.height));
+        });
+        div()
+            .flex()
+            .child(div().w(40.0).h(10.0).track_size(measured))
+            .child(drawn.h(10.0).w(move || measured.get().width / 2.0))
+    });
+    let drawn = ui.bounds_of("drawn").map(|bounds| bounds.size.width);
+    assert_eq!(drawn, Some(20.0));
+    assert_eq!(ui.stats().relayouts, 1);
 }
 
 fn clicker() -> (TestUi, Signal<u32>) {
@@ -879,4 +902,59 @@ fn touch_scroller() -> (TestUi, Signal<ScrollState>, Signal<u32>) {
         )
     });
     (ui, state, clicks)
+}
+
+#[test]
+fn the_clear_color_is_the_root_background_or_the_theme_canvas() {
+    let _rt = Runtime::new().enter();
+    let ui = Ui::new(Size::new(100.0, 100.0), || div().size_full().bg(Color::RED));
+    assert_eq!(ui.clear_color(), Color::RED);
+    let ui = Ui::new(Size::new(100.0, 100.0), || div().size_full());
+    assert_eq!(
+        ui.clear_color(),
+        Color::from(UiPalette::light().canvas),
+        "an unpainted root shows the theme's canvas"
+    );
+}
+
+#[test]
+fn a_frame_without_observers_lays_out_exactly_once() {
+    let _rt = Runtime::new().enter();
+    let width = signal(10.0);
+    let mut ui = TestUi::new(move || div().flex().child(div().w(move || width.get()).h(10.0)));
+    let before = ui.stats();
+    width.set(30.0);
+    ui.advance(0.0);
+    let work = ui.stats() - before;
+    assert_eq!((work.layouts, work.relayouts), (1, 0));
+}
+
+#[test]
+fn a_size_observer_sees_the_new_size_in_the_same_frame_with_one_relayout() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let width = signal(40.0);
+    let measured = signal(Size::ZERO);
+    let mut ui = TestUi::new(move || {
+        div()
+            .flex()
+            .child(div().w(move || width.get()).h(10.0).track_size(measured))
+            .child(
+                div()
+                    .test_id("follower")
+                    .h(10.0)
+                    .w(move || measured.get().width / 2.0),
+            )
+    });
+    let before = ui.stats();
+    width.set(80.0);
+    ui.advance(0.0);
+    let work = ui.stats() - before;
+    assert_eq!(measured.get_untracked().width, 80.0);
+    assert_eq!(ui.bounds_of("follower").ok_or("follower")?.size.width, 40.0);
+    assert_eq!(
+        (work.layouts, work.relayouts),
+        (2, 1),
+        "feedback is bounded to one relayout"
+    );
+    Ok(())
 }

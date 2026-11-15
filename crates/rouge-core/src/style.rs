@@ -1,8 +1,11 @@
 use crate::length::Length;
 use crate::prop::{IntoProp, Prop};
 use crate::text::TextStyle;
+use crate::theme::Fill;
 use rouge_render::{Color, Corners, Point};
 use std::borrow::Cow;
+use std::mem::replace;
+use std::rc::Rc;
 use taffy::{
     AlignItems, AlignSelf, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
     Point as Axes, Position, Style as Layout,
@@ -68,8 +71,8 @@ macro_rules! slots {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Slot { $($slot,)* }
 
-        fn set_length(layout: &mut Layout, slot: Slot, length: Length) {
-            match slot { $(Slot::$slot => layout.$($field).+ = length.into(),)* }
+        fn set_length(layout: &mut Layout, slot: Slot, length: Length) -> bool {
+            match slot { $(Slot::$slot => set(&mut layout.$($field).+, length.into()),)* }
         }
     };
 }
@@ -116,16 +119,16 @@ pub enum Declaration {
     Overflow(Overflow),
     AspectRatio(f32),
     Length(&'static [Slot], Length),
-    TextColor(Color),
+    TextColor(Fill),
     TextSize(f32),
     Font(Cow<'static, str>),
     FontWeight(f32),
     Italic(bool),
     LineHeight(f32),
-    Background(Color),
-    BorderColor(Color),
+    Background(Fill),
+    BorderColor(Fill),
     Rounded(Corners),
-    Shadows(Vec<BoxShadow>),
+    Shadows(Rc<[BoxShadow]>),
     Invisible(bool),
 }
 
@@ -147,46 +150,45 @@ impl Declaration {
         )
     }
 
-    pub(crate) fn lay_out(&self, layout: &mut Layout) {
+    pub(crate) fn lay_out(&self, layout: &mut Layout) -> bool {
         match *self {
-            Declaration::Display(display) => layout.display = display,
-            Declaration::FlexDirection(direction) => layout.flex_direction = direction,
-            Declaration::FlexWrap(wrap) => layout.flex_wrap = wrap,
-            Declaration::FlexGrow(grow) => layout.flex_grow = grow,
-            Declaration::FlexShrink(shrink) => layout.flex_shrink = shrink,
-            Declaration::AlignItems(align) => layout.align_items = align,
-            Declaration::AlignSelf(align) => layout.align_self = Some(align),
-            Declaration::JustifyContent(justify) => layout.justify_content = justify,
-            Declaration::Position(position) => layout.position = position,
-            Declaration::Overflow(overflow) => {
-                layout.overflow = Axes {
+            Declaration::Display(display) => set(&mut layout.display, display),
+            Declaration::FlexDirection(direction) => set(&mut layout.flex_direction, direction),
+            Declaration::FlexWrap(wrap) => set(&mut layout.flex_wrap, wrap),
+            Declaration::FlexGrow(grow) => set(&mut layout.flex_grow, grow),
+            Declaration::FlexShrink(shrink) => set(&mut layout.flex_shrink, shrink),
+            Declaration::AlignItems(align) => set(&mut layout.align_items, align),
+            Declaration::AlignSelf(align) => set(&mut layout.align_self, Some(align)),
+            Declaration::JustifyContent(justify) => set(&mut layout.justify_content, justify),
+            Declaration::Position(position) => set(&mut layout.position, position),
+            Declaration::Overflow(overflow) => set(
+                &mut layout.overflow,
+                Axes {
                     x: overflow,
                     y: overflow,
-                };
-            }
-            Declaration::AspectRatio(ratio) => layout.aspect_ratio = Some(ratio),
-            Declaration::Length(slots, length) => {
-                for slot in slots {
-                    set_length(layout, *slot, length);
-                }
-            }
-            _ => {}
+                },
+            ),
+            Declaration::AspectRatio(ratio) => set(&mut layout.aspect_ratio, Some(ratio)),
+            Declaration::Length(slots, length) => slots.iter().fold(false, |changed, slot| {
+                set_length(layout, *slot, length) | changed
+            }),
+            _ => false,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Style {
-    pub text_color: Option<Color>,
+    pub text_color: Option<Fill>,
     pub text_size: Option<f32>,
     pub text_font: Option<Cow<'static, str>>,
     pub text_weight: Option<f32>,
     pub text_italic: Option<bool>,
     pub text_line_height: Option<f32>,
-    pub background: Option<Color>,
-    pub border_color: Color,
+    pub background: Option<Fill>,
+    pub border_color: Fill,
     pub corner_radii: Corners,
-    pub shadows: Vec<BoxShadow>,
+    pub shadows: Rc<[BoxShadow]>,
     pub invisible: bool,
     pub hidden: bool,
     pub clips: bool,
@@ -202,9 +204,9 @@ impl Default for Style {
             text_italic: None,
             text_line_height: None,
             background: None,
-            border_color: Color::BLACK,
+            border_color: Fill::Color(Color::BLACK),
             corner_radii: Corners::ZERO,
-            shadows: Vec::new(),
+            shadows: Rc::new([]),
             invisible: false,
             hidden: false,
             clips: false,
@@ -226,7 +228,7 @@ impl Style {
             Declaration::Background(color) => self.background = Some(*color),
             Declaration::BorderColor(color) => self.border_color = *color,
             Declaration::Rounded(radii) => self.corner_radii = *radii,
-            Declaration::Shadows(shadows) => self.shadows.clone_from(shadows),
+            Declaration::Shadows(shadows) => self.shadows = Rc::clone(shadows),
             Declaration::Invisible(invisible) => self.invisible = *invisible,
             _ => {}
         }
@@ -241,6 +243,10 @@ impl Style {
             && self.hidden == other.hidden
             && self.clips == other.clips
     }
+}
+
+fn set<T: PartialEq>(field: &mut T, value: T) -> bool {
+    replace(field, value) != *field
 }
 
 pub(crate) fn base_layout() -> Layout {
@@ -272,7 +278,7 @@ macro_rules! text_properties {
 }
 
 text_properties! {
-    text_color: Color,
+    text_color: Fill,
     text_size: f32,
     text_font: Cow<'static, str>,
     text_weight: f32,
@@ -366,7 +372,7 @@ pub trait Styled: Sized {
     }
 
     props! {
-        text_color(Color) => Declaration::TextColor;
+        text_color(Fill) => Declaration::TextColor;
         text_size(f32) => Declaration::TextSize;
         font(Cow<'static, str>) => Declaration::Font;
         font_weight(f32) => Declaration::FontWeight;
@@ -374,11 +380,11 @@ pub trait Styled: Sized {
         aspect_ratio(f32) => Declaration::AspectRatio;
         flex_grow(f32) => Declaration::FlexGrow;
         flex_shrink(f32) => Declaration::FlexShrink;
-        border_color(Color) => Declaration::BorderColor;
-        bg(Color) => Declaration::Background;
+        border_color(Fill) => Declaration::BorderColor;
+        bg(Fill) => Declaration::Background;
         rounded(Corners) => Declaration::Rounded;
-        shadow(BoxShadow) => |shadow| Declaration::Shadows(vec![shadow]);
-        shadows(Vec<BoxShadow>) => Declaration::Shadows;
+        shadow(BoxShadow) => |shadow| Declaration::Shadows(Rc::new([shadow]));
+        shadows(Vec<BoxShadow>) => |shadows: Vec<BoxShadow>| Declaration::Shadows(shadows.into());
     }
 
     lengths! {
@@ -427,6 +433,12 @@ impl Styled for StyleDelta {
     fn declare(mut self, declaration: Prop<Declaration>) -> Self {
         self.0.push(declaration);
         self
+    }
+}
+
+impl StyleDelta {
+    pub fn apply<T: Styled>(self, target: T) -> T {
+        self.0.into_iter().fold(target, Styled::declare)
     }
 }
 

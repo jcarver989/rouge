@@ -9,20 +9,23 @@ use crate::scroll::scroll_key;
 use crate::style::{Declaration, Dirty, Style, base_layout};
 use crate::surface::{SurfaceOp, SurfaceSpec};
 use crate::text::TextStats;
+use crate::theme::{Palette, Theme};
 use crate::view::Queue;
 use events::Listener;
 use focus::ReplacedFocus;
 use fragment::Fragment;
 use layers::{LayerState, Slot};
-use layout::root_layout;
+use layout::{LayoutNode, root_layout};
 use rouge_reactive::{ReactiveStats, Signal};
-use rouge_render::{Edges, Rect, Size};
-use slotmap::{SlotMap, new_key_type};
+use rouge_render::{Color, Edges, Rect, Size};
+use rouge_theme::UiPalette;
+use rustc_hash::FxHashMap;
+use slotmap::{SecondaryMap, SlotMap, new_key_type};
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::mem::replace;
 use std::ops::Sub;
 use std::rc::Rc;
-use taffy::{NodeId, Position, Rect as Sides, Style as Layout, TaffyTree};
+use taffy::{Position, Rect as Sides, Style as Layout};
 
 mod cascade;
 mod content;
@@ -50,17 +53,57 @@ new_key_type! {
     pub(crate) struct ElementId;
 }
 
-pub(crate) const STATES: usize = 5;
+pub(crate) const STATES: usize = 7;
+
+fn theme_at(elements: &SlotMap<ElementId, Element>, id: ElementId) -> Option<Theme> {
+    let mut current = Some(id);
+    while let Some(element) = current.and_then(|id| elements.get(id)) {
+        if let Some(theme) = element.extras().and_then(|extras| extras.theme) {
+            return Some(theme);
+        }
+        current = element.parent;
+    }
+    None
+}
 
 pub(crate) type Exit = Option<(Pose, Timing)>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Interaction {
     Hover,
     Active,
+    Selected,
+    Checked,
     Focus,
     FocusVisible,
     Disabled,
+}
+
+impl Interaction {
+    pub(crate) const ALL: [Interaction; STATES] = [
+        Interaction::Hover,
+        Interaction::Active,
+        Interaction::Selected,
+        Interaction::Checked,
+        Interaction::Focus,
+        Interaction::FocusVisible,
+        Interaction::Disabled,
+    ];
+
+    pub(crate) fn pointer(self) -> bool {
+        matches!(
+            self,
+            Interaction::Hover
+                | Interaction::Active
+                | Interaction::Focus
+                | Interaction::FocusVisible
+        )
+    }
+}
+
+pub(crate) enum Trigger {
+    GroupHover(String),
+    When(bool),
 }
 
 #[derive(Default)]
@@ -94,20 +137,12 @@ impl Kind {
             _ => None,
         }
     }
-
-    fn measured(&self) -> bool {
-        match self {
-            Kind::Text(_) | Kind::Image(_) => true,
-            Kind::Canvas(canvas) => canvas.measure.is_some(),
-            Kind::Div | Kind::Surface(_) => false,
-        }
-    }
 }
 
 #[derive(Default)]
 pub(crate) struct Extras {
     pub variants: [Vec<Declaration>; STATES],
-    pub groups: Vec<(String, Vec<Declaration>)>,
+    pub triggers: Vec<(Trigger, Vec<Declaration>)>,
     pub layout: Option<Box<Layout>>,
     pub listeners: Vec<(On, Listener)>,
     pub actions: Vec<(TypeId, ActionHandler)>,
@@ -118,6 +153,7 @@ pub(crate) struct Extras {
     pub test_id: Option<String>,
     pub text_hover: Option<HitListener>,
     pub text_click: Option<HitListener>,
+    pub theme: Option<Theme>,
     pub size_observer: Option<Signal<Size>>,
     pub bounds_observer: Option<Signal<Rect>>,
     pub paint_region: Option<Signal<PaintRegion>>,
@@ -133,27 +169,21 @@ pub(crate) struct Flags {
 }
 
 pub(crate) struct ElementSpec {
-    pub style: Style,
     pub layout: Layout,
     pub kind: Kind,
     pub extras: Option<Box<Extras>>,
     pub layer: Option<LayerSpec>,
-    pub cursor: Option<Cursor>,
     pub flags: Flags,
-    pub disabled: bool,
 }
 
 impl Default for ElementSpec {
     fn default() -> Self {
         ElementSpec {
-            style: Style::default(),
             layout: base_layout(),
             kind: Kind::default(),
             extras: None,
             layer: None,
-            cursor: None,
             flags: Flags::default(),
-            disabled: false,
         }
     }
 }
@@ -162,33 +192,33 @@ impl ElementSpec {
     pub(crate) fn extras(&mut self) -> &mut Extras {
         self.extras.get_or_insert_default()
     }
+}
 
-    pub(crate) fn declare(&mut self, declaration: &Declaration) {
-        self.style.apply(declaration);
-        declaration.lay_out(&mut self.layout);
-    }
+struct PendingStyle {
+    old: Style,
+    relayout: bool,
 }
 
 impl Extras {
     fn variant(&self, slot: usize) -> Option<&Vec<Declaration>> {
         match slot.checked_sub(STATES) {
             None => self.variants.get(slot),
-            Some(group) => self.groups.get(group).map(|(_, variant)| variant),
+            Some(trigger) => self.triggers.get(trigger).map(|(_, variant)| variant),
         }
     }
 
     pub(crate) fn variant_mut(&mut self, slot: usize) -> Option<&mut Vec<Declaration>> {
         match slot.checked_sub(STATES) {
             None => self.variants.get_mut(slot),
-            Some(group) => self.groups.get_mut(group).map(|(_, variant)| variant),
+            Some(trigger) => self.triggers.get_mut(trigger).map(|(_, variant)| variant),
         }
     }
 
     fn lays_out(&self) -> bool {
-        let groups = self.groups.iter().map(|(_, variant)| variant);
+        let triggers = self.triggers.iter().map(|(_, variant)| variant);
         self.variants
             .iter()
-            .chain(groups)
+            .chain(triggers)
             .flatten()
             .any(Declaration::is_layout)
     }
@@ -197,10 +227,10 @@ impl Extras {
 struct Element {
     style: Style,
     resolved: Option<Box<Style>>,
+    pending: Option<Box<PendingStyle>>,
     kind: Kind,
     extras: Option<Box<Extras>>,
     layers: [Option<Box<LayerState>>; 2],
-    taffy: NodeId,
     parent: Option<ElementId>,
     fragment: Option<FragmentId>,
     children: Vec<ElementId>,
@@ -249,6 +279,7 @@ pub struct FrameStats {
     pub layer_paints: u64,
     pub relayouts: u64,
     pub patches: u64,
+    pub style_resolutions: u64,
     pub elements_created: u64,
     pub elements_removed: u64,
     pub layers: usize,
@@ -267,6 +298,7 @@ impl Sub for FrameStats {
             layer_paints: self.layer_paints - earlier.layer_paints,
             relayouts: self.relayouts - earlier.relayouts,
             patches: self.patches - earlier.patches,
+            style_resolutions: self.style_resolutions - earlier.style_resolutions,
             elements_created: self.elements_created - earlier.elements_created,
             elements_removed: self.elements_removed - earlier.elements_removed,
             text: self.text - earlier.text,
@@ -279,7 +311,7 @@ impl Sub for FrameStats {
 pub(crate) struct Tree {
     elements: SlotMap<ElementId, Element>,
     fragments: SlotMap<FragmentId, Fragment>,
-    taffy: TaffyTree<ElementId>,
+    layouts: SecondaryMap<ElementId, LayoutNode>,
     root: ElementId,
     content: FragmentId,
     size: Size,
@@ -291,16 +323,17 @@ pub(crate) struct Tree {
     pub(crate) stats: FrameStats,
     pub(crate) compositor: Compositor,
     repaint_all: bool,
-    next_layer: u64,
     observers: Vec<ElementId>,
+    dirty_styles: Vec<ElementId>,
+    themes: Vec<(Theme, Palette)>,
     scrolled: Vec<ElementId>,
-    motions: HashMap<MotionId, Signal<f32>>,
+    motions: FxHashMap<MotionId, Signal<f32>>,
     focused: Option<ElementId>,
     replaced_focus: Option<ReplacedFocus>,
     focus_visible: bool,
     restore: Vec<(ElementId, Option<ElementId>)>,
     focus_fallback: Option<ElementId>,
-    handles: HashMap<u64, (ElementId, Signal<bool>)>,
+    handles: FxHashMap<u64, (ElementId, Signal<bool>)>,
     overlay: Option<ElementId>,
     clipboard: Box<dyn Clipboard>,
     clipboard_target: Rc<()>,
@@ -316,7 +349,7 @@ impl Tree {
         let mut tree = Tree {
             elements: SlotMap::with_key(),
             fragments: SlotMap::with_key(),
-            taffy: TaffyTree::new(),
+            layouts: SecondaryMap::new(),
             root: ElementId::default(),
             content: FragmentId::default(),
             size,
@@ -328,16 +361,17 @@ impl Tree {
             stats: FrameStats::default(),
             compositor: Compositor::new(),
             repaint_all: true,
-            next_layer: 0,
             observers: Vec::new(),
+            dirty_styles: Vec::new(),
+            themes: Vec::new(),
             scrolled: Vec::new(),
-            motions: HashMap::new(),
+            motions: FxHashMap::default(),
             focused: None,
             replaced_focus: None,
             focus_visible: false,
             restore: Vec::new(),
             focus_fallback: None,
-            handles: HashMap::new(),
+            handles: FxHashMap::default(),
             overlay: None,
             clipboard: Box::new(MemoryClipboard::new()),
             clipboard_target: Rc::new(()),
@@ -361,6 +395,60 @@ impl Tree {
 
     pub(crate) fn content(&self) -> Node {
         Node::Fragment(self.content)
+    }
+
+    pub(crate) fn root_background(&self) -> Option<Color> {
+        let mut id = self.root;
+        loop {
+            let element = &self.elements[id];
+            if let Some(background) = element.effective_style().background {
+                return Some(background.resolve(&self.palette_at(id)));
+            }
+            id = *element.children.first()?;
+        }
+    }
+
+    pub(crate) fn set_theme(&mut self, theme: Theme) {
+        self.themes.clear();
+        self.watch_theme(theme);
+    }
+
+    pub(crate) fn theme(&self) -> Option<Theme> {
+        self.themes.first().map(|(theme, _)| *theme)
+    }
+
+    pub(crate) fn watch_theme(&mut self, theme: Theme) {
+        if self.themes.iter().all(|(seen, _)| *seen != theme) {
+            self.themes.push((theme, theme.get_untracked()));
+        }
+    }
+
+    pub(crate) fn palette_at(&self, id: ElementId) -> Palette {
+        theme_at(&self.elements, id)
+            .or_else(|| self.theme())
+            .map_or_else(
+                || UiPalette::light().map(Color::from),
+                |theme| theme.get_untracked(),
+            )
+    }
+
+    fn sync_themes(&mut self) {
+        let mut changed = false;
+        self.themes.retain_mut(|(theme, palette)| {
+            if !theme.is_alive() {
+                return false;
+            }
+            let current = theme.get_untracked();
+            changed |= replace(palette, current) != current;
+            true
+        });
+        if changed {
+            let ids: Vec<_> = self.elements.keys().collect();
+            for id in ids {
+                self.sync_backing(id);
+            }
+            self.invalidate_paint();
+        }
     }
 
     pub(crate) fn stats(&self) -> FrameStats {
@@ -405,10 +493,8 @@ impl Tree {
     pub(crate) fn set_size(&mut self, size: Size) {
         if self.size != size {
             self.size = size;
-            let node = self.elements[self.root].taffy;
-            self.taffy
-                .set_style(node, root_layout(size))
-                .expect("taffy set style");
+            self.layouts[self.root].style = root_layout(size);
+            self.invalidate_layout(self.root);
             self.mark_element(self.root, Dirty::Layout);
         }
     }
@@ -427,7 +513,6 @@ impl Tree {
         {
             extras.layout = Some(Box::new(spec.layout.clone()));
         }
-        let taffy = self.taffy.new_leaf(spec.layout).expect("taffy node");
         let own = spec.layer.take().map(|layer| self.new_layer(layer));
         let extras = spec.extras.as_deref();
         let observer = extras
@@ -457,14 +542,13 @@ impl Tree {
             Kind::Surface(surface) => Some(surface.attach.take()),
             _ => None,
         };
-        let measured = spec.kind.measured();
         let id = self.elements.insert(Element {
-            style: spec.style,
+            style: Style::default(),
             resolved: None,
+            pending: None,
             kind: spec.kind,
             extras: spec.extras,
             layers: [own.map(Box::new), content.map(Box::new)],
-            taffy,
             parent: None,
             fragment: None,
             children: Vec::new(),
@@ -472,19 +556,12 @@ impl Tree {
             painted: Rect::ZERO,
             border: Edges::ZERO,
             states: [false; STATES],
-            cursor: spec.cursor,
+            cursor: None,
             flags: spec.flags,
         });
-        if measured {
-            self.taffy
-                .set_node_context(taffy, Some(id))
-                .expect("taffy context");
-        }
+        self.layouts.insert(id, LayoutNode::new(spec.layout));
         if watched {
             self.observers.push(id);
-        }
-        if let Some(state) = observer {
-            self.scroll_to(id, state.get_untracked().offset);
         }
         if let Some(attach) = attach {
             if let Some((source, status)) = attach {
@@ -495,10 +572,6 @@ impl Tree {
         if let Some((handle, focused)) = handle {
             self.handles.insert(handle, (id, focused));
         }
-        if spec.disabled {
-            self.set_interaction(id, Interaction::Disabled, true);
-        }
-        self.sync_backing(id);
         id
     }
 
@@ -534,13 +607,10 @@ impl Tree {
     }
 
     fn attach(&mut self, parent: ElementId, index: usize, child: ElementId) {
-        let child_node = self.elements[child].taffy;
         let p = &mut self.elements[parent];
         let index = index.min(p.children.len());
         p.children.insert(index, child);
-        self.taffy
-            .insert_child_at_index(p.taffy, index, child_node)
-            .expect("taffy insert");
+        self.invalidate_layout(parent);
         self.elements[child].parent = Some(parent);
         if self.is_connected(parent) {
             self.refresh_variant_subtree(child);
@@ -554,13 +624,9 @@ impl Tree {
         let Some(parent) = self.elements.get_mut(child).and_then(|c| c.parent.take()) else {
             return;
         };
-        let child_node = self.elements[child].taffy;
         self.mark_layer(parent, true);
-        let p = &mut self.elements[parent];
-        p.children.retain(|c| *c != child);
-        self.taffy
-            .remove_child(p.taffy, child_node)
-            .expect("taffy remove child");
+        self.elements[parent].children.retain(|c| *c != child);
+        self.invalidate_layout(parent);
         self.mark(Dirty::Layout);
     }
 

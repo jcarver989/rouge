@@ -1,6 +1,6 @@
 use super::{Kind, Tree};
 use crate::surface::SurfaceOp;
-use rouge_render::{Placement, Surfaces};
+use rouge_render::{SurfaceConfig, Surfaces};
 use std::mem::take;
 
 impl Tree {
@@ -14,7 +14,7 @@ impl Tree {
             let shown = self.window_visible
                 && !element.unseen()
                 && !self.paint_region(id).bounds.is_empty();
-            let placement = Placement {
+            let placement = SurfaceConfig {
                 width: (size.width * scale).round().max(0.0) as u32,
                 height: (size.height * scale).round().max(0.0) as u32,
                 scale,

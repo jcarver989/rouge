@@ -5,7 +5,7 @@ use crate::ui::Ui;
 use crate::view::View;
 use crate::window::{Menu, WindowCommand};
 use rouge_render::headless::{Headless, Image};
-use rouge_render::{Color, GpuError, Point, Rect, RenderStats, Size, Surfaces, Viewport};
+use rouge_render::{Color, Command, GpuError, Point, Rect, RenderStats, Size, Surfaces, Viewport};
 use rouge_theme::UiPalette;
 use std::borrow::Cow;
 use std::mem::take;
@@ -177,9 +177,9 @@ impl TestUi {
             .as_mut()
             .expect("the headless renderer exists");
         self.ui.sync_surfaces(headless.surfaces());
-        headless.surfaces().latch(Instant::now());
-        let frame = self.ui.frame();
-        let stats = headless.render(self.clear, &frame.scene, frame.atlas);
+        headless.surfaces().latch();
+        let frame = self.ui.frame(headless.surfaces());
+        let stats = headless.render(self.clear, frame.scene, frame.atlas);
         headless
             .surfaces()
             .presented(Instant::now(), Duration::from_secs_f64(STEP));
@@ -195,6 +195,15 @@ impl TestUi {
             headless.wait()?;
         }
         Ok(())
+    }
+
+    pub fn commands(&mut self) -> Result<Vec<Command>, TestError> {
+        self.headless()?;
+        let (_, headless) = self
+            .headless
+            .as_mut()
+            .expect("the headless renderer exists");
+        Ok(self.ui.frame(headless.surfaces()).scene.commands.to_vec())
     }
 
     pub fn render(&mut self) -> Result<Image, TestError> {

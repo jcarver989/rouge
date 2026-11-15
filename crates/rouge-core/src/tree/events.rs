@@ -171,8 +171,14 @@ impl Tree {
 
     pub(crate) fn cursor(&self) -> Cursor {
         let mut path = self.pointer_path().iter().rev();
-        path.find_map(|id| self.elements.get(*id)?.cursor)
-            .unwrap_or_default()
+        path.find_map(|id| {
+            let element = self.elements.get(*id)?;
+            if element.disabled() {
+                return Some(Cursor::default());
+            }
+            element.cursor
+        })
+        .unwrap_or_default()
     }
 
     pub(crate) fn text_click(&self, path: &[ElementId], point: Point, modifiers: Modifiers) {

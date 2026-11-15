@@ -7,9 +7,9 @@ use crate::view::{BuildCx, Div, View, div};
 use rouge_macros::component;
 use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal, untrack};
 use rouge_render::{Point, Rect, Size};
+use rustc_hash::FxHashMap;
 use std::cell::Cell;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -29,9 +29,7 @@ pub fn scroll() -> Div {
 }
 
 pub(crate) fn scroll_key(state: Signal<ScrollState>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    state.hash(&mut hasher);
-    hasher.finish()
+    state.id()
 }
 
 pub trait Scrollable: View {
@@ -297,7 +295,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
             .unwrap_or_else(|| signal(ScrollState::default()));
         let rows = Rows::new();
         let mounted: Option<Measurements<U>> =
-            self.measure.as_ref().map(|_| signal(HashMap::new()));
+            self.measure.as_ref().map(|_| signal(FxHashMap::default()));
         let width = signal(Size::ZERO);
         let configured = signal(0_u64);
         configure_rows(

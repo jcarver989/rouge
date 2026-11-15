@@ -7,17 +7,13 @@ use rouge_core::{
 };
 use rouge_render::headless::{Headless, Image};
 use rouge_render::{
-    Atlas, DrawList, EffectInstance, GpuError, Placement, RenderStats, Surfaces, Viewport,
+    Atlas, DrawList, EffectInstance, GpuError, RenderStats, SurfaceConfig, Surfaces, Viewport,
 };
 use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
-use std::time::Instant;
-
-pub(crate) const ROOT: LayerId = LayerId(0);
-pub(crate) const CHILD: LayerId = LayerId(1);
 
 pub(crate) fn quads(quads: impl IntoIterator<Item = Quad>) -> DrawList {
     let mut list = DrawList::new();
@@ -87,17 +83,20 @@ impl StageBuilder {
     }
 
     pub(crate) fn build(self) -> Result<Stage, GpuError> {
+        let mut compositor = Compositor::new();
+        let (root, child) = (compositor.create_layer(), compositor.create_layer());
         let mut stage = Stage {
-            compositor: Compositor::new(),
+            root,
+            child,
+            compositor,
             headless: Headless::new(Viewport::new(100, 100, 1.0))?,
             atlas: Atlas::new(),
             status: Rc::new(RefCell::new(SurfaceStatus::Waiting)),
         };
-        stage.compositor.create_layer(ROOT);
-        stage.compositor.set_root(ROOT);
+        stage.compositor.set_root(stage.root);
         stage
             .compositor
-            .set_frame(ROOT, Rect::new(0.0, 0.0, 100.0, 100.0));
+            .set_frame(stage.root, Rect::new(0.0, 0.0, 100.0, 100.0));
         let mut nested = Vec::new();
         let surface = self.surface.map(|source| {
             let id = source.id();
@@ -106,7 +105,7 @@ impl StageBuilder {
             surfaces.attach(source, move |update| *status.borrow_mut() = update);
             surfaces.place(
                 id,
-                Placement {
+                SurfaceConfig {
                     width: self.size.width as u32,
                     height: self.size.height as u32,
                     scale: 1.0,
@@ -117,26 +116,27 @@ impl StageBuilder {
         });
         let child = self.child.or_else(|| surface.map(|_| DrawList::new()));
         if let Some(list) = child {
-            stage.compositor.create_layer(CHILD);
             let frame = Rect {
                 origin: self.origin,
                 size: self.size,
             };
-            stage.compositor.set_frame(CHILD, frame);
-            stage.compositor.set_surface(CHILD, surface);
-            stage.content(CHILD, vec![list], vec![]);
+            stage.compositor.set_frame(stage.child, frame);
+            stage.compositor.set_surface(stage.child, surface);
+            stage.content(stage.child, vec![list], vec![]);
             nested.push(Nested {
-                layer: CHILD,
+                layer: stage.child,
                 clip: self.clip,
             });
         }
         let behind = self.background.unwrap_or_else(background);
-        stage.content(ROOT, vec![behind, DrawList::new()], nested);
+        stage.content(stage.root, vec![behind, DrawList::new()], nested);
         Ok(stage)
     }
 }
 
 pub(crate) struct Stage {
+    pub(crate) root: LayerId,
+    pub(crate) child: LayerId,
     pub(crate) compositor: Compositor,
     pub(crate) headless: Headless,
     pub(crate) atlas: Atlas,
@@ -170,23 +170,24 @@ impl Stage {
     }
 
     pub(crate) fn exit(&mut self, to: Pose) {
-        self.compositor.exit(CHILD, to, LINEAR.into());
+        self.compositor.exit(self.child, to, LINEAR.into());
     }
 
     pub(crate) fn scroll_extent(&mut self, height: f32) {
         let (viewport, content) = (Size::new(100.0, 100.0), Size::new(100.0, height));
-        self.compositor.set_scroll_extent(CHILD, viewport, content);
+        self.compositor
+            .set_scroll_extent(self.child, viewport, content);
     }
 
     pub(crate) fn offset(&self) -> Point {
-        let scroll = self.compositor.scroll(CHILD);
+        let scroll = self.compositor.scroll(self.child);
         scroll.map_or(Point::new(f32::NAN, f32::NAN), |scroll| scroll.offset)
     }
 
     pub(crate) fn bind(&mut self, motion: MotionId, initial: f32) {
         self.compositor.create_motion(motion, initial);
         self.compositor
-            .bind_prop(CHILD, LayerProp::TranslateX, motion);
+            .bind_prop(self.child, LayerProp::TranslateX, motion);
     }
 
     pub(crate) fn animate(&mut self, motion: MotionId, target: f32, timing: Timing) -> Animation {
@@ -214,12 +215,10 @@ impl Stage {
 
     pub(crate) fn draw(&mut self) -> RenderStats {
         self.compositor.sync_surfaces(self.headless.surfaces());
-        self.headless.surfaces().latch(Instant::now());
-        self.headless.render(
-            Color::TRANSPARENT,
-            &self.compositor.scene(1.0),
-            &mut self.atlas,
-        )
+        self.headless.surfaces().latch();
+        let scene = self.compositor.scene(1.0, self.headless.surfaces());
+        self.headless
+            .render(Color::TRANSPARENT, scene, &mut self.atlas)
     }
 
     pub(crate) fn surfaces(&mut self) -> &mut Surfaces {

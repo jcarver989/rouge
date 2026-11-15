@@ -7,14 +7,11 @@ use rouge_render::{Color, Corners, EffectInstance, Rect, SurfaceId};
 
 #[derive(Default)]
 pub(crate) struct LayerSpec {
-    pub props: Vec<(LayerProp, MotionProp)>,
-    pub effects: Vec<(EffectSlot, EffectInstance)>,
     pub transition: Option<Timing>,
     pub layout_transition: Option<LayoutTransition>,
     pub keyframes: Option<Keyframes>,
     pub rasterize: bool,
     pub surface: Option<SurfaceId>,
-    pub link: Option<(u64, ScrollLinked)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -41,27 +38,15 @@ pub(super) struct LayerState {
 
 impl Tree {
     pub(super) fn new_layer(&mut self, spec: LayerSpec) -> LayerState {
-        let id = LayerId(self.next_layer);
-        self.next_layer += 1;
         let compositor = &mut self.compositor;
-        compositor.create_layer(id);
+        let id = compositor.create_layer();
         compositor.set_transition(id, spec.transition);
         compositor.set_layout_transition(id, spec.layout_transition);
-        for (prop, value) in spec.props {
-            match value {
-                MotionProp::Motion(motion) => compositor.bind_prop(id, prop, motion.id()),
-                MotionProp::Value(value) => compositor.set_prop(id, prop, value, false),
-            }
-        }
-        for (slot, effect) in spec.effects {
-            compositor.set_effect(id, slot, Some(effect), false);
-        }
         if let Some(keyframes) = spec.keyframes {
             compositor.animate(id, keyframes);
         }
         compositor.set_rasterize(id, spec.rasterize);
         compositor.set_surface(id, spec.surface);
-        compositor.set_scroll_link(id, spec.link);
         LayerState {
             id,
             dirty: true,
@@ -72,12 +57,20 @@ impl Tree {
     }
 
     pub(super) fn sync_backing(&mut self, id: ElementId) {
-        let Some(element) = self.elements.get_mut(id) else {
+        if self
+            .elements
+            .get(id)
+            .is_none_or(|element| element.layer(Slot::Own).is_none())
+        {
             return;
-        };
+        }
+        let palette = self.palette_at(id);
+        let element = &mut self.elements[id];
         let style = element.effective_style();
         let backing = (
-            style.background.unwrap_or(Color::TRANSPARENT),
+            style
+                .background
+                .map_or(Color::TRANSPARENT, |fill| fill.resolve(&palette)),
             style.corner_radii,
         );
         let Some(layer) = &mut element.layers[Slot::Own as usize] else {
