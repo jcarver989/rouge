@@ -11,7 +11,7 @@ use rouge_core::{
     BuildCx, Div, Key, Menu, Point, PointerButton, Rect, Styled, View, component, div, pct, styled,
     text, view,
 };
-use rouge_reactive::{Signal, signal};
+use rouge_reactive::{Model, Signal, signal};
 use std::rc::Rc;
 
 pub use rouge_core::MenuItem;
@@ -237,8 +237,8 @@ impl View for ContextMenu {
 }
 
 #[component]
-pub fn select<T: Clone + PartialEq + 'static>(
-    value: Signal<T>,
+pub fn select<T: Clone + PartialEq + 'static, U: Model<T>>(
+    value: U,
     options: impl IntoIterator<Item = (T, String)>,
 ) -> ContextMenu {
     let options: Rc<[(T, String)]> = options.into_iter().collect();

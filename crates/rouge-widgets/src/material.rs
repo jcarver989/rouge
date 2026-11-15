@@ -39,7 +39,10 @@ impl MaterialExt for Div {
     }
 
     fn focusable_glass(self, focused: impl Fn() -> bool + 'static) -> Self {
-        overhead_glass(self.rounded(Radius::Floating).shadow(BoxShadow::md()), focused)
+        overhead_glass(
+            self.rounded(Radius::Floating).shadow(BoxShadow::md()),
+            focused,
+        )
     }
 }
 
@@ -48,12 +51,21 @@ impl MaterialExt for Div {
 fn overhead_glass(div: Div, focused: impl Fn() -> bool + 'static) -> Div {
     let theme = Theme::current();
     div.backdrop(move || {
-        let highlight = if focused() { FOCUSED_HIGHLIGHT } else { HIGHLIGHT };
-        OVERHEAD_GLASS.tint(theme.get().elevated.with_alpha(TINT)).highlight(highlight)
+        let highlight = if focused() {
+            FOCUSED_HIGHLIGHT
+        } else {
+            HIGHLIGHT
+        };
+        OVERHEAD_GLASS
+            .tint(theme.get().elevated.with_alpha(TINT))
+            .highlight(highlight)
     })
 }
 
-const OVERHEAD_GLASS: Glass = Glass::frosted(10.0).edge_width(1.5).shadow(0.2).rim_light(0.0, 0.0);
+const OVERHEAD_GLASS: Glass = Glass::frosted(10.0)
+    .edge_width(1.5)
+    .shadow(0.2)
+    .rim_light(0.0, 0.0);
 
 const TINT: f32 = 0.5;
 

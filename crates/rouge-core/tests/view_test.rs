@@ -647,7 +647,9 @@ fn background_and_radius_of_a_layer_animate_without_painting() -> TestResult {
 fn enter_poses_can_animate_background_and_radius() -> TestResult {
     let _rt = Runtime::new().enter();
     let mut ui = TestUi::canvas(|| {
-        let from = Pose::new().background(Color::BLUE).rounded(Corners::all(20.0));
+        let from = Pose::new()
+            .background(Color::BLUE)
+            .rounded(Corners::all(20.0));
         let swatch = show(|| true, || div().size(40.0).bg(Color::RED)).enter(from, LINEAR);
         div().size_full().child(swatch)
     });

@@ -187,7 +187,11 @@ fn tooltip_takes_the_surface_of_a_dark_theme() -> TestResult {
     let bubble = ui.pixel(14, 46)?;
     let distance = |color: Color| {
         let target = color.to_rgba8();
-        bubble.iter().zip(target).map(|(a, b)| u32::from(a.abs_diff(b))).sum::<u32>()
+        bubble
+            .iter()
+            .zip(target)
+            .map(|(a, b)| u32::from(a.abs_diff(b)))
+            .sum::<u32>()
     };
     let palette = UiPalette::dark().map(Color::from);
     assert!(

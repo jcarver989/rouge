@@ -430,7 +430,13 @@ fn selection_hud(review: Review) -> Div {
         .scale(shown.pick(1.0, 0.85))
         .transition(Spring::bouncy())
         .on_click(move |_| review.selected.set(None))
-        .child(div().size(8.0).rounded(Corners::all(4.0)).flex_none().bg(dot))
+        .child(
+            div()
+                .size(8.0)
+                .rounded(Corners::all(4.0))
+                .flex_none()
+                .bg(dot),
+        )
         .child(
             clipped(code(describe, TEXT))
                 .font(CODE_FONT)

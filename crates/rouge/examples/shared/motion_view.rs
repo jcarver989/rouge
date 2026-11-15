@@ -98,7 +98,11 @@ fn spinner() -> impl View {
         .at(1.0, |pose| pose.rotate(360.0))
         .duration(1.2)
         .repeat();
-    div().size(22.0).rounded(Corners::all(5.0)).bg(ACCENT).animate(spin)
+    div()
+        .size(22.0)
+        .rounded(Corners::all(5.0))
+        .bg(ACCENT)
+        .animate(spin)
 }
 
 pub(crate) fn motion_demo() -> impl View {

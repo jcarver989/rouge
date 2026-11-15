@@ -185,7 +185,6 @@ impl Corners {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Edges {
     pub top: f32,
