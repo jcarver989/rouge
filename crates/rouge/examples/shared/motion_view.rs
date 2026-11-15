@@ -76,26 +76,19 @@ fn cards() -> impl View {
 
 fn switch() -> impl View {
     let on = signal(false);
-    let x = motion(0.0);
-    let toggle = move |_: &PointerEvent| {
-        on.update(|on| *on = !*on);
-        x.animate_to(
-            if on.get_untracked() { 28.0 } else { 0.0 },
-            Spring::bouncy(),
-        );
-    };
     let knob = div()
         .size(24.0)
         .m(2.0)
         .rounded(12.0)
         .bg(Color::WHITE)
-        .translate_x(x);
+        .translate_x(on.pick(28.0, 0.0))
+        .transition(Spring::bouncy());
     div()
         .w(56.0)
         .h(28.0)
         .rounded(14.0)
-        .bg(move || if on.get() { ACCENT } else { RAISED })
-        .on_click(toggle)
+        .bg(on.pick(ACCENT, RAISED))
+        .on_click(move |_| on.toggle())
         .child(knob)
 }
 
@@ -109,7 +102,7 @@ fn spinner() -> impl View {
 }
 
 pub(crate) fn motion_demo() -> impl View {
-    let controls = panel("Motion value and keyframes").child(
+    let controls = panel("Transitions and keyframes").child(
         div()
             .flex()
             .items_center()

@@ -1,12 +1,12 @@
 mod clipboard;
 mod host;
-mod runtime;
 mod trace;
 
+#[doc(hidden)]
 pub use super::css_cursor;
-pub use runtime::BrowserRuntime;
 
-pub(crate) use host::run;
+pub use host::Mounted;
+pub(crate) use host::{mount, run};
 
 use rouge_core::Key;
 #[cfg(feature = "open-url")]
@@ -14,6 +14,10 @@ use std::io::Error as IoError;
 
 pub(crate) fn warn(message: &str) {
     web_sys::console::warn_1(&format!("rouge: {message}").into());
+}
+
+pub(crate) fn log(message: &str) {
+    web_sys::console::log_1(&message.into());
 }
 
 #[cfg(feature = "open-url")]
@@ -26,6 +30,7 @@ pub(crate) fn open_url(url: &str) -> Result<(), IoError> {
         .ok_or_else(|| IoError::other("the browser blocked the new tab"))
 }
 
+#[doc(hidden)]
 pub fn dom_key(key: &str, code: &str, shift: bool) -> Key {
     match key {
         "Enter" => Key::Enter,

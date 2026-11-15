@@ -10,14 +10,8 @@ rust-version.workspace = true
 markdown = ["syntax", "rouge-widgets/markdown", "dep:rouge-markdown"]
 open-url = ["dep:open"]
 syntax = ["rouge-widgets/syntax", "dep:rouge-syntax"]
-tokio-rt = [
-    "rouge-reactive/tokio-rt",
-    "dep:serde",
-    "dep:serde_json",
-    "tokio/macros",
-    "tokio/rt",
-    "tokio/time",
-]
+persist = ["tokio-rt", "dep:serde", "dep:serde_json"]
+tokio-rt = ["rouge-reactive/tokio-rt", "tokio/macros", "tokio/rt", "tokio/time"]
 
 [dependencies]
 serde = { workspace = true, optional = true }
@@ -44,7 +38,6 @@ image.workspace = true
 tracing-chrome = "0.7"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-slotmap.workspace = true
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
@@ -64,7 +57,7 @@ workspace = true
 muda = { version = "0.19.3", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-rouge = { path = ".", features = ["tokio-rt"] }
+rouge = { path = ".", features = ["persist"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 winit.workspace = true
@@ -77,10 +70,6 @@ web-sys = { version = "0.3", features = ["ClipboardEventInit", "DataTransfer", "
 [[test]]
 name = "platform_web_test"
 path = "tests/platform/web_test.rs"
-
-[[test]]
-name = "platform_web_runtime_test"
-path = "tests/platform/web/runtime_test.rs"
 
 [[test]]
 name = "platform_web_host_test"

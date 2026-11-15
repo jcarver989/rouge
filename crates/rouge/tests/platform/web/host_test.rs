@@ -3,8 +3,9 @@
 use gloo_timers::future::TimeoutFuture;
 use js_sys::Promise;
 use rouge::core::{Styled, div, editable, window_handle};
-use rouge::reactive::{effect, signal};
+use rouge::reactive::{effect, signal, sleep, spawn};
 use rouge::{App, WindowOptions};
+use std::time::Duration;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -85,6 +86,53 @@ async fn a_dom_paste_lands_in_the_focused_editor() -> Result<(), JsValue> {
     .await?;
     assert!(paste.default_prevented());
     Ok(())
+}
+
+#[wasm_bindgen_test]
+async fn a_mounted_app_wakes_for_a_browser_timer() -> Result<(), JsValue> {
+    let document = document()?;
+    container(&document, "timer-host")?;
+    let _mounted = App::new()
+        .window(
+            WindowOptions::default().title("timer").canvas("timer-host"),
+            timed_title("woke"),
+        )
+        .mount()
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    until("the timer", || document.title() == "woke").await
+}
+
+#[wasm_bindgen_test]
+async fn unmounting_cancels_pending_wakes() -> Result<(), JsValue> {
+    let document = document()?;
+    container(&document, "unmount-host")?;
+    let mounted = App::new()
+        .window(
+            WindowOptions::default()
+                .title("unmount")
+                .canvas("unmount-host"),
+            timed_title("too late"),
+        )
+        .mount()
+        .await
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    until("the title", || document.title() == "unmount").await?;
+    drop(mounted);
+    TimeoutFuture::new(60).await;
+    assert_eq!(document.title(), "unmount");
+    Ok(())
+}
+
+fn timed_title(title: &'static str) -> impl FnOnce() -> rouge::core::Div {
+    move || {
+        let window = window_handle();
+        spawn(async move {
+            sleep(Duration::from_millis(30)).await;
+            window.set_title(title);
+        });
+        div().size_full()
+    }
 }
 
 fn document() -> Result<Document, JsValue> {

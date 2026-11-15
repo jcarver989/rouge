@@ -1,3 +1,5 @@
+#![expect(clippy::large_types_passed_by_value)]
+
 mod patch;
 mod presentation;
 mod syntax;
@@ -7,7 +9,6 @@ pub(crate) use patch::{Patch, Tone};
 
 use patch::{FileDiff, Status};
 use presentation::{Cell, Document, HEADER_HEIGHT, Presentation, Row, RowKey, RowKind};
-use rouge::core::IntoProp;
 use rouge::prelude::*;
 use std::ops::Range;
 use std::rc::Rc;
@@ -50,13 +51,13 @@ const GUTTER_WIDTH: f32 = 52.0;
 const SEGMENT_WIDTH: f32 = 72.0;
 const SEGMENT_HEIGHT: f32 = 24.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Side {
     Old,
     New,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Selection {
     key: RowKey,
     side: Side,
@@ -71,6 +72,7 @@ struct Review {
     split: Signal<bool>,
     collapsed: Signal<Vec<bool>>,
     selected: Signal<Option<Selection>>,
+    selection: Selector<Option<Selection>>,
     list: VirtualListHandle,
     commenting: Signal<bool>,
     draft: Signal<String>,
@@ -79,6 +81,7 @@ struct Review {
     presentation: Memo<Rc<Presentation>>,
     offset: Memo<f32>,
     active_file: Memo<usize>,
+    active: Selector<usize>,
 }
 
 impl Review {
@@ -94,11 +97,13 @@ impl Review {
         let offset = memo(move || list.scroll_state().with(|state| state.offset.y.round()));
         let active_file =
             memo(move || presentation.with(|p| p.file_at(offset.get(), |row| list.row_top(row))));
+        let selected = signal(None);
         Review {
             document,
             split,
             collapsed,
-            selected: signal(None),
+            selected,
+            selection: selector(move || selected.get()),
             list,
             commenting: signal(false),
             draft: signal(String::new()),
@@ -107,6 +112,7 @@ impl Review {
             presentation,
             offset,
             active_file,
+            active: selector(move || active_file.get()),
         }
     }
 
@@ -251,13 +257,7 @@ fn layout_switch(review: Review) -> Div {
         .h(SEGMENT_HEIGHT)
         .rounded(SEGMENT_HEIGHT / 2.0)
         .bg(PRESS)
-        .translate_x(move || {
-            if review.split.get() {
-                SEGMENT_WIDTH
-            } else {
-                0.0
-            }
-        })
+        .translate_x(review.split.pick(SEGMENT_WIDTH, 0.0))
         .transition(Spring::snappy());
     div()
         .relative()
@@ -273,7 +273,7 @@ fn layout_switch(review: Review) -> Div {
 
 fn sidebar(review: Review) -> Div {
     let entry = move |(index, file): (usize, Rc<FileDiff>)| {
-        let active = memo(move || review.active_file.get() == index);
+        let active = review.active.is(index);
         div()
             .flex()
             .flex_none()
@@ -283,13 +283,7 @@ fn sidebar(review: Review) -> Div {
             .mx(6.0)
             .px(8.0)
             .rounded(6.0)
-            .bg(move || {
-                if active.get() {
-                    PRESS
-                } else {
-                    Color::TRANSPARENT
-                }
-            })
+            .bg(active.pick(PRESS, Color::TRANSPARENT))
             .hover(|style| style.bg(LIFT))
             .test_id(format!("diff-file-{index}"))
             .on_click(move |_| review.scroll_to_file(index))
@@ -431,9 +425,9 @@ fn selection_hud(review: Review) -> Div {
         .px(18.0)
         .rounded(HUD_HEIGHT / 2.0)
         .backdrop(HUD_GLASS)
-        .opacity(move || if shown.get() { 1.0 } else { 0.0 })
-        .translate_y(move || if shown.get() { 0.0 } else { 36.0 })
-        .scale(move || if shown.get() { 1.0 } else { 0.85 })
+        .opacity(shown.pick(1.0, 0.0))
+        .translate_y(shown.pick(0.0, 36.0))
+        .scale(shown.pick(1.0, 0.85))
         .transition(Spring::bouncy())
         .on_click(move |_| review.selected.set(None))
         .child(div().size(8.0).rounded(4.0).flex_none().bg(dot))
@@ -526,13 +520,7 @@ fn file_header(review: Review, file: usize) -> Div {
         .size_full()
         .px(8.0)
         .py(4.0)
-        .opacity(move || {
-            if review.active_file.get() == file {
-                0.0
-            } else {
-                1.0
-            }
-        })
+        .opacity(review.active.is(file).pick(0.0, 1.0))
         .child(bar)
 }
 
@@ -543,7 +531,7 @@ fn header_bar(review: Review, file: usize) -> Div {
     let collapsed = memo(move || review.collapsed.with(|collapsed| collapsed[file]));
     let chevron = div()
         .flex_none()
-        .rotate(move || if collapsed.get() { 0.0 } else { 90.0 })
+        .rotate(collapsed.pick(0.0, 90.0))
         .transition(Spring::snappy())
         .child(label("›", 16.0, MUTED));
     let directory = diff
@@ -609,7 +597,7 @@ fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div 
         number: cell.number,
         tone: cell.tone,
     };
-    let selected = memo(move || review.selected.get() == Some(selection));
+    let selected = review.selection.is(Some(selection));
     let number = cell
         .number
         .map(|number| code(number.to_string(), colors.gutter));
@@ -663,13 +651,7 @@ fn code_cell(review: Review, row: &Row, side: Side, cell: Option<&Cell>) -> Div 
         .child(text("+"));
     frame
         .test_id(id.clone())
-        .bg(move || {
-            if selected.get() {
-                SELECTION
-            } else {
-                colors.background
-            }
-        })
+        .bg(selected.pick(SELECTION, colors.background))
         .hover(move |style| style.bg(colors.hover))
         .on_click(move |_| review.selected.set(Some(selection)))
         .child(

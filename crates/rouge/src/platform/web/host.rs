@@ -1,20 +1,20 @@
 use super::clipboard::WebClipboard;
 use super::dom_key;
-use super::runtime::BrowserRuntime;
 use super::trace::PerformanceLayer;
 use crate::app::{App, AppError, RootFn, WindowOptions};
-use crate::driver::{Drawn, Driver, TextInput, connect, latch};
-use crate::platform::{LINE_SCROLL, css_cursor, window_root};
+use crate::driver::{Driver, Setup, TextInput, connect, latch};
+use crate::platform::{LINE_SCROLL, css_cursor, default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use js_sys::{Array, Error as JsError, Function, Reflect};
 use rouge_core::{
-    Appearance, EditAction, ImeEvent, KeyEvent, Menu, Modifiers, Point, PointerButton, Size,
-    TouchPhase, Ui, WindowCommand,
+    Appearance, EditAction, ImeEvent, KeyEvent, Menu, Modifiers, Point, PointerButton, TouchPhase,
+    Ui, WindowCommand,
 };
+use rouge_reactive::Runtime;
 use rouge_render::{Gpu, Surfaces};
 use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
-use std::mem::replace;
+use std::mem::{forget, replace, take};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 use wasm_bindgen::closure::Closure;
@@ -26,6 +26,7 @@ use web_sys::{
     MediaQueryList, PointerEvent, ResizeObserver, ResizeObserverBoxOptions, ResizeObserverEntry,
     ResizeObserverOptions, ResizeObserverSize, UrlSearchParams, WheelEvent, Window, console,
 };
+use web_time::Instant;
 use wgpu::{Instance, SurfaceTarget};
 
 const CANVAS_STYLE: &str = "display:block;touch-action:none;outline:none;\
@@ -35,11 +36,76 @@ const INPUT_STYLE: &str = "position:fixed;left:0;top:0;opacity:0;pointer-events:
     width:1px;height:1px;padding:0;border:0;resize:none;font-size:16px;";
 
 type Slot = Rc<OnceCell<Weak<Host>>>;
-type Handler = Rc<dyn Fn(&Host, &mut State, &str, &Event)>;
 
 thread_local! {
-    static WINDOWS: RefCell<Vec<Rc<Host>>> = const { RefCell::new(Vec::new()) };
+    static HOSTS: RefCell<Vec<(u64, Weak<Host>)>> = const { RefCell::new(Vec::new()) };
+    static NEXT_HOST: Cell<u64> = const { Cell::new(0) };
     static GPU: RefCell<Option<(Instance, Gpu)>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+enum Source {
+    Page,
+    Document,
+    Canvas,
+    Input,
+    Scheme,
+    Resolution,
+}
+
+const PAGE_EVENTS: &[&str] = &["resize", "scroll", "focus", "blur"];
+const DOCUMENT_EVENTS: &[&str] = &["visibilitychange"];
+const CANVAS_EVENTS: &[&str] = &[
+    "pointerdown",
+    "pointermove",
+    "pointerup",
+    "pointercancel",
+    "lostpointercapture",
+    "pointerleave",
+    "contextmenu",
+    "wheel",
+    "keydown",
+    "keyup",
+    "copy",
+    "cut",
+    "paste",
+];
+const INPUT_EVENTS: &[&str] = &[
+    "keydown",
+    "keyup",
+    "copy",
+    "cut",
+    "paste",
+    "beforeinput",
+    "input",
+    "compositionstart",
+    "compositionupdate",
+    "compositionend",
+];
+const MEDIA_EVENTS: &[&str] = &["change"];
+
+fn host(id: u64) -> Option<Rc<Host>> {
+    HOSTS.with_borrow(|hosts| {
+        hosts
+            .iter()
+            .find(|(host, _)| *host == id)
+            .and_then(|(_, host)| host.upgrade())
+    })
+}
+
+fn wake(id: u64) {
+    let Some(waking) = host(id).map(|host| host.waking.replace(true)) else {
+        return;
+    };
+    if waking {
+        return;
+    }
+    spawn_local(async move {
+        if let Some(host) = host(id) {
+            host.waking.set(false);
+            host.update(|_, _| {});
+        }
+    });
 }
 
 impl From<JsValue> for AppError {
@@ -57,10 +123,30 @@ impl From<JsValue> for AppError {
     }
 }
 
-pub(crate) fn run(mut app: App) -> Result<(), AppError> {
-    if !app.menus.is_empty() && !app.menus.iter().any(|menu| menu.title == "Edit") {
-        app.menus.insert(app.menus.len().min(1), Menu::edit());
-    }
+pub struct Mounted {
+    _hosts: Vec<Rc<Host>>,
+}
+
+pub(crate) fn run(app: App) -> Result<(), AppError> {
+    spawn_local(async move {
+        match mount_windows(app).await {
+            Ok(hosts) => forget(hosts),
+            Err((canvas, error)) => report(canvas.as_deref(), &error),
+        }
+    });
+    Ok(())
+}
+
+pub(crate) async fn mount(app: App) -> Result<Mounted, AppError> {
+    mount_windows(app)
+        .await
+        .map(|hosts| Mounted { _hosts: hosts })
+        .map_err(|(_, error)| error)
+}
+
+async fn mount_windows(app: App) -> Result<Vec<Rc<Host>>, (Option<String>, AppError)> {
+    let bar = !app.menus.is_empty();
+    let menus = default_menus(app.menus);
     let params = web_sys::window()
         .and_then(|window| window.location().search().ok())
         .and_then(|search| UrlSearchParams::new_with_str(&search).ok());
@@ -68,16 +154,13 @@ pub(crate) fn run(mut app: App) -> Result<(), AppError> {
     if settings.trace.is_some() {
         subscribe(PerformanceLayer);
     }
-    spawn_local(async move {
-        for (options, root) in app.windows {
-            let canvas = options.canvas.clone();
-            match Host::mount(options, root, &app.menus, &app.fonts, &settings).await {
-                Ok(host) => WINDOWS.with_borrow_mut(|windows| windows.push(host)),
-                Err(error) => report(canvas.as_deref(), &error),
-            }
-        }
-    });
-    Ok(())
+    let mut hosts = Vec::with_capacity(app.windows.len());
+    for (options, root) in app.windows {
+        let canvas = options.canvas.clone();
+        let host = Host::mount(options, root, &menus, bar, &app.fonts, &settings).await;
+        hosts.push(host.map_err(|error| (canvas, error))?);
+    }
+    Ok(hosts)
 }
 
 fn report(canvas: Option<&str>, error: &AppError) {
@@ -99,35 +182,47 @@ fn report(canvas: Option<&str>, error: &AppError) {
     }
 }
 
-struct Listener(EventTarget, &'static str, Closure<dyn FnMut(Event)>);
+struct Listener {
+    target: EventTarget,
+    names: &'static [&'static str],
+    closure: Closure<dyn FnMut(Event)>,
+}
 
 impl Listener {
     fn new(
         slot: &Slot,
         target: EventTarget,
-        name: &'static str,
-        handler: Handler,
+        source: Source,
+        names: &'static [&'static str],
     ) -> Result<Listener, AppError> {
         let closure: Closure<dyn FnMut(Event)> =
             Closure::new(bind(slot, move |host, event: Event| {
-                host.update(|host, state| handler(host, state, name, &event));
+                host.update(|host, state| host.event(state, source, &event));
             }));
         let options = AddEventListenerOptions::new();
         options.set_passive(false);
-        target.add_event_listener_with_callback_and_add_event_listener_options(
-            name,
-            closure.as_ref().unchecked_ref(),
-            &options,
-        )?;
-        Ok(Listener(target, name, closure))
+        for name in names {
+            target.add_event_listener_with_callback_and_add_event_listener_options(
+                name,
+                closure.as_ref().unchecked_ref(),
+                &options,
+            )?;
+        }
+        Ok(Listener {
+            target,
+            names,
+            closure,
+        })
     }
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        let _ = self
-            .0
-            .remove_event_listener_with_callback(self.1, self.2.as_ref().unchecked_ref());
+        for name in self.names {
+            let _ = self
+                .target
+                .remove_event_listener_with_callback(name, self.closure.as_ref().unchecked_ref());
+        }
     }
 }
 
@@ -139,6 +234,7 @@ struct State {
     touch: Option<i32>,
     last_frame: Option<f64>,
     frame_ms: f64,
+    commands: Vec<WindowCommand>,
 }
 
 impl State {
@@ -160,9 +256,13 @@ struct Host {
     input: HtmlTextAreaElement,
     mac: bool,
     state: RefCell<State>,
-    runtime: BrowserRuntime,
+    id: u64,
+    waking: Cell<bool>,
+    runtime: Runtime,
     clipboard: WebClipboard,
     frame: Cell<Option<i32>>,
+    timer: Cell<Option<i32>>,
+    wake: Closure<dyn FnMut()>,
     rect: RefCell<Option<DomRect>>,
     pixels: Cell<(u32, u32)>,
     resized: Cell<bool>,
@@ -179,7 +279,11 @@ impl Drop for Host {
         if let Some(frame) = self.frame.take() {
             let _ = self.window.cancel_animation_frame(frame);
         }
+        if let Some(timer) = self.timer.take() {
+            self.window.clear_timeout_with_handle(timer);
+        }
         self.input.remove();
+        HOSTS.with_borrow_mut(|hosts| hosts.retain(|(host, _)| *host != self.id));
     }
 }
 
@@ -188,6 +292,7 @@ impl Host {
         options: WindowOptions,
         root: RootFn,
         menus: &[Menu],
+        bar: bool,
         fonts: &[Cow<'static, [u8]>],
         settings: &ProfileSettings,
     ) -> Result<Rc<Host>, AppError> {
@@ -206,29 +311,40 @@ impl Host {
         let pixels = physical(rect.width(), rect.height(), scale);
         let clipboard = WebClipboard::default();
         let slot = Slot::default();
-        let wake = bind(&slot, |host, ()| host.update(|_, _| {}));
-        let runtime = BrowserRuntime::new(move || wake(()));
-        let surfaces = Surfaces::new(&gpu).with_waker(runtime.waker());
+        let id = NEXT_HOST.get();
+        NEXT_HOST.set(id + 1);
+        let runtime = Runtime::with_waker(move || wake(id));
+        let surfaces = Surfaces::new(&gpu).with_waker(move || wake(id));
         let driver = {
             let _entered = runtime.enter();
-            let (title, shortcuts) = (options.title, menus.to_vec());
-            let logical = Size::new(rect.width() as f32, rect.height() as f32);
-            let mut ui = Ui::with_fonts(logical, fonts.iter().cloned(), move || {
-                window_root(title, shortcuts, false, root)
-            });
-            ui.set_device_scale(scale as f32);
-            ui.set_appearance(appearance(&window));
-            ui.set_clipboard(clipboard.clone());
-            ui.bind_menus(menus);
-            Driver::new(gpu, surface, pixels, ui, options.background, None, settings)?
+            let title = options.title;
+            let bar = if bar { menus.to_vec() } else { Vec::new() };
+            let setup = Setup {
+                pixels,
+                scale: scale as f32,
+                appearance: appearance(&window),
+                menus,
+                fonts,
+                profile: settings,
+            };
+            Driver::open(gpu, surface, setup, clipboard.clone(), move || {
+                window_root(title, bar, false, root)
+            })?
         };
         let animate = Closure::new(bind(&slot, Host::draw));
+        let timed = bind(&slot, |host, ()| {
+            host.timer.set(None);
+            host.update(|_, _| {});
+        });
+        let wake = Closure::new(move || timed(()));
         let measured: Closure<dyn FnMut(Array)> =
             Closure::new(bind(&slot, |host, entries: Array| host.observe(&entries)));
         let observer = ResizeObserver::new(measured.as_ref().unchecked_ref())?;
         let listeners = listeners(&slot, &window, &document, &canvas, &input)?;
         let host = Rc::new(Host {
             mac: is_mac(&window),
+            id,
+            waking: Cell::new(false),
             window,
             document,
             canvas,
@@ -241,10 +357,13 @@ impl Host {
                 touch: None,
                 last_frame: None,
                 frame_ms: 1000.0 / 60.0,
+                commands: Vec::new(),
             }),
             runtime,
             clipboard,
             frame: Cell::new(None),
+            timer: Cell::new(None),
+            wake,
             rect: RefCell::new(Some(rect)),
             pixels: Cell::new(pixels),
             resized: Cell::new(true),
@@ -255,6 +374,7 @@ impl Host {
             _listeners: listeners,
         });
         let _ = slot.set(Rc::downgrade(&host));
+        HOSTS.with_borrow_mut(|hosts| hosts.push((id, Rc::downgrade(&host))));
         let options = ResizeObserverOptions::new();
         options.set_box(ResizeObserverBoxOptions::DevicePixelContentBox);
         let observe: Function = field(&host.observer, "observe").dyn_into()?;
@@ -275,11 +395,28 @@ impl Host {
         };
         change(self, &mut state);
         self.commands(&mut state);
-        let wanted = self.wanted(&mut state);
+        let due = self.due(&mut state);
         drop(state);
-        if wanted {
+        self.schedule_at(due);
+    }
+
+    fn schedule_at(&self, due: Option<Instant>) {
+        let Some(due) = due else { return };
+        let delay = due.saturating_duration_since(Instant::now());
+        if delay.is_zero() {
             self.schedule();
+            return;
         }
+        if let Some(timer) = self.timer.take() {
+            self.window.clear_timeout_with_handle(timer);
+        }
+        let callback = self.wake.as_ref().unchecked_ref();
+        let millis = delay.as_millis().try_into().unwrap_or(i32::MAX);
+        self.timer.set(
+            self.window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(callback, millis)
+                .ok(),
+        );
     }
 
     fn schedule(&self) {
@@ -291,7 +428,9 @@ impl Host {
     }
 
     fn commands(&self, state: &mut State) {
-        for command in state.driver.commands() {
+        let mut commands = take(&mut state.commands);
+        state.driver.commands(&mut commands);
+        for command in commands.drain(..) {
             match command {
                 WindowCommand::SetTitle(title) => self.document.set_title(&title),
                 WindowCommand::Focus => {
@@ -300,13 +439,15 @@ impl Host {
                 _ => {}
             }
         }
+        state.commands = commands;
     }
 
-    fn wanted(&self, state: &mut State) -> bool {
-        self.resized.get() || {
-            let surfaced = latch(&mut state.surfaces, [&mut state.driver]);
-            state.driver.wants_frame(surfaced)
+    fn due(&self, state: &mut State) -> Option<Instant> {
+        if self.resized.get() {
+            return Some(Instant::now());
         }
+        let surfaced = latch(&mut state.surfaces, [&mut state.driver]);
+        state.driver.frame_due(surfaced)
     }
 
     fn invalidate_rect(&self) {
@@ -368,39 +509,28 @@ impl Host {
         };
         let interval = state.tick(time);
         if self.resized.take() {
-            let max = state.driver.max_dimension();
-            let (width, height) = self.pixels.get();
-            let (width, height) = (width.min(max), height.min(max));
-            if width > 0 && height > 0 {
+            let scale = self.window.device_pixel_ratio() as f32;
+            if let Some((width, height)) = state.driver.resize(self.pixels.get(), scale) {
                 if self.canvas.width() != width {
                     self.canvas.set_width(width);
                 }
                 if self.canvas.height() != height {
                     self.canvas.set_height(height);
                 }
-                let scale = self.window.device_pixel_ratio() as f32;
-                state.driver.resize((width, height), scale);
             }
         }
         self.commands(&mut state);
         let State {
             driver, surfaces, ..
         } = &mut *state;
-        if driver.draw(surfaces, interval, || {}) == Drawn::Retry {
+        if driver.draw(surfaces, interval, || {}) {
             self.resized.set(true);
         }
-        if driver.profile_finished()
-            && let Some(summary) = driver.profile_summary()
-        {
-            console::log_1(&summary.into());
-        }
-        let wanted = self.wanted(&mut state);
+        let due = self.due(&mut state);
         let input = self.sync(&mut state);
         drop(state);
         self.place_input(input, false);
-        if wanted {
-            self.schedule();
-        }
+        self.schedule_at(due);
     }
 
     fn sync(&self, state: &mut State) -> Option<TextInput> {
@@ -441,24 +571,57 @@ impl Host {
         }
     }
 
-    fn moved(&self, _: &mut State, _: &str, _: &Event) {
-        self.invalidate_rect();
+    fn event(&self, state: &mut State, source: Source, event: &Event) {
+        let name = event.type_();
+        let name = name.as_str();
+        match (source, name) {
+            (Source::Page, "resize" | "scroll") => self.invalidate_rect(),
+            (Source::Page, "focus") => state.driver.ui().set_focused(true),
+            (Source::Page, "blur") => self.blur(state),
+            (Source::Document, _) => self.visibility(state),
+            (Source::Scheme, _) => state.driver.ui().set_appearance(appearance(&self.window)),
+            (Source::Resolution, _) => {
+                self.invalidate_rect();
+                self.resized.set(true);
+            }
+            (Source::Canvas, "pointerleave") => self.leave(state, event),
+            (Source::Canvas, "contextmenu") => event.prevent_default(),
+            (Source::Canvas, "wheel") => {
+                if let Some(event) = event.dyn_ref() {
+                    self.wheel(state, event);
+                }
+            }
+            (Source::Canvas, _) if name.starts_with("pointer") || name == "lostpointercapture" => {
+                if let Some(event) = event.dyn_ref() {
+                    self.pointer(state, name, event);
+                }
+            }
+            (_, "keydown" | "keyup") => {
+                if let Some(event) = event.dyn_ref() {
+                    self.key(state, name, event);
+                }
+            }
+            (_, "copy" | "cut" | "paste") => {
+                if let Some(event) = event.dyn_ref() {
+                    self.clipboard_event(state, name, event);
+                }
+            }
+            (Source::Input, "beforeinput") => {
+                if let Some(event) = event.dyn_ref() {
+                    Self::before_input(state, event);
+                }
+            }
+            (Source::Input, "input") => self.inserted(state, event),
+            (Source::Input, _) => {
+                if let Some(event) = event.dyn_ref() {
+                    self.compose(state, name, event);
+                }
+            }
+            _ => {}
+        }
     }
 
-    fn rescale(&self, _: &mut State, _: &str, _: &Event) {
-        self.invalidate_rect();
-        self.resized.set(true);
-    }
-
-    fn scheme(&self, state: &mut State, _: &str, _: &Event) {
-        state.driver.ui().set_appearance(appearance(&self.window));
-    }
-
-    fn focus(_: &Self, state: &mut State, _: &str, _: &Event) {
-        state.driver.ui().set_focused(true);
-    }
-
-    fn blur(&self, state: &mut State, _: &str, _: &Event) {
+    fn blur(&self, state: &mut State) {
         state.composing = false;
         state.touch = None;
         self.input.set_value("");
@@ -468,7 +631,7 @@ impl Host {
         ui.clear_focus();
     }
 
-    fn visibility(&self, state: &mut State, _: &str, _: &Event) {
+    fn visibility(&self, state: &mut State) {
         let visible = !self.document.hidden();
         state.driver.ui().set_visible(visible);
         if visible {
@@ -476,11 +639,7 @@ impl Host {
         }
     }
 
-    fn context_menu(_: &Self, _: &mut State, _: &str, event: &Event) {
-        event.prevent_default();
-    }
-
-    fn leave(_: &Self, state: &mut State, _: &str, event: &Event) {
+    fn leave(&self, state: &mut State, event: &Event) {
         let touch = event
             .dyn_ref::<PointerEvent>()
             .is_some_and(|event| event.pointer_type() == "touch");
@@ -553,7 +712,7 @@ impl Host {
         }
     }
 
-    fn wheel(&self, state: &mut State, _: &str, event: &WheelEvent) {
+    fn wheel(&self, state: &mut State, event: &WheelEvent) {
         if event.ctrl_key() {
             return;
         }
@@ -604,7 +763,7 @@ impl Host {
         self.place_input(self.sync(state), false);
     }
 
-    fn before_input(_: &Self, state: &mut State, _: &str, event: &InputEvent) {
+    fn before_input(state: &mut State, event: &InputEvent) {
         if state.composing || event.is_composing() || !inserts(event) || !event.cancelable() {
             return;
         }
@@ -614,7 +773,7 @@ impl Host {
         }
     }
 
-    fn inserted(&self, state: &mut State, _: &str, event: &Event) {
+    fn inserted(&self, state: &mut State, event: &Event) {
         if state.composing {
             return;
         }
@@ -687,16 +846,6 @@ fn bind<T: 'static>(slot: &Slot, action: impl Fn(&Host, T) + 'static) -> impl Fn
     }
 }
 
-fn on<T: JsCast + 'static>(handler: impl Fn(&Host, &mut State, &str, &T) + 'static) -> Handler {
-    Rc::new(
-        move |host: &Host, state: &mut State, name: &str, event: &Event| {
-            if let Some(event) = event.dyn_ref::<T>() {
-                handler(host, state, name, event);
-            }
-        },
-    )
-}
-
 fn listeners(
     slot: &Slot,
     window: &Window,
@@ -704,46 +853,22 @@ fn listeners(
     canvas: &HtmlCanvasElement,
     input: &HtmlTextAreaElement,
 ) -> Result<Vec<Listener>, AppError> {
-    let page = EventTarget::from(window.clone());
-    let document = EventTarget::from(document.clone());
-    let canvas = EventTarget::from(canvas.clone());
-    let input = EventTarget::from(input.clone());
     let resolution = format!("(resolution: {}dppx)", window.device_pixel_ratio());
-    let resolution = window.match_media(&resolution)?;
-    let mut table = vec![
-        (page.clone(), "resize scroll", on(Host::moved)),
-        (page.clone(), "focus", on(Host::focus)),
-        (page, "blur", on(Host::blur)),
-        (document, "visibilitychange", on(Host::visibility)),
-        (
-            canvas.clone(),
-            "pointerdown pointermove pointerup pointercancel lostpointercapture",
-            on(Host::pointer),
-        ),
-        (canvas.clone(), "pointerleave", on(Host::leave)),
-        (canvas.clone(), "contextmenu", on(Host::context_menu)),
-        (canvas.clone(), "wheel", on(Host::wheel)),
-        (canvas.clone(), "keydown keyup", on(Host::key)),
-        (canvas, "copy cut paste", on(Host::clipboard_event)),
-        (input.clone(), "keydown keyup", on(Host::key)),
-        (input.clone(), "copy cut paste", on(Host::clipboard_event)),
-        (input.clone(), "beforeinput", on(Host::before_input)),
-        (input.clone(), "input", on(Host::inserted)),
-        (
-            input,
-            "compositionstart compositionupdate compositionend",
-            on(Host::compose),
-        ),
+    let mut table: Vec<(EventTarget, Source, &'static [&'static str])> = vec![
+        (window.clone().into(), Source::Page, PAGE_EVENTS),
+        (document.clone().into(), Source::Document, DOCUMENT_EVENTS),
+        (canvas.clone().into(), Source::Canvas, CANVAS_EVENTS),
+        (input.clone().into(), Source::Input, INPUT_EVENTS),
     ];
-    table.extend(color_scheme(window).map(|query| (query.into(), "change", on(Host::scheme))));
-    table.extend(resolution.map(|query| (query.into(), "change", on(Host::rescale))));
+    table.extend(color_scheme(window).map(|query| (query.into(), Source::Scheme, MEDIA_EVENTS)));
+    table.extend(
+        window
+            .match_media(&resolution)?
+            .map(|query| (query.into(), Source::Resolution, MEDIA_EVENTS)),
+    );
     table
         .into_iter()
-        .flat_map(|(target, names, handler)| {
-            names
-                .split(' ')
-                .map(move |name| Listener::new(slot, target.clone(), name, handler.clone()))
-        })
+        .map(|(target, source, names)| Listener::new(slot, target, source, names))
         .collect()
 }
 

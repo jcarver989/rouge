@@ -37,7 +37,6 @@ enum DemoError {
 struct Demo {
     name: &'static str,
     size: (f32, f32),
-    background: Color,
     root: fn(Option<&str>) -> AnyView,
     shots: fn(&mut Camera) -> Result<(), DemoError>,
 }
@@ -46,42 +45,36 @@ const DEMOS: [Demo; 6] = [
     Demo {
         name: "counter",
         size: (560.0, 360.0),
-        background: DARK,
         root: |_| counter().into_any(),
         shots: counter_shots,
     },
     Demo {
         name: "glass",
         size: (600.0, 380.0),
-        background: Color::rgb(0x10111a),
         root: |_| glass(signal(false)).into_any(),
         shots: glass_shots,
     },
     Demo {
         name: "effects",
         size: (860.0, 300.0),
-        background: Color::rgb(0x14151f),
         root: |_| effects_demo(signal(false)).into_any(),
         shots: effects_shots,
     },
     Demo {
         name: "motion",
         size: (760.0, 480.0),
-        background: DARK,
         root: |_| motion_demo().into_any(),
         shots: motion_shots,
     },
     Demo {
         name: "diff",
         size: (1280.0, 800.0),
-        background: DARK,
         root: |patch| diff_view(Patch::parse(patch.unwrap_or(SAMPLE))),
         shots: diff_shots,
     },
     Demo {
         name: "settings",
         size: (560.0, 520.0),
-        background: Color::WHITE,
         root: |_| settings().into_any(),
         shots: settings_shots,
     },
@@ -104,8 +97,7 @@ fn main() -> Result<(), DemoError> {
     };
     let options = WindowOptions::default()
         .title(format!("Rouge {name}"))
-        .size(demo.size.0, demo.size.1)
-        .background(demo.background);
+        .size(demo.size.0, demo.size.1);
     Ok(App::new()
         .window(options, move || (demo.root)(input.as_deref()))
         .run()?)

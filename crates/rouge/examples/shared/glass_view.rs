@@ -53,10 +53,10 @@ pub(crate) fn glass(lifted: Signal<bool>) -> impl View {
                 .p(22.0)
                 .rounded(36.0)
                 .backdrop(Glass::new().blur(3.0).edge_width(22.0))
-                .translate_y(move || if lifted.get() { -24.0 } else { 0.0 })
-                .scale(move || if lifted.get() { 1.04 } else { 1.0 })
+                .translate_y(lifted.pick(-24.0, 0.0))
+                .scale(lifted.pick(1.04, 1.0))
                 .transition(Spring::bouncy())
-                .on_click(move |_| lifted.update(|l| *l = !*l))
+                .on_click(move |_| lifted.toggle())
                 .child(
                     div()
                         .flex()

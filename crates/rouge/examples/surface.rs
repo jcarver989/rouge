@@ -1,19 +1,17 @@
 use rouge::AppError;
 use rouge::prelude::*;
 use rouge::render::{
-    BufferDesc, BufferRef, BufferSetId, Frame, QueueMode, SharedBuffer, Sharing, SurfaceConfig,
-    SurfaceCx, SurfaceEvent, SurfaceProducer, surface_channel,
+    BufferDesc, Frame, Sharing, SurfaceCx, SurfaceEvent, SurfaceProducer, surface_channel,
 };
-use std::collections::VecDeque;
 use std::thread::spawn;
 use std::time::Instant;
-use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{
-    BindGroupDescriptor, BindGroupEntry, BufferUsages, Color as ClearColor, ColorTargetState,
-    ColorWrites, CommandEncoderDescriptor, FragmentState, LoadOp, MultisampleState, Operations,
-    PipelineCompilationOptions, PrimitiveState, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp,
-    TextureFormat, TextureViewDescriptor, VertexState,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, Buffer, BufferDescriptor, BufferUsages,
+    Color as ClearColor, ColorTargetState, ColorWrites, CommandEncoderDescriptor, FragmentState,
+    LoadOp, MultisampleState, Operations, PipelineCompilationOptions, PrimitiveState,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    ShaderModuleDescriptor, ShaderSource, StoreOp, TextureFormat, TextureViewDescriptor,
+    VertexState,
 };
 
 const PLASMA_WGSL: &str = "
@@ -44,17 +42,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 ";
 
 fn main() -> Result<(), AppError> {
-    let (producer, source) = surface_channel(QueueMode::Mailbox);
+    let (producer, source) = surface_channel();
     spawn(move || Plasma::new(producer).run());
-    let options = WindowOptions::default()
-        .title("Surface")
-        .size(720.0, 480.0)
-        .background(Color::rgb(0x10111a));
+    let options = WindowOptions::default().title("Surface").size(720.0, 480.0);
     App::new().window(options, move || view(source)).run()
 }
 
 fn view(source: SurfaceSource) -> impl View {
-    div().size_full().p(24.0).child(
+    div().size_full().p(24.0).bg(0x10111a).child(
         div()
             .relative()
             .size_full()
@@ -82,29 +77,23 @@ fn view(source: SurfaceSource) -> impl View {
     )
 }
 
-struct Chain {
-    set: BufferSetId,
-    buffers: Vec<SharedBuffer>,
-    free: VecDeque<u32>,
-}
-
 struct Plasma {
     producer: SurfaceProducer,
-    cx: Option<SurfaceCx>,
-    config: Option<SurfaceConfig>,
-    chain: Option<Chain>,
-    pipeline: Option<RenderPipeline>,
+    painter: Option<Painter>,
     started: Instant,
+}
+
+struct Painter {
+    pipeline: RenderPipeline,
+    time: Buffer,
+    bind_group: BindGroup,
 }
 
 impl Plasma {
     fn new(producer: SurfaceProducer) -> Self {
         Plasma {
             producer,
-            cx: None,
-            config: None,
-            chain: None,
-            pipeline: None,
+            painter: None,
             started: Instant::now(),
         }
     }
@@ -112,10 +101,16 @@ impl Plasma {
     fn run(mut self) {
         while let Some(event) = self.producer.blocking_recv() {
             match event {
-                SurfaceEvent::Attached(cx) => self.cx = Some(*cx),
                 SurfaceEvent::Configure(config) => {
-                    self.config = Some(config);
-                    if let Err(error) = self.allocate() {
+                    if config.width == 0 || config.height == 0 {
+                        continue;
+                    }
+                    let desc = BufferDesc::new(config.width, config.height);
+                    let configured = self
+                        .producer
+                        .configure(desc.sharing(Sharing::Native))
+                        .or_else(|_| self.producer.configure(desc));
+                    if let Err(error) = configured {
                         self.producer.fail(error);
                         return;
                     }
@@ -127,67 +122,29 @@ impl Plasma {
                     self.render();
                     self.producer.request_frame();
                 }
-                SurfaceEvent::Released(buffer) => {
-                    if let Some(chain) = self.chain.as_mut().filter(|c| c.set == buffer.set) {
-                        chain.free.push_back(buffer.index);
-                    }
-                }
                 SurfaceEvent::Detached => return,
-                SurfaceEvent::Presented { .. } | SurfaceEvent::Discarded(_) => {}
+                SurfaceEvent::Attached => {}
             }
         }
     }
 
-    fn allocate(&mut self) -> Result<(), SurfaceError> {
-        let (Some(cx), Some(config)) = (&self.cx, self.config) else {
-            return Ok(());
-        };
-        if config.width == 0 || config.height == 0 {
-            return Ok(());
-        }
-        let desc = BufferDesc::new(config.width, config.height);
-        let buffers = cx
-            .allocate(&desc.sharing(Sharing::Native))
-            .or_else(|_| cx.allocate(&desc))?;
-        let set = self.producer.register(&buffers);
-        if let Some(old) = self.chain.take() {
-            self.producer.unregister(old.set);
-        }
-        let free = (0..buffers.len() as u32).collect();
-        self.chain = Some(Chain { set, buffers, free });
-        Ok(())
-    }
-
     fn render(&mut self) {
-        let (Some(cx), Some(chain)) = (&self.cx, &mut self.chain) else {
+        let Some(cx) = self.producer.cx().cloned() else {
             return;
         };
-        let Some(index) = chain.free.pop_front() else {
+        let Some((buffer, shared)) = self.producer.acquire() else {
             return;
         };
-        let device = cx.device();
-        let pipeline = self
-            .pipeline
-            .get_or_insert_with(|| plasma_pipeline(cx, TextureFormat::Bgra8Unorm));
-        let time = [self.started.elapsed().as_secs_f32(), 0.0, 0.0, 0.0];
-        let bytes: Vec<u8> = time.iter().flat_map(|value| value.to_ne_bytes()).collect();
-        let uniform = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("plasma time"),
-            contents: &bytes,
-            usage: BufferUsages::UNIFORM,
-        });
-        let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("plasma"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: uniform.as_entire_binding(),
-            }],
-        });
-        let view = chain.buffers[index as usize]
-            .texture()
-            .create_view(&TextureViewDescriptor::default());
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
+        let texture = shared.texture();
+        let painter = self
+            .painter
+            .get_or_insert_with(|| Painter::new(&cx, texture.format()));
+        let seconds = self.started.elapsed().as_secs_f32().to_ne_bytes();
+        cx.queue().write_buffer(&painter.time, 0, &seconds);
+        let view = texture.create_view(&TextureViewDescriptor::default());
+        let mut encoder = cx
+            .device()
+            .create_command_encoder(&CommandEncoderDescriptor::default());
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("plasma"),
@@ -205,13 +162,37 @@ impl Plasma {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_pipeline(&painter.pipeline);
+            pass.set_bind_group(0, &painter.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
         cx.queue().submit([encoder.finish()]);
-        let set = chain.set;
-        self.producer.submit(Frame::new(BufferRef { set, index }));
+        self.producer.submit(Frame::new(buffer));
+    }
+}
+
+impl Painter {
+    fn new(cx: &SurfaceCx, format: TextureFormat) -> Painter {
+        let pipeline = plasma_pipeline(cx, format);
+        let time = cx.device().create_buffer(&BufferDescriptor {
+            label: Some("plasma time"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = cx.device().create_bind_group(&BindGroupDescriptor {
+            label: Some("plasma"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: time.as_entire_binding(),
+            }],
+        });
+        Painter {
+            pipeline,
+            time,
+            bind_group,
+        }
     }
 }
 

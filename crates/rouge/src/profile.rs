@@ -1,4 +1,4 @@
-use crate::platform::warn;
+use crate::platform::{log, warn};
 use rouge_core::{FrameStats, Ui};
 use rouge_render::Point;
 use std::time::Duration;
@@ -7,6 +7,7 @@ use tracing::trace;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use web_time::Instant;
+use wgpu::PresentMode;
 
 const BUDGET: Duration = Duration::from_micros(16_667);
 
@@ -14,6 +15,8 @@ const BUDGET: Duration = Duration::from_micros(16_667);
 pub(crate) struct ProfileSettings {
     pub(crate) bench: Option<String>,
     pub(crate) trace: Option<String>,
+    pub(crate) present_mode: Option<PresentMode>,
+    pub(crate) exit_after_frames: Option<u64>,
 }
 
 impl ProfileSettings {
@@ -21,6 +24,23 @@ impl ProfileSettings {
         ProfileSettings {
             bench: setting("rouge_bench"),
             trace: setting("rouge_profile"),
+            present_mode: setting("rouge_present_mode").and_then(|mode| present_mode(&mode)),
+            exit_after_frames: setting("rouge_exit_after_frames").and_then(|n| n.parse().ok()),
+        }
+    }
+}
+
+fn present_mode(mode: &str) -> Option<PresentMode> {
+    match mode.to_ascii_lowercase().as_str() {
+        "fifo" => Some(PresentMode::Fifo),
+        "fifo-relaxed" => Some(PresentMode::FifoRelaxed),
+        "mailbox" => Some(PresentMode::Mailbox),
+        "immediate" => Some(PresentMode::Immediate),
+        "auto-vsync" => Some(PresentMode::AutoVsync),
+        "auto-no-vsync" => Some(PresentMode::AutoNoVsync),
+        _ => {
+            warn(&format!("unknown present mode `{mode}`"));
+            None
         }
     }
 }
@@ -51,9 +71,9 @@ pub(crate) struct Profile {
 
 impl Profile {
     pub(crate) fn new(
-        ui: &mut Ui,
+        stats: FrameStats,
         settings: &ProfileSettings,
-        environment: String,
+        environment: impl FnOnce() -> String,
     ) -> Result<Option<Profile>, String> {
         let bench = match &settings.bench {
             Some(spec) => Some(parse_bench(spec)?),
@@ -62,9 +82,8 @@ impl Profile {
         if bench.is_none() && settings.trace.is_none() {
             return Ok(None);
         }
-        let stats = ui.stats();
         Ok(Some(Profile {
-            environment,
+            environment: environment(),
             bench,
             intervals: Vec::new(),
             last: None,
@@ -112,7 +131,7 @@ impl Profile {
         self.previous = stats;
     }
 
-    pub(crate) fn summary(&self) -> String {
+    fn summary(&self) -> String {
         let mut intervals = self.intervals.clone();
         intervals.sort();
         let ms = |p: f64| {
@@ -136,6 +155,12 @@ impl Profile {
             self.environment,
             self.previous - self.first,
         )
+    }
+}
+
+impl Drop for Profile {
+    fn drop(&mut self) {
+        log(&self.summary());
     }
 }
 

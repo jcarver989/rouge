@@ -1,9 +1,6 @@
 use crate::platform;
-use rouge_core::{
-    AnyView, Appearance, Decorations, Menu, View, appearance as current_appearance, window_handle,
-};
-use rouge_reactive::ReadSignal;
-use rouge_render::{Color, GpuError, Size};
+use rouge_core::{AnyView, Decorations, Menu, View};
+use rouge_render::{GpuError, Size};
 use std::borrow::Cow;
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
@@ -16,7 +13,6 @@ use winit::error::{EventLoopError, OsError};
 pub struct WindowOptions {
     pub(crate) title: String,
     pub(crate) size: Size,
-    pub(crate) background: Color,
     pub(crate) resizable: bool,
     pub(crate) min_size: Option<Size>,
     pub(crate) maximized: bool,
@@ -29,7 +25,6 @@ impl Default for WindowOptions {
         WindowOptions {
             title: "Rouge".into(),
             size: Size::new(800.0, 600.0),
-            background: Color::WHITE,
             resizable: true,
             min_size: None,
             maximized: false,
@@ -62,11 +57,6 @@ impl WindowOptions {
 
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.size = Size::new(width, height);
-        self
-    }
-
-    pub fn background(mut self, color: Color) -> Self {
-        self.background = color;
         self
     }
 
@@ -115,14 +105,6 @@ pub struct App {
 }
 
 impl App {
-    pub fn appearance() -> ReadSignal<Appearance> {
-        current_appearance()
-    }
-
-    pub fn quit() {
-        window_handle().quit();
-    }
-
     pub fn menus(mut self, menus: Vec<Menu>) -> Self {
         self.menus = menus;
         self
@@ -158,5 +140,10 @@ impl App {
 
     pub fn run(self) -> Result<(), AppError> {
         platform::run(self)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn mount(self) -> Result<platform::web::Mounted, AppError> {
+        platform::web::mount(self).await
     }
 }

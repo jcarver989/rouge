@@ -16,9 +16,9 @@ pub(crate) fn counter() -> impl View {
                 <text color=MUTED>"is {parity}"</text>
             </div>
             <div flex gap=8.0>
-                <button id="decrement" label="- 1" on_click={move || count.update(|c| *c -= 1)}/>
-                <button id="reset" label="Reset" on_click={move || count.set(0)}/>
-                <button id="increment" label="+ 1" on_click={move || count.update(|c| *c += 1)}/>
+                <button test_id="decrement" label="- 1" on_click={move || count.update(|c| *c -= 1)}/>
+                <button test_id="reset" label="Reset" on_click={move || count.set(0)}/>
+                <button test_id="increment" label="+ 1" on_click={move || count.update(|c| *c += 1)}/>
             </div>
             <show when={move || count.get() >= 5}>
                 <text text_size=13.0 italic color=MUTED>"That's a lot of clicks."</text>

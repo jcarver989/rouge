@@ -4,14 +4,15 @@ mod native;
 pub mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
 pub use native::{
     Wheel, WheelGesture, appearance, cursor_icon, logical_point, logical_size, modifiers,
     named_key, pointer_button, scroll_delta,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use native::{run, warn};
+pub(crate) use native::{log, run, warn};
 #[cfg(target_arch = "wasm32")]
-pub(crate) use web::{run, warn};
+pub(crate) use web::{log, run, warn};
 
 use crate::app::RootFn;
 use rouge_core::{AnyView, Cursor, Menu, View, window_handle};
@@ -37,6 +38,7 @@ pub fn open_url(url: &str) -> Result<(), IoError> {
     }
 }
 
+#[doc(hidden)]
 pub fn css_cursor(cursor: Cursor) -> &'static str {
     match cursor {
         Cursor::Default => "default",
@@ -49,6 +51,18 @@ pub fn css_cursor(cursor: Cursor) -> &'static str {
         Cursor::ResizeHorizontal => "ew-resize",
         Cursor::ResizeVertical => "ns-resize",
     }
+}
+
+pub(crate) fn default_menus(mut menus: Vec<Menu>) -> Vec<Menu> {
+    let has = |menus: &[Menu], title: &str| menus.iter().any(|menu| menu.title == title);
+    if !has(&menus, "Edit") {
+        menus.insert(menus.len().min(1), Menu::edit());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if !has(&menus, "Window") {
+        menus.push(Menu::window());
+    }
+    menus
 }
 
 pub(crate) fn window_root(title: String, menus: Vec<Menu>, chrome: bool, root: RootFn) -> AnyView {

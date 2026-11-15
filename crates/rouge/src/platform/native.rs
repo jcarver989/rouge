@@ -180,3 +180,7 @@ pub(crate) fn window_command(window: &Window, command: WindowCommand) {
 pub(crate) fn warn(message: &str) {
     eprintln!("rouge: {message}");
 }
+
+pub(crate) fn log(message: &str) {
+    eprintln!("{message}");
+}

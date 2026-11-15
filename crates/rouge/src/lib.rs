@@ -1,16 +1,12 @@
 mod app;
 mod driver;
-#[cfg(feature = "tokio-rt")]
+#[cfg(feature = "persist")]
 pub mod persist;
 pub mod platform;
 mod profile;
 
 pub use app::{App, AppError, WindowOptions};
 pub use rouge_core as core;
-pub use rouge_core::{
-    Appearance, Decorations, EditAction, Menu, MenuItem, ResizeEdge, WindowHandle, appearance,
-    window_focused, window_handle,
-};
 #[cfg(feature = "markdown")]
 pub use rouge_markdown as markdown;
 pub use rouge_reactive as reactive;
@@ -24,23 +20,25 @@ pub mod prelude {
     pub use rouge_core::{
         Align, AnyView, Appearance, Apply, BackdropBlur, BlendMode, Blur, BoxShadow, Chord,
         ClipboardMedia, Color, ColorMatrix, Corners, Cursor, Decay, Decorations, Div, DragEvent,
-        DragPhase, Ease, Edges, EditAction, Fit, FocusEvent, FocusHandle, Glass, ImageData,
-        ImageSource, ImeEvent, Inputs, Interactions, Key, KeyEvent, Keyframes, LayoutTransition,
-        Length, Mask, Menu, MenuItem, Modifiers, Motion, Painter, Palette, Path, Point,
-        PointerButton, PointerEvent, Pose, Rect, ResizeEdge, Rgba, RowKey, ScrollEvent,
-        ScrollState, Scrollable, ShaderEffect, Size, SpanStyle, Spring, StyleDelta, Styled,
-        Surface, SurfaceError, SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle, Theme,
-        Tween, Typography, UiPalette, Underline, View, VirtualListHandle, WindowHandle, appearance,
-        auto, canvas, component, div, dynamic, each, editable, focus_handle, icon, image, motion,
-        overlay, pct, px, rich_text, scroll, show, surface, switch, text, use_binding, view,
-        virtual_list, virtual_list_handle, window_focused, window_handle, window_size, zoom,
+        DragPhase, Ease, Edges, EditAction, Fill, Fit, FocusEvent, FocusHandle, FocusPolicy, Glass,
+        ImageData, ImageSource, ImeEvent, Inputs, IntoProp, Key, KeyEvent, Keyframes,
+        LayoutTransition, Length, Mask, Menu, MenuItem, Modifiers, Motion, Painter, Palette, Path,
+        Point, PointerButton, PointerEvent, Pose, Rect, ResizeEdge, Rgba, Role, RowKey,
+        ScrollEvent, ScrollState, Scrollable, ShaderEffect, Size, SpanStyle, Spring, StyleDelta,
+        Styled, Surface, SurfaceError, SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle,
+        Theme, Tween, Typography, UiPalette, Underline, View, VirtualListHandle, WindowHandle,
+        appearance, auto, canvas, component, div, dynamic, each, editable, focus_handle, icon,
+        image, motion, overlay, pct, px, rich_text, scroll, show, surface, switch, text,
+        use_binding, view, virtual_list, virtual_list_handle, window_focused, window_handle,
+        window_size, zoom,
     };
     #[cfg(not(target_arch = "wasm32"))]
     pub use rouge_reactive::spawn_blocking;
     pub use rouge_reactive::{
-        Callback, Effect, Emitter, Memo, ReadSignal, Resource, Runtime, Scope, Signal, Stored,
-        Task, TaskError, batch, effect, emitter, expect_context, interval, memo, on_cleanup,
-        provide_context, resource, signal, sleep, spawn, stored, untrack, use_context, watch,
+        Action, Callback, Effect, Memo, ReadSignal, Resource, Runtime, Scope, Selector, Signal,
+        Stored, Task, TaskError, action, batch, effect, expect_context, interval, memo, on_cleanup,
+        provide_context, resource, selector, signal, sleep, spawn, stored, untrack, use_context,
+        watch,
     };
     #[cfg(feature = "tokio-rt")]
     pub use rouge_reactive::{set_tokio, spawn_tokio};

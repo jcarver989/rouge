@@ -2,23 +2,22 @@ use super::clipboard::NativeClipboard;
 #[cfg(target_os = "macos")]
 use super::menu::NativeMenus;
 use super::{
-    Wheel, WheelGesture, appearance, cursor_icon, logical_point, logical_size, modifiers,
-    named_key, pointer_button, warn, window_command,
+    Wheel, WheelGesture, appearance, cursor_icon, logical_point, modifiers, named_key,
+    pointer_button, window_command,
 };
 use crate::app::{App, AppError, RootFn, WindowOptions};
-use crate::driver::{Drawn, Driver, TextInput, connect, latch};
-use crate::platform::window_root;
+use crate::driver::{Driver, Setup, TextInput, connect, latch};
+use crate::platform::{default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use pollster::block_on;
 use rouge_core::{
-    Decorations, FileDropPhase, ImeEvent, Key, KeyEvent, Menu, Modifiers, Ui, WindowCommand,
+    Decorations, FileDropPhase, ImeEvent, Key, KeyEvent, Menu, Modifiers, WindowCommand,
 };
 use rouge_reactive::Runtime;
 #[cfg(feature = "tokio-rt")]
 use rouge_reactive::set_tokio;
 use rouge_render::{Gpu, Point, Surfaces};
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::env::var;
 use std::mem::take;
 use std::sync::Arc;
@@ -28,7 +27,7 @@ use tracing::trace_span;
 use tracing_chrome::{ChromeLayerBuilder, FlushGuard};
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::Layer;
-use wgpu::{Instance, InstanceDescriptor, PresentMode};
+use wgpu::{Instance, InstanceDescriptor};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
@@ -39,18 +38,13 @@ use winit::keyboard::{Key as WinitKey, SmolStr};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
 
-pub(crate) fn run(mut app: App) -> Result<(), AppError> {
-    let has = |menus: &[Menu], title: &str| menus.iter().any(|menu| menu.title == title);
-    if !has(&app.menus, "Edit") {
-        app.menus.insert(app.menus.len().min(1), Menu::edit());
-    }
-    if !has(&app.menus, "Window") {
-        app.menus.push(Menu::window());
-    }
+pub(crate) fn run(app: App) -> Result<(), AppError> {
+    let bar = !app.menus.is_empty();
+    let menus = default_menus(app.menus);
     let event_loop = EventLoop::new()?;
     let waker = event_loop.create_proxy();
     #[cfg(target_os = "macos")]
-    let native_menus = NativeMenus::new(app.menus.clone(), waker.clone())?;
+    let native_menus = NativeMenus::new(menus.clone(), waker.clone())?;
     let proxy = waker.clone();
     let runtime = Runtime::with_waker(move || {
         let _ = proxy.send_event(());
@@ -70,15 +64,13 @@ pub(crate) fn run(mut app: App) -> Result<(), AppError> {
         gpu: None,
         surfaces: None,
         pending: app.windows,
-        menus: app.menus,
+        menus,
+        bar,
         fonts: app.fonts,
         profile,
-        present_mode: present_mode(),
-        windows: HashMap::new(),
+        windows: Vec::new(),
+        commands: Vec::new(),
         error: None,
-        exit_after_frames: var("ROUGE_EXIT_AFTER_FRAMES")
-            .ok()
-            .and_then(|v| v.parse().ok()),
     };
     event_loop.run_app(&mut runner)?;
     runner.error.map_or(Ok(()), Err)
@@ -93,12 +85,12 @@ struct Runner {
     surfaces: Option<Surfaces>,
     pending: Vec<(WindowOptions, RootFn)>,
     menus: Vec<Menu>,
+    bar: bool,
     fonts: Vec<Cow<'static, [u8]>>,
     profile: ProfileSettings,
-    present_mode: Option<PresentMode>,
-    windows: HashMap<WindowId, WindowState>,
+    windows: Vec<WindowState>,
+    commands: Vec<WindowCommand>,
     error: Option<AppError>,
-    exit_after_frames: Option<u64>,
 }
 
 impl Runner {
@@ -132,44 +124,46 @@ impl Runner {
             })
         });
         let physical = window.inner_size();
-        let scale = window.scale_factor() as f32;
         let chrome = options.decorations == Decorations::Client || !window.is_decorated();
-        let menus = self.menus.clone();
+        let bar = if self.bar {
+            self.menus.clone()
+        } else {
+            Vec::new()
+        };
         let title = options.title;
-        let mut ui = Ui::with_fonts(
-            logical_size(physical, scale),
-            self.fonts.iter().cloned(),
-            move || window_root(title, menus, chrome, root),
-        );
-        ui.set_appearance(appearance(window.theme()));
-        ui.set_device_scale(scale);
-        ui.set_clipboard(NativeClipboard::new());
-        ui.bind_menus(&self.menus);
-        let driver = Driver::new(
-            gpu,
-            surface,
-            (physical.width, physical.height),
-            ui,
-            options.background,
-            self.present_mode,
-            &self.profile,
-        )?;
-        let state = WindowState {
+        let setup = Setup {
+            pixels: (physical.width, physical.height),
+            scale: window.scale_factor() as f32,
+            appearance: appearance(window.theme()),
+            menus: &self.menus,
+            fonts: &self.fonts,
+            profile: &self.profile,
+        };
+        let driver = Driver::open(gpu, surface, setup, NativeClipboard::new(), move || {
+            window_root(title, bar, chrome, root)
+        })?;
+        let interval = refresh_interval(&window);
+        self.windows.push(WindowState {
             window,
             driver,
+            interval,
             occluded: false,
             wheel: Wheel::default(),
             modifiers: Modifiers::NONE,
-        };
-        self.windows.insert(state.window.id(), state);
+        });
         Ok(())
     }
 
-    fn process_window_commands(&mut self, event_loop: &ActiveEventLoop) {
+    fn process_window_commands(&mut self, event_loop: &ActiveEventLoop, only: Option<WindowId>) {
         let mut quit = false;
-        self.windows.retain(|_, state| {
+        let commands = &mut self.commands;
+        self.windows.retain_mut(|state| {
+            if only.is_some_and(|id| id != state.window.id()) {
+                return true;
+            }
             let mut open = true;
-            for command in state.driver.commands() {
+            state.driver.commands(commands);
+            for command in commands.drain(..) {
                 match command {
                     WindowCommand::Close => open = false,
                     WindowCommand::Quit => quit = true,
@@ -197,22 +191,24 @@ impl ApplicationHandler for Runner {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.windows
-            .retain(|_, state| !state.driver.profile_finished());
+        self.windows.retain(|state| !state.driver.finished());
         let surfaced = self.surfaces.as_mut().is_some_and(|surfaces| {
             latch(
                 surfaces,
-                self.windows.values_mut().map(|state| &mut state.driver),
+                self.windows.iter_mut().map(|state| &mut state.driver),
             )
         });
-        for state in self.windows.values_mut() {
-            if !state.occluded && state.driver.wants_frame(surfaced) {
-                state.window.request_redraw();
+        let now = Instant::now();
+        let mut deadline = self.surfaces.as_ref().and_then(Surfaces::next_deadline);
+        for state in self.windows.iter_mut().filter(|state| !state.occluded) {
+            match state.driver.frame_due(surfaced) {
+                Some(due) if due <= now => state.window.request_redraw(),
+                Some(due) => deadline = Some(deadline.map_or(due, |at| at.min(due))),
+                None => {}
             }
         }
-        let deadline = self.surfaces.as_ref().and_then(Surfaces::next_deadline);
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
-        self.process_window_commands(event_loop);
+        self.process_window_commands(event_loop, None);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
@@ -220,24 +216,28 @@ impl ApplicationHandler for Runner {
         {
             let ui = self
                 .windows
-                .values_mut()
+                .iter_mut()
                 .find(|state| state.window.has_focus())
                 .map(|state| state.driver.ui());
             if self.native_menus.dispatch(ui) {
                 self.windows.clear();
             }
         }
-        self.process_window_commands(event_loop);
+        self.process_window_commands(event_loop, None);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let Some(state) = self.windows.get_mut(&id) else {
+        let Some(state) = self
+            .windows
+            .iter_mut()
+            .find(|state| state.window.id() == id)
+        else {
             return;
         };
         let _event = trace_span!("event", ?event).entered();
         match event {
             WindowEvent::CloseRequested => {
-                self.windows.remove(&id);
+                self.windows.retain(|state| state.window.id() != id);
             }
             WindowEvent::RedrawRequested => {
                 if !state.occluded
@@ -245,25 +245,27 @@ impl ApplicationHandler for Runner {
                 {
                     state.redraw(surfaces);
                 }
-                if self
-                    .exit_after_frames
-                    .is_some_and(|n| state.driver.frames() >= n)
-                {
+                if state.driver.finished() {
                     self.windows.clear();
                 }
             }
             event => state.event(event),
         }
-        if let Some(state) = self.windows.get_mut(&id) {
+        if let Some(state) = self
+            .windows
+            .iter_mut()
+            .find(|state| state.window.id() == id)
+        {
             state.sync_platform();
         }
-        self.process_window_commands(event_loop);
+        self.process_window_commands(event_loop, Some(id));
     }
 }
 
 struct WindowState {
     window: Arc<Window>,
     driver: Driver,
+    interval: Duration,
     occluded: bool,
     wheel: Wheel,
     modifiers: Modifiers,
@@ -286,8 +288,10 @@ impl WindowState {
             }
             WindowEvent::Resized(size) => self.resize(size, self.window.scale_factor()),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.interval = refresh_interval(&self.window);
                 self.resize(self.window.inner_size(), scale_factor);
             }
+            WindowEvent::Moved(_) => self.interval = refresh_interval(&self.window),
             WindowEvent::CursorMoved { position, .. } => {
                 let position = logical_point(position, ui.scale());
                 ui.pointer_moved(position);
@@ -385,30 +389,23 @@ impl WindowState {
     }
 
     fn redraw(&mut self, surfaces: &mut Surfaces) {
-        let millihertz = self
-            .window
-            .current_monitor()
-            .and_then(|monitor| monitor.refresh_rate_millihertz())
-            .filter(|rate| *rate > 0)
-            .unwrap_or(60_000);
-        let interval = Duration::from_secs_f64(1000.0 / f64::from(millihertz));
         let window = &self.window;
         if self
             .driver
-            .draw(surfaces, interval, || window.pre_present_notify())
-            == Drawn::Retry
+            .draw(surfaces, self.interval, || window.pre_present_notify())
         {
             window.request_redraw();
         }
     }
 }
 
-impl Drop for WindowState {
-    fn drop(&mut self) {
-        if let Some(summary) = self.driver.profile_summary() {
-            eprintln!("{summary}");
-        }
-    }
+fn refresh_interval(window: &Window) -> Duration {
+    let millihertz = window
+        .current_monitor()
+        .and_then(|monitor| monitor.refresh_rate_millihertz())
+        .filter(|rate| *rate > 0)
+        .unwrap_or(60_000);
+    Duration::from_secs_f64(1000.0 / f64::from(millihertz))
 }
 
 fn trace(settings: &ProfileSettings) -> Option<FlushGuard> {
@@ -426,20 +423,4 @@ fn trace(settings: &ProfileSettings) -> Option<FlushGuard> {
         eprintln!("rouge profile: tracing to {path}");
         guard
     })
-}
-
-fn present_mode() -> Option<PresentMode> {
-    let mode = var("ROUGE_PRESENT_MODE").ok()?;
-    match mode.to_ascii_lowercase().as_str() {
-        "fifo" => Some(PresentMode::Fifo),
-        "fifo-relaxed" => Some(PresentMode::FifoRelaxed),
-        "mailbox" => Some(PresentMode::Mailbox),
-        "immediate" => Some(PresentMode::Immediate),
-        "auto-vsync" => Some(PresentMode::AutoVsync),
-        "auto-no-vsync" => Some(PresentMode::AutoNoVsync),
-        _ => {
-            warn(&format!("unknown ROUGE_PRESENT_MODE `{mode}`"));
-            None
-        }
-    }
 }

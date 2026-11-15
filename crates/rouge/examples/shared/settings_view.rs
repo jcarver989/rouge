@@ -14,10 +14,9 @@ const BELL: &str = "M12 3 C8 3 6 6 6 10 V14 L4 17 H20 L18 14 V10 C18 6 16 3 12 3
 
 #[component]
 fn row(label: &'static str, children: impl View) -> impl View {
-    let theme = Theme::current();
     view! {
         <div flex items_center justify_between gap=16.0 py=8.0>
-            <text color=theme.text()>{label}</text>
+            <text color=Role::Text>{label}</text>
             {children}
         </div>
     }
@@ -25,17 +24,15 @@ fn row(label: &'static str, children: impl View) -> impl View {
 
 #[component]
 fn section(title: &'static str) -> Div {
-    let theme = Theme::current();
     view! {
-        <div flex col p=16.0 rounded=12.0 bg=theme.elevated() border=1.0 border_color=theme.border()>
-            <text color=theme.text_muted() text_size=12.0 bold>{title}</text>
+        <div flex col p=16.0 rounded=12.0 bg=Role::Elevated border=1.0 border_color=Role::Border>
+            <text color=Role::TextMuted text_size=12.0 bold>{title}</text>
         </div>
     }
 }
 
 #[component]
 fn general(name: Signal<String>, notes: Signal<String>, saved: Signal<u32>) -> impl View {
-    let theme = Theme::current();
     let (notify, sounds) = (signal(true), signal(false));
     let volume = signal(60.0f32);
     let language = signal("en");
@@ -51,7 +48,7 @@ fn general(name: Signal<String>, notes: Signal<String>, saved: Signal<u32>) -> i
                     <select value=language options w=220.0/>
                 </row>
                 <text_input multiline value=notes placeholder="Notes" w_full/>
-                <text color=theme.text_muted() text_size=12.0>"Saved {saved} times (⌘S)"</text>
+                <text color=Role::TextMuted text_size=12.0>"Saved {saved} times (⌘S)"</text>
             </section>
             <section title="NOTIFICATIONS">
                 <row label="Allow notifications">
@@ -59,14 +56,13 @@ fn general(name: Signal<String>, notes: Signal<String>, saved: Signal<u32>) -> i
                 </row>
                 <row label="Play sounds">
                     <div flex items_center gap=8.0>
-                        <checkbox id="sounds" on_toggle={move || sounds.update(|on| *on = !*on)}
-                                  state={move || if sounds.get() { CheckState::Checked } else { CheckState::Unchecked }}/>
-                        <text color=theme.text()>"Enabled"</text>
+                        <checkbox test_id="sounds" checked=sounds/>
+                        <text color=Role::Text>"Enabled"</text>
                     </div>
                 </row>
                 <row label="Volume">
                     <div flex items_center gap=8.0>
-                        <icon path=Path::svg(BELL) stroke=1.8 color=theme.text_muted() size=18.0/>
+                        <icon path=Path::svg(BELL) stroke=1.8 color=Role::TextMuted size=18.0/>
                         <slider value=volume range={(0.0, 100.0)} step=5.0 w=180.0/>
                     </div>
                 </row>
@@ -124,64 +120,53 @@ fn appearance(dark: Signal<bool>) -> impl View {
 }
 
 fn about() -> impl View {
-    let theme = Theme::current();
-    let (checking, confirm, details) = (signal(false), signal(false), signal(false));
-    let version = resource(
-        move || checking.get(),
-        |checking| async move {
-            if checking {
-                sleep(Duration::from_millis(900)).await;
-            }
-            checking.then_some("0.1.0 is the latest version")
-        },
-    );
-    let status = move || match (checking.get(), version.loading(), version.get().flatten()) {
-        (true, false, Some(message)) => message.to_owned(),
-        (true, _, _) => "Checking…".to_owned(),
-        _ => "Not checked yet".to_owned(),
+    let (confirm, details) = (signal(false), signal(false));
+    let check = action(|()| async {
+        sleep(Duration::from_millis(900)).await;
+        "0.1.0 is the latest version"
+    });
+    let status = move || match (check.pending(), check.value()) {
+        (true, _) => "Checking…",
+        (false, Some(message)) => message,
+        (false, None) => "Not checked yet",
     };
-    let busy = move || checking.get() && version.loading();
+    let busy = move || check.pending();
     let actions = [
         MenuItem::callback("Copy version", || {}),
         MenuItem::callback("Report a problem", || {}),
     ];
-    let toggle_details = move || details.update(|open| *open = !*open);
     view! {
         <div flex col gap=12.0 p=16.0>
             <context_menu items=actions>
                 <section title="ABOUT">
                     <row label="Version">
-                        <text color=theme.text_muted()>{status}</text>
+                        <text color=Role::TextMuted>{status}</text>
                     </row>
                     <div flex items_center gap=8.0 py=8.0>
-                        <dynamic>
-                            {view! {
-                                <button id="check" label="Check for updates" variant=ButtonVariant::Primary
-                                        disabled={busy()} on_click={move || checking.set(true)}/>
-                            }}
-                        </dynamic>
+                        <button test_id="check" label="Check for updates" variant=ButtonVariant::Primary
+                                        disabled=busy on_click={move || check.dispatch(())}/>
                         <show when=busy><spinner/></show>
                         <popover open=details
-                                 trigger={view! { <button id="details" label="Details" on_click=toggle_details/> }}>
+                                 trigger={view! { <button test_id="details" label="Details"/> }}>
                             <div p=12.0 w=220.0>
-                                <text color=theme.text() text_size=13.0>
+                                <text color=Role::Text text_size=13.0>
                                     "Rouge is a signal-driven, GPU-composited UI framework."
                                 </text>
                             </div>
                         </popover>
                         <div flex_1/>
-                        <button id="reset" label="Reset…" on_click={move || confirm.set(true)}/>
+                        <button test_id="reset" label="Reset…" on_click={move || confirm.set(true)}/>
                     </div>
                     <separator/>
-                    <text color=theme.text_muted() text_size=12.0 pt=8.0>
+                    <text color=Role::TextMuted text_size=12.0 pt=8.0>
                         "Right-click this card for more actions."
                     </text>
                     <show when={move || confirm.get()}>
-                        <modal id="confirm" title="Reset all settings?" hint="This cannot be undone."
-                               size=ModalSize::Compact on_dismiss={move || confirm.set(false)}>
+                        <modal test_id="confirm" title="Reset all settings?" hint="This cannot be undone."
+                               modal_size=ModalSize::Compact on_dismiss={move || confirm.set(false)}>
                             <div flex justify_end gap=8.0>
-                                <button id="cancel" label="Cancel" on_click={move || confirm.set(false)}/>
-                                <button id="confirm-reset" label="Reset" variant=ButtonVariant::Primary
+                                <button test_id="cancel" label="Cancel" on_click={move || confirm.set(false)}/>
+                                <button test_id="confirm-reset" label="Reset" variant=ButtonVariant::Primary
                                         on_click={move || confirm.set(false)}/>
                             </div>
                         </modal>
@@ -193,7 +178,6 @@ fn about() -> impl View {
 }
 
 pub(crate) fn settings() -> impl View {
-    let theme = Theme::current();
     let selected = signal(0usize);
     let dark = signal(false);
     let (name, notes) = (signal("Ada Lovelace".to_owned()), signal(String::new()));
@@ -206,7 +190,7 @@ pub(crate) fn settings() -> impl View {
         }
     };
     view! {
-        <div size_full bg=theme.canvas()
+        <div size_full bg=Role::Canvas
              bind_key=(Chord::new(Key::character("s"), Modifiers::COMMAND), Save)
              on_action={move |_: &Save| saved.update(|count| *count += 1)}>
             <tabs selected size_full

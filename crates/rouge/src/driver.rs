@@ -1,8 +1,9 @@
 use crate::AppError;
 use crate::platform::warn;
 use crate::profile::{Profile, ProfileSettings};
-use rouge_core::{Cursor, Ui, WindowCommand};
-use rouge_render::{Affine, Color, Gpu, Point, Rect, Renderer, Size, Surfaces, Viewport};
+use rouge_core::{AnyView, Appearance, Clipboard, Cursor, Menu, Ui, Wake, WindowCommand};
+use rouge_render::{Affine, Gpu, Point, Rect, Renderer, Size, Surfaces, Viewport};
+use std::borrow::Cow;
 use std::time::Duration;
 use tracing::trace_span;
 use web_time::Instant;
@@ -21,13 +22,6 @@ pub(crate) enum TextInput {
 pub(crate) struct Changes {
     pub(crate) cursor: Option<Cursor>,
     pub(crate) text_input: Option<TextInput>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Drawn {
-    Presented,
-    Retry,
-    Skipped,
 }
 
 pub(crate) async fn connect(
@@ -55,9 +49,18 @@ pub(crate) fn latch<'a>(
     for driver in drivers {
         driver.ui.sync_surfaces(surfaces);
     }
-    let changed = surfaces.latch(Instant::now());
+    let changed = surfaces.latch();
     surfaces.maintain();
     changed || surfaces.needs_frame()
+}
+
+pub(crate) struct Setup<'a> {
+    pub(crate) pixels: (u32, u32),
+    pub(crate) scale: f32,
+    pub(crate) appearance: Appearance,
+    pub(crate) menus: &'a [Menu],
+    pub(crate) fonts: &'a [Cow<'static, [u8]>],
+    pub(crate) profile: &'a ProfileSettings,
 }
 
 pub(crate) struct Driver {
@@ -66,23 +69,36 @@ pub(crate) struct Driver {
     gpu: Gpu,
     renderer: Renderer,
     ui: Ui,
-    background: Color,
     frames: u64,
+    exit_after_frames: Option<u64>,
+    finished: bool,
     profile: Option<Profile>,
     cursor: Option<Cursor>,
     text_input: Option<TextInput>,
 }
 
 impl Driver {
-    pub(crate) fn new(
+    pub(crate) fn open(
         gpu: Gpu,
         surface: Surface<'static>,
-        (width, height): (u32, u32),
-        mut ui: Ui,
-        background: Color,
-        present_mode: Option<PresentMode>,
-        profile: &ProfileSettings,
+        setup: Setup<'_>,
+        clipboard: impl Clipboard + 'static,
+        root: impl FnOnce() -> AnyView + 'static,
     ) -> Result<Driver, AppError> {
+        let Setup {
+            pixels: (width, height),
+            scale,
+            appearance,
+            menus,
+            fonts,
+            profile,
+        } = setup;
+        let logical = Size::new(width as f32 / scale, height as f32 / scale);
+        let mut ui = Ui::with_fonts(logical, fonts.iter().cloned(), root);
+        ui.set_device_scale(scale);
+        ui.set_appearance(appearance);
+        ui.set_clipboard(clipboard);
+        ui.bind_menus(menus);
         let capabilities = surface.get_capabilities(&gpu.adapter);
         let mut config = surface
             .get_default_config(&gpu.adapter, width.max(1), height.max(1))
@@ -96,7 +112,7 @@ impl Driver {
             config.format = linear;
         }
         config.present_mode = PresentMode::AutoVsync;
-        if let Some(mode) = present_mode {
+        if let Some(mode) = profile.present_mode {
             if capabilities.present_modes.contains(&mode)
                 || matches!(mode, PresentMode::AutoVsync | PresentMode::AutoNoVsync)
             {
@@ -110,15 +126,19 @@ impl Driver {
         }
         surface.configure(&gpu.device, &config);
         let renderer = Renderer::new(&gpu.device, &gpu.queue, config.format);
-        let environment = format!(
-            "{:?}\n{:?} {}x{} at scale {}",
-            gpu.adapter.get_info(),
-            config.present_mode,
-            config.width,
-            config.height,
-            ui.scale(),
-        );
-        let profile = Profile::new(&mut ui, profile, environment).unwrap_or_else(|error| {
+        let environment = || {
+            format!(
+                "{:?}\n{:?} {}x{} at scale {}",
+                gpu.adapter.get_info(),
+                config.present_mode,
+                config.width,
+                config.height,
+                ui.scale(),
+            )
+        };
+        let exit_after_frames = profile.exit_after_frames;
+        let stats = ui.stats();
+        let profile = Profile::new(stats, profile, environment).unwrap_or_else(|error| {
             warn(&error);
             None
         });
@@ -128,8 +148,9 @@ impl Driver {
             gpu,
             renderer,
             ui,
-            background,
             frames: 0,
+            exit_after_frames,
+            finished: false,
             profile,
             cursor: None,
             text_input: None,
@@ -140,19 +161,11 @@ impl Driver {
         &mut self.ui
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn frames(&self) -> u64 {
-        self.frames
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn max_dimension(&self) -> u32 {
-        self.gpu.device.limits().max_texture_dimension_2d
-    }
-
-    pub(crate) fn resize(&mut self, (width, height): (u32, u32), scale: f32) {
+    pub(crate) fn resize(&mut self, (width, height): (u32, u32), scale: f32) -> Option<(u32, u32)> {
+        let max = self.gpu.device.limits().max_texture_dimension_2d;
+        let (width, height) = (width.min(max), height.min(max));
         if width == 0 || height == 0 {
-            return;
+            return None;
         }
         self.ui.set_device_scale(scale);
         self.ui
@@ -162,30 +175,35 @@ impl Driver {
             self.config.height = height;
             self.surface.configure(&self.gpu.device, &self.config);
         }
+        Some((width, height))
     }
 
-    pub(crate) fn wants_frame(&mut self, surfaced: bool) -> bool {
+    pub(crate) fn frame_due(&mut self, surfaced: bool) -> Option<Instant> {
         self.ui.flush();
-        self.ui.needs_frame()
-            || (surfaced && self.ui.has_surfaces())
+        let now = Instant::now();
+        if (surfaced && self.ui.has_surfaces())
             || self.profile.as_ref().is_some_and(Profile::wants_frames)
+        {
+            return Some(now);
+        }
+        match self.ui.next_frame() {
+            Wake::Idle => None,
+            Wake::Now => Some(now),
+            Wake::At(at) => Some(now + Duration::from_secs_f64((at - self.ui.time()).max(0.0))),
+        }
     }
 
-    pub(crate) fn profile_finished(&self) -> bool {
-        self.profile.as_ref().is_some_and(Profile::finished)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn finished(&self) -> bool {
+        self.finished
     }
 
-    pub(crate) fn profile_summary(&mut self) -> Option<String> {
-        self.profile.take().as_ref().map(Profile::summary)
-    }
-
-    pub(crate) fn commands(&mut self) -> Vec<WindowCommand> {
+    pub(crate) fn commands(&mut self, pending: &mut Vec<WindowCommand>) {
         self.ui.flush();
-        let mut pending = Vec::new();
         loop {
             let commands = self.ui.take_window_commands();
             if commands.is_empty() {
-                return pending;
+                return;
             }
             for command in commands {
                 match command {
@@ -228,7 +246,7 @@ impl Driver {
         surfaces: &mut Surfaces,
         interval: Duration,
         before_present: impl FnOnce(),
-    ) -> Drawn {
+    ) -> bool {
         if let Some(profile) = &mut self.profile {
             let scale = self.ui.scale();
             let center = Point::new(
@@ -240,20 +258,21 @@ impl Driver {
         self.ui.update();
         let frame = match self.acquire() {
             Ok(frame) => frame,
-            Err(drawn) => return drawn,
+            Err(retry) => return retry,
         };
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
         let viewport = Viewport::new(self.config.width, self.config.height, self.ui.scale());
         self.ui.sync_surfaces(surfaces);
-        surfaces.latch(Instant::now() + interval / 2);
-        let ui_frame = self.ui.frame();
+        surfaces.latch();
+        let clear = self.ui.clear_color();
+        let ui_frame = self.ui.frame(surfaces);
         {
             let _encode = trace_span!("encode").entered();
             self.renderer.render(
                 &view,
                 viewport,
-                self.background,
-                &ui_frame.scene,
+                clear,
+                ui_frame.scene,
                 ui_frame.atlas,
                 surfaces,
             );
@@ -269,10 +288,16 @@ impl Driver {
             profile.after_frame(&mut self.ui);
         }
         self.frames += 1;
-        Drawn::Presented
+        if self.profile.as_ref().is_some_and(Profile::finished)
+            || self.exit_after_frames.is_some_and(|n| self.frames >= n)
+        {
+            self.finished = true;
+            self.profile = None;
+        }
+        false
     }
 
-    fn acquire(&mut self) -> Result<SurfaceTexture, Drawn> {
+    fn acquire(&mut self) -> Result<SurfaceTexture, bool> {
         let _acquire = trace_span!("acquire").entered();
         match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -280,10 +305,10 @@ impl Driver {
             }
             CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.gpu.device, &self.config);
-                Err(Drawn::Retry)
+                Err(true)
             }
-            CurrentSurfaceTexture::Timeout => Err(Drawn::Retry),
-            _ => Err(Drawn::Skipped),
+            CurrentSurfaceTexture::Timeout => Err(true),
+            _ => Err(false),
         }
     }
 }
