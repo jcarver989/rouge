@@ -1,3 +1,4 @@
+use crate::tokens::Radius;
 use crate::material::{Material, MaterialExt};
 use crate::typography::UiStyles;
 use rouge_core::Role;
@@ -217,13 +218,13 @@ impl View for Tooltip {
         });
         let bubble = overlay(move || {
             let tip = move || {
-                let caption = text(label.clone()).small().color(Role::Elevated).no_wrap();
+                let caption = text(label.clone()).small().color(Role::Text).no_wrap();
                 let bubble = div()
                     .pass_through()
                     .px(8.0)
                     .py(4.0)
-                    .rounded(6.0)
-                    .bg(Role::Text)
+                    .material(Material::Glass)
+                    .rounded(Radius::Control)
                     .child(caption);
                 Placement::Below.place(bubble, anchor)
             };

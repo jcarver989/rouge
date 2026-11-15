@@ -23,24 +23,24 @@ fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
     let palette = UiPalette::light().map(Color::from);
     let img = ui.render()?;
     assert_near(
-        img.pixel(40, 13),
+        img.pixel(40, 12),
         palette.accent.to_rgba8(),
         "inside the first quarter",
     );
     assert_near(
-        img.pixel(100, 13),
+        img.pixel(100, 12),
         palette.border.to_rgba8(),
         "the rest of the track",
     );
     assert_near(
-        img.pixel(150, 26),
+        img.pixel(150, 24),
         palette.border.to_rgba8(),
         "the separator spans the row",
     );
     done.set(2.0);
     ui.advance(0.0);
     assert_near(
-        ui.render()?.pixel(200, 13),
+        ui.render()?.pixel(200, 12),
         palette.accent.to_rgba8(),
         "values are clamped to full",
     );

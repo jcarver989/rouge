@@ -1,4 +1,4 @@
-use crate::tokens::{SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH};
+use crate::tokens::{Radius, SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH};
 use rouge_core::component;
 use rouge_core::{
     BuildCx, Div, DragPhase, Point, PointerButton, PointerEvent, ScrollLinked, ScrollState,
@@ -9,7 +9,6 @@ use std::cell::Cell;
 
 const THUMB_INSET: f32 = 2.0;
 const THUMB_WIDTH: f32 = 8.0;
-const THUMB_RADIUS: f32 = 4.0;
 
 #[component]
 pub fn vertical_scrollbar(state: Signal<ScrollState>) -> impl View {
@@ -123,7 +122,7 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
     let origin = Cell::new(0.0);
     let thumb = div()
         .absolute()
-        .rounded(THUMB_RADIUS)
+        .rounded(Radius::Full)
         .bg(move || theme.get().text_muted.with_alpha(0.5))
         .on_pointer_down(PointerEvent::stop_propagation)
         .on_drag(move |event| {

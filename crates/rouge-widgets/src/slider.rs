@@ -1,3 +1,4 @@
+use crate::tokens::Radius;
 use crate::util::focus_ring;
 use rouge_core::Role;
 use rouge_core::{
@@ -72,17 +73,17 @@ fn slider_root(value: Signal<f32>, (min, max): (f32, f32), step: Option<f32>) ->
         .left(0.0)
         .right(0.0)
         .h(4.0)
-        .rounded(2.0)
+        .rounded(Radius::Full)
         .bg(Role::Border);
     let fill = div()
         .h_full()
-        .rounded(2.0)
+        .rounded(Radius::Full)
         .bg(Role::Accent)
         .w(move || pct(fraction() * 100.0));
     let thumb = div()
         .absolute()
         .size(THUMB)
-        .rounded(THUMB / 2.0)
+        .rounded(Radius::Full)
         .bg(Color::WHITE)
         .border(1.0)
         .border_color(Role::Border)
@@ -94,7 +95,7 @@ fn slider_root(value: Signal<f32>, (min, max): (f32, f32), step: Option<f32>) ->
         .h(THUMB)
         .child(thumb);
     let root = view! {
-        <div relative flex items_center h=THUMB min_w=40.0 rounded={THUMB / 2.0} border=BORDER
+        <div relative flex items_center h=THUMB min_w=40.0 rounded=Radius::Full border=BORDER
              border_color=Color::TRANSPARENT/>
     };
     focus_ring(root)

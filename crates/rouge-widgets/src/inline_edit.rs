@@ -1,4 +1,4 @@
-use crate::{tokens::RADIUS_INNER, typography::UiStyles};
+use crate::{tokens::Radius, typography::UiStyles};
 use rouge_core::Role;
 use rouge_core::{BuildCx, Key, Styled, View, component, div, editable, view};
 use rouge_reactive::{Callback, Signal};
@@ -38,7 +38,7 @@ impl View for InlineEdit {
             on_cancel,
         } = self;
         view! {
-            <div w_full min_w=0.0 px=4.0 rounded=RADIUS_INNER border=1.0 border_color=Role::Accent bg=Role::Canvas
+            <div w_full min_w=0.0 px=4.0 rounded=Radius::Inner border=1.0 border_color=Role::Accent bg=Role::Canvas
                  on_key_down={move |event| {
                      if event.key == Key::Escape {
                          event.stop_propagation();

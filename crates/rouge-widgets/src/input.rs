@@ -1,4 +1,4 @@
-use crate::tokens::RADIUS_CONTROL;
+use crate::tokens::{GROUP_HEIGHT, Radius};
 use crate::typography::UiStyles;
 use rouge_core::Role;
 use rouge_core::{
@@ -106,9 +106,9 @@ impl View for TextInput {
             .when_some(max_rows, Editable::max_rows);
         let fixed = min_rows.is_some() || max_rows.is_some();
         let root = view! {
-            <div flex px=8.0 py=6.0 border=1.0 rounded=RADIUS_CONTROL bg=Role::Elevated overflow_hidden
+            <div flex px=8.0 py=4.0 border=1.0 rounded=Radius::Control bg=Role::Elevated overflow_hidden
                  cursor=Cursor::Text when:items_start=multiline when:items_center={!multiline}
-                 when:min_h=(multiline && !fixed, 72.0)
+                 when:min_h=(multiline && !fixed, 72.0) when:min_h=(!multiline, GROUP_HEIGHT)
                  border_color={move || if focus.is_focused() { theme.get().accent } else { theme.get().border }}
                  on_pointer_down={move |_| focus.focus()}>
                 {div().flex_1().min_w(0.0).child(field)}

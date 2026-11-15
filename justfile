@@ -61,3 +61,7 @@ web-build example="component_gallery" package="rouge-widgets":
 # Serve an example on http://localhost:8000; add ?rouge_bench=scroll:4:300 or ?rouge_profile to profile it
 web example="component_gallery" package="rouge-widgets": (web-build example package)
     python3 -m http.server 8000 --bind 127.0.0.1 -d target/web/{{example}}
+
+# Keep widget spacing on the 4px grid and radii on the token scale
+style-check:
+    scripts/style-check

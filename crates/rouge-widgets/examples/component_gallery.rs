@@ -42,7 +42,7 @@ fn gallery() -> impl View {
                                   on_click={move || status.set("Selected lib.rs".into())}/>
                     </div>
                 </resizable_panel>
-                <div flex col p=12.0 flex_1 min_w=0.0 gap=10.0 material=Material::Floating>
+                <div flex col p=12.0 flex_1 min_w=0.0 gap=12.0 material=Material::Glass>
                     <segmented_control test_id="view">
                         <segment test_id="unified" label="Unified" selected=true/>
                         <segment test_id="split" label="Split" icon=IconName::Columns2/>

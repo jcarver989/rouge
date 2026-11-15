@@ -3,10 +3,11 @@ mod common;
 use common::builder;
 use rouge_core::testing::TestResult;
 use rouge_core::{
-    Chord, EditAction, Key, Menu, MenuItem, Modifiers, Point, PointerButton, Styled, WindowCommand,
-    div, editable, focus_handle, view,
+    Chord, EditAction, Key, Menu, MenuItem, Modifiers, Point, PointerButton, Styled, Theme,
+    WindowCommand, div, editable, focus_handle, view,
 };
 use rouge_reactive::{Runtime, signal};
+use rouge_theme::UiPalette;
 use rouge_widgets::testing::component_test;
 use rouge_widgets::{MenuFocus, button, context_menu, select};
 use std::cell::RefCell;
@@ -257,5 +258,35 @@ fn menu_items_can_be_given_their_own_test_id() -> TestResult {
     assert!(ui.bounds_of("menu-item-Archive inactive threads").is_none());
     ui.click_on("archive")?;
     assert!(chosen.get());
+    Ok(())
+}
+
+#[test]
+fn hovering_a_dropdown_item_highlights_its_row() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test().size(320.0, 220.0).build(|| {
+        Theme::provide(UiPalette::dark());
+        let items = [
+            MenuItem::callback("First", || {}).id("first"),
+            MenuItem::callback("Second", || {}).id("second"),
+        ];
+        view! {
+            <div size_full>
+                <context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu>
+            </div>
+        }
+    });
+    ui.click_on("trigger")?;
+    ui.run(0.3);
+    let row = ui.bounds_of("second").expect("the menu is open");
+    let (x, y) = (
+        (row.origin.x + 4.0) as u32,
+        (row.origin.y + row.size.height / 2.0) as u32,
+    );
+    let resting = ui.pixel(x, y)?;
+    ui.hover_on("second")?;
+    ui.run(0.3);
+    let hovered = ui.pixel(x, y)?;
+    assert_ne!(resting, hovered, "the hovered row is highlighted");
     Ok(())
 }

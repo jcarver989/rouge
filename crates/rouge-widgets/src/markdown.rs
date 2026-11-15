@@ -1,6 +1,6 @@
 use crate::fonts::{CODE_FONT, UI_FONT};
 use crate::syntax::{CODE_WRAP, syntax_spans};
-use crate::tokens::{RADIUS_CONTROL, RADIUS_INNER};
+use crate::tokens::Radius;
 use crate::typography::{CODE, READING, preset};
 use crate::{IconName, UiStyles, icon_button};
 use rouge_core::Role;
@@ -310,13 +310,13 @@ impl MarkdownRow {
     pub fn first_line_center(&self) -> f32 {
         match &self.kind {
             Kind::Heading { level, .. } => BLOCK_PADDING_Y + line_height(heading(*level)) / 2.0,
-            Kind::ListItem { .. } => 1.0 + line_height(READING) / 2.0,
+            Kind::ListItem { .. } => line_height(READING) / 2.0,
             Kind::Quote { rows } => rows
                 .first()
                 .map_or(line_height(READING) / 2.0, Self::first_line_center),
             Kind::CodeHeader { .. } => CODE_HEADER_HEIGHT / 2.0,
             Kind::CodeLine { .. } => line_height(CODE) / 2.0,
-            Kind::TableRow { .. } => 6.0 + line_height(TABLE) / 2.0,
+            Kind::TableRow { .. } => TABLE_CELL_PADDING_Y + line_height(TABLE) / 2.0,
             Kind::Paragraph { .. } | Kind::Html { .. } | Kind::Rule => {
                 BLOCK_PADDING_Y + line_height(READING) / 2.0
             }
@@ -331,8 +331,8 @@ impl MarkdownRow {
                 .child(inline_text(content, paint)),
             Kind::Paragraph { content } => view! { <prose>{inline_text(content, paint)}</prose> },
             Kind::ListItem { marker, content } => view! {
-                <prose py=1.0 flex row gap=8.0>
-                    <div min_w=14.0 flex_none muted>
+                <prose py=0.0 flex row gap=8.0>
+                    <div min_w=16.0 flex_none muted>
                         <text>{marker.clone()}</text>
                     </div>
                     <div flex_1 min_w=0.0>{inline_text(content, paint)}</div>
@@ -376,6 +376,8 @@ impl MarkdownRow {
 
 const LIST_INDENT: f32 = 22.0;
 const BLOCK_PADDING_Y: f32 = 4.0;
+
+const TABLE_CELL_PADDING_Y: f32 = 8.0;
 const CODE_HEADER_HEIGHT: f32 = 32.0;
 const TABLE: Typography = preset(UI_FONT, 14.0, 20.0, 400.0);
 
@@ -432,15 +434,15 @@ fn prose() -> Div {
     div()
         .px(8.0)
         .py(BLOCK_PADDING_Y)
-        .rounded(RADIUS_INNER)
+        .rounded(Radius::Inner)
         .min_w(0.0)
         .reading()
 }
 
 fn corners(top: bool, bottom: bool) -> Corners {
     let (top, bottom) = (
-        if top { RADIUS_CONTROL } else { 0.0 },
-        if bottom { RADIUS_CONTROL } else { 0.0 },
+        if top { Radius::Control.px() } else { 0.0 },
+        if bottom { Radius::Control.px() } else { 0.0 },
     );
     Corners {
         top_left: top,
@@ -513,7 +515,7 @@ fn table_row(
             _ => TextAlign::Start,
         };
         let cell = view! {
-            <div flex_1 min_w=0.0 px=12.0 py=6.0>{inline_text(cell, paint).align(align)}</div>
+            <div flex_1 min_w=0.0 px=12.0 py=TABLE_CELL_PADDING_Y>{inline_text(cell, paint).align(align)}</div>
         };
         if column > 0 {
             cell.border_l(1.0).border_color(Role::Border)

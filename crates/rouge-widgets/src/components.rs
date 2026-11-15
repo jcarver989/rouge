@@ -32,6 +32,7 @@ pub enum CheckState {
     Checked,
     Indeterminate,
 }
+
 use std::rc::Rc;
 
 pub struct Button {
@@ -149,7 +150,7 @@ impl View for Button {
             })
         });
         let root = view! {
-            <div flex items_center justify_center flex_none gap=6.0 rounded=tokens::RADIUS_CONTROL
+            <div flex items_center justify_center flex_none gap=8.0 rounded=tokens::Radius::Control
                  border=1.0 border_color=Color::TRANSPARENT h=height px=padding
                  font_weight=500.0 bg={fill(InteractionState::Rest, false)}
                  text_color={ink(InteractionState::Rest, false)}
@@ -267,7 +268,7 @@ impl View for IconButton {
         };
         let root = view! {
             <div flex flex_none items_center justify_center size=tokens::ICON_BUTTON_SIZE
-                 rounded={tokens::ICON_BUTTON_SIZE / 2.0} on_hover={move |inside| hovered.set(inside)}>
+                 rounded=tokens::Radius::Control on_hover={move |inside| hovered.set(inside)}>
                 {Icon::new(self.icon, foreground).size(self.icon_size)}
             </div>
         }
@@ -385,7 +386,7 @@ impl<T: CheckModel> View for Checkbox<T> {
         .size_full();
         let disabled = Rc::new(self.disabled);
         let root = view! {
-            <div flex_none size=tokens::CHECKBOX_SIZE rounded=2.0 border=1.0 bg=Role::Canvas
+            <div flex_none size=tokens::CHECKBOX_SIZE rounded=tokens::Radius::Inner border=1.0 bg=Role::Canvas
                  border_color=Role::TextMuted>
                 {mark}
             </div>
@@ -406,7 +407,7 @@ impl<T: CheckModel> View for Checkbox<T> {
 #[component]
 pub fn segmented_control() -> Div {
     view! {
-        <div flex items_center gap=2.0 p=2.0 rounded=tokens::RADIUS_CONTROL bg=Role::Chrome/>
+        <div flex items_center gap=4.0 p=4.0 rounded=tokens::Radius::Control bg=Role::Chrome/>
     }
 }
 
@@ -496,7 +497,7 @@ impl View for Segment {
             (Some(label), None)
         };
         let root = view! {
-            <div h=24.0 flex items_center gap=4.0 px=padding rounded=tokens::RADIUS_INNER
+            <div h=24.0 flex items_center gap=4.0 px=padding rounded=tokens::Radius::Inner
                  text_color=Role::TextMuted>
                 {icon.map(|icon| Icon::new(icon, Role::TextMuted))}
                 {detail}
@@ -559,7 +560,7 @@ impl Disclosure {
 impl View for Disclosure {
     fn build(self, cx: &mut BuildCx<'_>) {
         let root = view! {
-            <div flex items_center gap=6.0>
+            <div flex items_center gap=8.0>
                 {chevron(self.expanded)}
                 <div>{self.children}</div>
             </div>
@@ -670,7 +671,7 @@ impl View for SectionHeader {
         });
         let toggle = self.test_id.as_ref().map(|id| format!("{id}-toggle"));
         let heading = view! {
-            <div flex items_center gap=6.0>
+            <div flex items_center gap=8.0>
                 {self.icon.map(|icon| Icon::new(icon, Role::TextMuted))}
                 <text title primary>{self.title}</text>
                 {self.detail.map(|detail| view! { <muted_text>{detail}</muted_text> })}
@@ -771,8 +772,8 @@ impl View for ListRow {
             move || look().background.unwrap_or_default()
         };
         let root = view! {
-            <div flex items_center min_h=tokens::ROW_HEIGHT pl={8.0 + indent(self.depth)} pr=8.0 gap=6.0
-                 rounded=tokens::RADIUS_INNER text_color={move || look().foreground}>
+            <div flex items_center min_h=tokens::ROW_HEIGHT pl={8.0 + indent(self.depth)} pr=8.0 gap=8.0
+                 rounded=tokens::Radius::Inner text_color={move || look().foreground}>
                 {self.children}
             </div>
         }
@@ -965,7 +966,7 @@ impl View for Modal {
         let backdrop_id = self.test_id.as_ref().map(|id| format!("{id}-backdrop"));
         let panel = view! {
             <div test_id?=self.test_id flex col gap=8.0 p=16.0 w={modal_width(self.size)}
-                 max_w=pct(100.0) h?=self.height overflow_hidden material=Material::Floating>
+                 max_w=pct(100.0) h?=self.height overflow_hidden material=Material::Glass>
                 <text heading primary>{self.title}</text>
                 {self.hint.map(|hint| view! { <muted_text>{hint}</muted_text> })}
                 <div flex col min_h=0.0>{self.children}</div>
@@ -991,7 +992,7 @@ pub fn empty_state(
     #[prop(into)] detail: String,
 ) -> Div {
     view! {
-        <div flex col items_center justify_center p=16.0 gap=6.0>
+        <div flex col items_center justify_center p=16.0 gap=8.0>
             {Icon::new(icon, Role::TextMuted)}
             <text title primary>{title}</text>
             <muted_text>{detail}</muted_text>
@@ -1008,7 +1009,7 @@ pub fn notification(#[prop(into)] message: String, tone: NoticeTone) -> Div {
         _ => IconName::Info,
     };
     view! {
-        <div flex items_center gap=8.0 p=8.0 rounded=tokens::RADIUS_CONTROL
+        <div flex items_center gap=8.0 p=8.0 rounded=tokens::Radius::Control
              bg={move || Theme::notice_style(tone).background.unwrap_or_default()}>
             {Icon::new(icon, fg)}
             <text body color=fg>{message}</text>

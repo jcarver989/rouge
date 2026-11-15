@@ -10,7 +10,7 @@ fn full_width_buttons_rows_and_segments_activate_only_enabled_choices() -> TestR
     let (mut ui, calls) = component_test().size(440.0, 320.0).build_with(|| {
         let calls = signal(Vec::new());
         let view = view! {
-            <div flex col p=12.0 w=340.0 material=Material::Floating>
+            <div flex col p=12.0 w=340.0 material=Material::Glass>
                 <button test_id="primary" label="Primary" variant=ButtonVariant::Primary w_full
                         on_click={move || calls.update(|v| v.push(1))}/>
                 <list_row test_id="row" depth=2 selection=SelectionState::Selected

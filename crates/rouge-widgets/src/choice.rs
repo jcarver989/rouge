@@ -1,3 +1,4 @@
+use crate::tokens::Radius;
 use crate::typography::UiStyles;
 use crate::util::fade_when_disabled;
 use rouge_core::Role;
@@ -36,9 +37,9 @@ impl View for Toggle {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (checked, disabled) = (self.checked, Rc::new(self.disabled));
         let track = view! {
-            <div flex_none w=36.0 h=20.0 rounded=10.0 border=1.0 border_color=Color::TRANSPARENT
+            <div flex_none w=36.0 h=20.0 rounded=Radius::Full border=1.0 border_color=Color::TRANSPARENT
                  bg=Role::Border>
-                <div size=16.0 m=1.0 rounded=8.0 bg=Color::WHITE transition=Spring::snappy()
+                <div size=16.0 m=1.0 rounded=Radius::Full bg=Color::WHITE transition=Spring::snappy()
                      translate_x={move || if checked.get() { 16.0 } else { 0.0 }}/>
             </div>
         }
@@ -104,15 +105,15 @@ impl<T: Clone + PartialEq + 'static> View for Radio<T> {
             .justify_center()
             .flex_none()
             .size(16.0)
-            .rounded(8.0)
+            .rounded(Radius::Full)
             .border(1.0)
             .bg(Role::Elevated)
             .border_color(Role::Border)
             .checked(|style| style.border_color(Role::Accent))
             .is_checked(on.clone())
-            .child(view! { <show when=on><div size=8.0 rounded=4.0 bg=Role::Accent/></show> });
+            .child(view! { <show when=on><div size=8.0 rounded=Radius::Full bg=Role::Accent/></show> });
         let root = view! {
-            <div flex items_center flex_none gap=8.0 rounded=8.0 border=1.0 border_color=Color::TRANSPARENT>
+            <div flex items_center flex_none gap=8.0 rounded=Radius::Control border=1.0 border_color=Color::TRANSPARENT>
                 {dot}
                 {label.map(|label| view! { <text body primary>{label}</text> })}
             </div>

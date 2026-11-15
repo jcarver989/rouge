@@ -2,8 +2,9 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestResult, TestUi, counter};
-use rouge_core::{Color, Point, Rect, Styled, div, show};
+use rouge_core::{Color, Point, Rect, Role, Styled, Theme, div, show};
 use rouge_reactive::{Runtime, signal};
+use rouge_theme::UiPalette;
 use rouge_widgets::{Hint, Material, Placement, popover, tooltip};
 use std::thread::sleep;
 use std::time::Duration;
@@ -37,8 +38,8 @@ fn popover_opens_below_its_trigger_and_closes_on_outside_click_or_escape() -> Te
     ui.run(0.6);
     assert_eq!(
         ui.bounds(30.0, 60.0)?,
-        Rect::new(11.0, 39.0, 80.0, 80.0),
-        "below the trigger, inside the panel border"
+        Rect::new(10.0, 38.0, 80.0, 80.0),
+        "below the trigger"
     );
     ui.click_at(30.0, 60.0);
     assert_eq!(inside.get(), 1);
@@ -68,9 +69,9 @@ fn popover_opens_below_its_trigger_and_closes_on_outside_click_or_escape() -> Te
 fn popover_can_be_placed_on_any_side_of_its_trigger() -> TestResult {
     let _entered = Runtime::new().enter();
     let sides = [
-        (Placement::Above, 51.0, 75.0),
-        (Placement::Right, 115.0, 121.0),
-        (Placement::Left, 5.0, 121.0),
+        (Placement::Above, 50.0, 76.0),
+        (Placement::Right, 114.0, 120.0),
+        (Placement::Left, 6.0, 120.0),
     ];
     for (placement, x, y) in sides {
         let open = signal(true);
@@ -106,13 +107,12 @@ fn a_glass_popover_lets_what_is_behind_it_show_through_its_panel() -> TestResult
         ui.run(0.6);
         ui.pixel(40, 60)
     };
-    let [red, green, ..] = panel(Material::Floating)?;
+    let [red, green, ..] = panel(Material::Surface)?;
     assert_eq!(red, green, "a solid surface hides the page");
     let [red, green, ..] = panel(Material::Glass)?;
     assert!(red > green, "glass shows the page through its tint");
     Ok(())
 }
-
 #[test]
 fn tooltip_appears_after_hovering_for_the_delay_and_hides_on_leave() {
     let _entered = Runtime::new().enter();
@@ -163,6 +163,38 @@ fn any_view_takes_an_optional_hint_and_none_adds_nothing() {
         ui.wait_until(|ui| shown(ui) > idle),
         "the hinted view shows one"
     );
+}
+
+#[test]
+fn tooltip_takes_the_surface_of_a_dark_theme() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = builder().build(|| {
+        Theme::provide(UiPalette::dark());
+        let target = div().w(60.0).h(20.0);
+        div()
+            .size_full()
+            .p(10.0)
+            .bg(Role::Canvas)
+            .child(tooltip(target, "Helpful").delay(Duration::from_millis(20)))
+    });
+    let idle = ui.stats().elements;
+    ui.pointer_moved(Point::new(20.0, 20.0));
+    assert!(
+        ui.wait_until(|ui| ui.stats().elements > idle),
+        "the tooltip mounts"
+    );
+    ui.run(0.5);
+    let bubble = ui.pixel(14, 46)?;
+    let distance = |color: Color| {
+        let target = color.to_rgba8();
+        bubble.iter().zip(target).map(|(a, b)| u32::from(a.abs_diff(b))).sum::<u32>()
+    };
+    let palette = UiPalette::dark().map(Color::from);
+    assert!(
+        distance(palette.elevated) < distance(palette.text),
+        "the bubble is dark glass behind light text, not inverted: {bubble:?}"
+    );
+    Ok(())
 }
 
 #[test]

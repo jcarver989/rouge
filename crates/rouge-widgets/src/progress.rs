@@ -1,3 +1,4 @@
+use crate::tokens::Radius;
 use crate::icon::{Icon, IconName};
 use rouge_core::Role;
 use rouge_core::{
@@ -43,7 +44,7 @@ impl View for Separator {
 pub fn progress<U>(value: impl IntoProp<f32, U>) -> Div {
     let value = value.into_prop();
     view! {
-        <div h=6.0 min_w=40.0 rounded=3.0 bg=Role::Border overflow_hidden>
+        <div h=4.0 min_w=40.0 rounded=Radius::Full bg=Role::Border overflow_hidden>
             <div h_full bg=Role::Accent w={move || pct(value.get().clamp(0.0, 1.0) * 100.0)}/>
         </div>
     }

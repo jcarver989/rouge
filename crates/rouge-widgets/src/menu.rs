@@ -3,7 +3,7 @@ use crate::icon::{Icon, IconName};
 use crate::material::{Material, MaterialExt};
 use crate::popover::{Placement, popup};
 use crate::roving::RovingFocus;
-use crate::tokens::{MENU_WIDTH, RADIUS_CONTROL, RADIUS_INNER};
+use crate::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, MENU_WIDTH, Radius};
 use crate::typography::UiStyles;
 use crate::util::focus_ring;
 use rouge_core::Role;
@@ -54,7 +54,7 @@ fn trigger(
         .test_id(format!("menu-{}", menu.title))
         .preserve_focus()
         .track_bounds(anchor)
-        .px(10.0)
+        .px(12.0)
         .py(4.0)
         .hover(|style| style.bg(hover))
         .on_click(move |event| {
@@ -125,7 +125,7 @@ fn render_items(
                         {shortcut}
                     </list_row>
                 };
-                (div().rounded(RADIUS_INNER).child(row), activate, false)
+                (div().rounded(Radius::Inner).child(row), activate, false)
             }
             MenuItem::Separator => unreachable!(),
         };
@@ -153,7 +153,7 @@ fn render_items(
         row
     });
     focus
-        .apply(div().material(Material::Floating))
+        .apply(div().material(Material::Glass))
         .flex()
         .col()
         .p(4.0)
@@ -259,19 +259,19 @@ pub fn select<T: Clone + PartialEq + 'static>(
     let label = view! {
         <div flex flex_1 items_center justify_between gap=8.0>
             <text body primary no_wrap>{current}</text>
-            {Icon::new(IconName::ChevronDown, Role::TextMuted).size(14.0)}
+            {Icon::new(IconName::ChevronDown, Role::TextMuted).size(ICON_SIZE_SMALL)}
         </div>
     };
     let mut menu = context_menu(label, items).dropdown();
     menu.root = focus_ring(menu.root)
         .flex()
         .items_center()
-        .px(10.0)
-        .py(6.0)
+        .px(12.0)
+        .h(GROUP_HEIGHT)
         .min_w(120.0)
         .border(1.0)
         .border_color(Role::Border)
-        .rounded(RADIUS_CONTROL)
+        .rounded(Radius::Control)
         .bg(Role::Elevated)
         .hover(|style| style.bg(Role::SurfaceHover));
     menu

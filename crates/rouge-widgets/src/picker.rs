@@ -29,9 +29,9 @@ pub enum PickerMarker {
 impl View for PickerMarker {
     fn build(self, cx: &mut BuildCx<'_>) {
         match self {
-            PickerMarker::Dot(color) => view! { <div size=7.0 rounded=4.0 bg=color/> },
+            PickerMarker::Dot(color) => view! { <div size=MARKER_SIZE rounded=tokens::Radius::Full bg=color/> },
             PickerMarker::Pending => view! {
-                <div size=10.0 rounded=5.0 border=1.0 border_color=Role::TextMuted/>
+                <div size=MARKER_SIZE rounded=tokens::Radius::Full border=1.0 border_color=Role::TextMuted/>
             },
         }
         .build(cx);
@@ -256,7 +256,7 @@ impl View for PickerList {
 
 fn group(item: &PickerItem) -> impl View {
     view! {
-        <div px=8.0 pt=6.0><text caption muted>{item.group.clone().unwrap_or_default()}</text></div>
+        <div px=8.0 pt=8.0><text caption muted>{item.group.clone().unwrap_or_default()}</text></div>
     }
 }
 
@@ -347,7 +347,7 @@ fn item_row(
         let details = item.details.iter().map(|detail| {
             view! { <text caption muted no_wrap>{detail.clone()}</text> }
         });
-        view! { <div flex items_center gap=6.0>{..details}</div> }
+        view! { <div flex items_center gap=8.0>{..details}</div> }
     });
     let check = columns.checked.then(|| {
         let icon = item
@@ -609,7 +609,7 @@ fn search_root(
     };
     view! {
         <div test_id?=id flex col min_h=0.0 w=px(tokens::PICKER_WIDTH)
-             max_w=pct(100.0) gap=6.0 p=8.0 when:autofocus=focus_root
+             max_w=pct(100.0) gap=8.0 p=8.0 when:autofocus=focus_root
              when:tab_index=(focus_root, -1)
              on_key_down={move |event| {
                  match event.key {
@@ -643,7 +643,7 @@ fn with_preview(
 ) -> impl View {
     view! {
         <div flex row flex_1 min_h=0.0>
-            <div flex_none w=tokens::PICKER_PREVIEW_LIST_WIDTH max_w=pct(50.0) min_h=0.0 pr=6.0 border_r=1.0
+            <div flex_none w=tokens::PICKER_PREVIEW_LIST_WIDTH max_w=pct(50.0) min_h=0.0 pr=8.0 border_r=1.0
                  border_color=Role::BorderSubtle>
                 {children}
             </div>
@@ -658,7 +658,7 @@ fn with_preview(
 fn query_input(hint: String, handle: SearchPickerHandle) -> impl View {
     let query = handle.query;
     view! {
-        <div p=6.0 material=Material::Surface>
+        <div h=tokens::GROUP_HEIGHT px=8.0 flex items_center material=Material::Surface rounded=tokens::Radius::Inner>
             <editable value=query test_id="picker-query" autofocus body color=Role::Text w_full
                       placeholder=(hint, Role::TextMuted) on_submit={move |_| handle.choose()}/>
         </div>
@@ -716,3 +716,5 @@ fn results(
         </div>
     }
 }
+
+const MARKER_SIZE: f32 = 8.0;
