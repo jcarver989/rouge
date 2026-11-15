@@ -111,7 +111,9 @@ impl<T: Clone + PartialEq + 'static> View for Radio<T> {
             .border_color(Role::Border)
             .checked(|style| style.border_color(Role::Accent))
             .is_checked(on.clone())
-            .child(view! { <show when=on><div size=8.0 rounded=Radius::Full bg=Role::Accent/></show> });
+            .child(
+                view! { <show when=on><div size=8.0 rounded=Radius::Full bg=Role::Accent/></show> },
+            );
         let root = view! {
             <div flex items_center flex_none gap=8.0 rounded=Radius::Control border=1.0 border_color=Color::TRANSPARENT>
                 {dot}

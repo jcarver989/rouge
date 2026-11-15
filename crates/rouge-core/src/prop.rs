@@ -97,7 +97,6 @@ impl PropFrom<u32> for Color {
     }
 }
 
-
 pub struct AnyEffect(pub(crate) EffectInstance);
 
 impl<T: ShaderEffect> PropFrom<T> for AnyEffect {
