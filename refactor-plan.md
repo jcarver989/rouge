@@ -481,8 +481,45 @@ Land these alongside nearby work. Estimates come from the reviews.
 
 ## Tracking
 
-| Item | Owner | PR | Bench before | Bench after | Status |
-|---|---|---|---|---|---|
-| 0.1 | | | | | |
-| 0.2 | | | | | |
-| … | | | | | |
+Baseline numbers are from `cargo run -p rouge --release --example bench -- baseline` (Phase 1). "Now" is after the work below.
+
+| Scenario | Baseline effects / memos / style resolutions / allocs per frame | Now |
+|---|---|---|
+| One change in 5,000 static elements | 1 / 0 / 1 / 85 | 1 / 0 / 1 / 86 |
+| Ten props on one element, one batch | 10 / 0 / 9 / 4016 | 10 / 0 / **1** / 4017 |
+| Theme switch across 2,000 buttons | 8000 / 2000 / 6000 / 18105 | **0 / 0 / 0 / 80** |
+| Toggle a button's enabled state ×100 | 700 / 100 / 250 / 153 (200 elements created) | **100 / 0 / 100 / 72 (0 created)** |
+| Focused idle editor for 10 s | 20 frames (was a frame per refresh before 0.2) | 20 frames |
+| Compositor-only animation, 120 frames | 200 / 0 / 0 / 70 | 200 / 0 / 0 / **66** (8 in `Ui::update`, the rest in wgpu encode/submit; the scene and the plan allocate nothing) |
+| Scroll fling over 10k rows | 928 / 853 / 663 / 108 | 768 / 853 / **355** / 107 |
+| Selection change in 1,000 rows | 2 / 1000 / 2 / 2091 | 3 / **0** / 2 / **88** |
+
+| Item | Status | Notes |
+|---|---|---|
+| 0.1 | Done | Idle-window eviction for groups; tests in `compositor_test.rs`. |
+| 0.2 | Done | `Ui::next_frame() -> Wake`; hosts use `WaitUntil` / `setTimeout`. Caret deadlines are robust to float rounding. |
+| 0.3 | Done | `Vec<(&'static str, RenderPipeline)>` with `ptr::eq`. |
+| 0.4 | Done | Groups rasterize with the layer translation removed and composite at a whole device-pixel offset. |
+| 0.5 | Done | 16 KiB chunks; no test bounds needed changing. |
+| 0.6 | Done | Item-level settling of a trailing list; work now scales linearly (the 250→500 item step was 4×). |
+| 0.7 | Done | `SourceSyntax::symbols()` is lazy. The stream's copy of a code block's text during streaming remains. |
+| 0.8–0.10 | Done | Cached refresh interval; clamp in `Driver::resize`; per-window commands into a reused buffer; `Vec` of windows. |
+| 1 | Done | `bench -- baseline`, counting allocator, `FrameStats::style_resolutions`. |
+| 2.1 | Done | No example or test uses `dynamic` to change a widget property; `checkbox` takes `Signal<bool>` or `Signal<CheckState>`; `popover` owns its trigger. |
+| 2.2 | Done | Every widget is a constructor plus methods; positional forms deleted; `test_id` optional; macro lowering test in `component_test.rs`. |
+| 2.3 | Done | `on_activate` + `FocusPolicy`, `selected`/`checked` states and variants, `.when(condition, ...)`; `pressable`, `activates`, `on_press` and `track_interaction` deleted. Role and accessible name are not stored yet (no consumer). |
+| 2.4 | Done | `toggle`, `pick`, `selector`, `action`, `IntoProp` in the prelude, clear colour derived (`WindowOptions::background` deleted). |
+| 2.5 | Done | `markdown(document \| stream)` with `.on_link`, theme-derived palette, copy to clipboard; boxed per-row background gone. Labels (`target_label`) and the outline (`outline`, cached on `MarkdownReviewSession`) moved to `../diff`'s `clankerdiff-markdown`; targets (id, kind, source) stay in `rouge-markdown` because widget rows and stream settling use them. `each` takes a `Vec` closure or a `Signal`/`ReadSignal` of `AsRef<[T]>` read in place, so `MarkdownRows` syncs without copying keys. |
+| 3.1 | Done | One `Op` write path; first values applied inline; deferred resolution once per flush, parents first. |
+| 3.2 | Done | `Fill` + `Role` from one table in `rouge-theme`; paint-time resolution; no theme effects. `UiPalette<T>` stays generic: `UiPalette::<Role>::ROLES` uses it and `../diff` maps it. |
+| 3.3 | Done | Phases named in `Ui::step`; audit found every observer is measurement feedback (moving any after paint shows a frame of lag). |
+| 3.4 | Done | Scroll keys use the signal id; `rouge-core` uses FxHash. Compositor layers are a `SlotMap` with `LayerId` as its key, `Compositor::create_layer()` mints ids and `Tree::next_layer` is gone; `sources` was already keyed by signal id. 1,000-layer animation: tick + compose 32.1 → 27.5 µs per frame (median of 8). `Motions` stays an FxHash map: `motion()` mints a `MotionId` before the compositor sees it, so a slotmap key would need a second mapping. Taffy: `TaffyTree` and the style clone are gone; a view over the element arena implements taffy's traits, each element's style, cache and unrounded layout live in a `SecondaryMap` keyed by `ElementId` (inline they made `Element` 1.5 KB and slowed paint passes), and pixel snapping moved into the bounds pass; `bench -- layout` on 5,000 elements: layout from scratch 3–8% faster, relayout after one width change within 1% (flat) and about 19% faster (nested in rows). |
+| 3.5 | Done | One graph borrow per clean read (state, value and tracking together), a reused scratch stack in `mark_subscribers`, no `sources` clone in `update_if_necessary`. `examples/reactive_bench.rs`: 1M untracked get 6.1 → 4.8 ms, 1M tracked get 7.7 → 5.8 ms, 10k-effect fan-out write 629 → 531 µs. Not done: inline values (a read re-enters the graph, so the value must stay outside the node borrow), `SmallVec` subscribers (dispose would turn quadratic on wide fan-outs), a separate `Stored` arena (no measured cost). |
+| 4 | Done | One flat `Vec<Command>` (`Draw` / `Group` header with `len` / `Surface`) owned by the compositor and refilled each frame, plus a `DrawLists` arena holding every layer's lists; the renderer plans straight from it (`Scene`). Group signatures come from `Scene::summarize`, which folds in each surface's latched frame number; `hash_frames`, `Item`, nested group `Vec`s and the per-layer stage `Vec` are gone. Compositor-only animation 71 → 66 allocations per frame; layers, glass and scroll CPU unchanged within noise (best of 8: glass 360 → 357 µs, layers 246 → 242 µs). |
+| 5.1 | Done | Earlier: `Glass::frosted`, `From<&T>` removed, `DrawList::replace` moves, single `Device`, cache maintenance every 60 frames. Now: the producer owns its pool (`configure` / `acquire` / `submit`; releases recycle internally; set ids, `register` and `SurfaceCx::allocate` are internal); fences, `present_at`/`QueueMode` and `Presented`/`Discarded` deleted (deferred); `Placement` folded into `SurfaceConfig` (no `seq`), bind counts on the entry, `InteropError` folded into `SurfaceError`, `NativeBuffer` is a cfg'd field, derived `Debug` for `SurfaceEvent`, FxHash; the plan uses `Content` directly (`Sampled`/`GroupContent` gone), blur passes carry their source and destination (`Blur`/`BlurTarget` gone), `Kernel` with `levels == 0`, `Window` replaced by two texel functions, one `Textures::ensure` for sized targets; test-pattern and example pipelines use the auto layout and one uniform buffer. Kept: `Area` (integer pixel rects for scissors), `Mapping` (it is GPU record data). Not done: folding `tests/common::Canvas` into `Headless`, which cannot own the draw lists or atlas because `TestUi` brings both from the `Ui`. |
+| 5.2 | Done | `MarkdownText` built in one pass from events (`MarkdownInline`, `Node` tree and widget `flatten` deleted); blocks hold `Arc<MarkdownText>`; `MarkdownCodeLine.{index,source_line}` and `MarkdownCodeBlock.language` field dropped (derived); settled definitions resolved via the broken-link callback (prefix copy, range shifting and `prefix_bytes_copied` deleted; settled definitions win over tail duplicates); `MarkdownStream` and `IncrementalDocument` merged. Kept `source_styles`: the bundled Markdown grammar has no inline injection, so the source view would lose emphasis, link and inline-code styling. |
+| 5.3 | Done | One `languages!` table → `u8` `LanguageId` (aliases, extensions, special files); injections resolve to ids; `LanguageHint` replaced by `&str`; `HighlightLine` is one `(u32, u32, HighlightId)` slice (aliases and `IntoIterator` impls deleted); flatten/normalize reuse stream scratch buffers; `THREAD_WORK` deleted (`SourceSyntax::work_stats`, `DocumentSyntax::work_stats` in `../diff`); `SyntaxTheme` keeps only resolved styles, `capture_style` for capture maps. `Span.highlight: None` kept (re-query boundaries). |
+| 5.4 | Done | `PickerState` and fuzzy filtering moved to a new `rouge-picker` crate (the terminal frontend uses them), fake `Clone`/`PartialEq`/`Debug` impls gone (the matcher is created per query). `UiPalette::default()` is `light()`; `SCRIM_ALPHA` and `MarkdownPalette::colors` deleted (`../diff` owns its sage default and fingerprint helper). `ControlSize` and `CheckState` moved to `rouge-widgets`; `ModalSize` stays because the terminal frontend uses it. `UiPalette<T>` stays generic (see 3.2). |
+| 5.5 | Done | `Drawn` → `bool`; `App::appearance`/`App::quit` and the root re-exports deleted; `Driver::open` does the shared setup; one Edit/Window menu policy (`platform::default_menus`, menu bar only for app menus); `BrowserRuntime` folded into the web `Host` (id-keyed weak host list, `Cell<bool>` wake flag, no slotmap); one listener per web target with a single `match`; `ProfileSettings` reads present mode and exit-after-frames, a `Profile` logs its own summary, environment formatted only when profiling; test-only platform items `#[doc(hidden)]`; `persist` feature. New: `App::mount() -> Mounted` on wasm. `WindowOptions` setters kept. |
+| 5.6 | Partly | `Emitter` deleted; shadows are `Rc<[BoxShadow]>`. Test queries stay on `Ui`: the browser tests use them and `TestUi` is native-only. |
+| 6 | Done for landed items | `design.md` updated with each change; headless smoke test per example (`tests/examples_test.rs`); motion example uses `.transition()`. |
