@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
 
+pub const APPLE: bool = cfg!(any(target_os = "macos", target_os = "ios"));
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PointerButton {
     Primary,
@@ -27,7 +29,7 @@ impl Modifiers {
     pub const CTRL: Modifiers = Modifiers::new(false, true, false, false);
     pub const ALT: Modifiers = Modifiers::new(false, false, true, false);
     pub const META: Modifiers = Modifiers::new(false, false, false, true);
-    pub const COMMAND: Modifiers = if cfg!(target_os = "macos") {
+    pub const COMMAND: Modifiers = if APPLE {
         Modifiers::META
     } else {
         Modifiers::CTRL
@@ -53,19 +55,11 @@ impl Modifiers {
     }
 
     pub fn command(&self) -> bool {
-        if cfg!(target_os = "macos") {
-            self.meta
-        } else {
-            self.ctrl
-        }
+        if APPLE { self.meta } else { self.ctrl }
     }
 
     pub fn word(&self) -> bool {
-        if cfg!(target_os = "macos") {
-            self.alt
-        } else {
-            self.ctrl
-        }
+        if APPLE { self.alt } else { self.ctrl }
     }
 }
 
@@ -163,7 +157,7 @@ impl Chord {
     }
 
     pub fn display(&self) -> String {
-        let mac = cfg!(target_os = "macos");
+        let mac = APPLE;
         let mut parts = Vec::new();
         for (enabled, label) in [
             (self.modifiers.ctrl, if mac { "⌃" } else { "Ctrl" }),

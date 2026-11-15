@@ -1,5 +1,5 @@
 use rouge_core::testing::{TestResult, TestUi, TestUiBuilder};
-use rouge_core::{ImeEvent, Key, KeyEvent, Point, PointerButton, Styled, div, editable};
+use rouge_core::{APPLE, ImeEvent, Key, KeyEvent, Point, PointerButton, Styled, div, editable};
 use rouge_reactive::{Runtime, Signal, signal};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,7 +40,7 @@ fn selection_keys_replace_delete_and_move_by_word() {
     value.set("one two three".into());
     ui.advance(0.0);
     ui.press("end");
-    ui.press(if cfg!(target_os = "macos") {
+    ui.press(if APPLE {
         "alt-backspace"
     } else {
         "ctrl-backspace"

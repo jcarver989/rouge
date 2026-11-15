@@ -1,5 +1,5 @@
 use crate::clipboard::ClipboardMedia;
-use crate::event::{Cursor, FocusEvent, ImeEvent, Key, KeyEvent, PointerButton};
+use crate::event::{APPLE, Cursor, FocusEvent, ImeEvent, Key, KeyEvent, PointerButton};
 use crate::focus::FocusHandle;
 use crate::prop::IntoProp;
 use crate::theme::Fill;
@@ -155,7 +155,7 @@ styled!(Editable => text);
 fn key_op(event: &KeyEvent, multiline: bool) -> Option<EditOp> {
     let modifiers = event.modifiers;
     let (extend, word) = (modifiers.shift, modifiers.word());
-    let line = cfg!(target_os = "macos") && modifiers.meta;
+    let line = APPLE && modifiers.meta;
     let horizontal = |by_word: Movement, by_line: Movement, by_char: Movement| {
         let movement = if word {
             by_word

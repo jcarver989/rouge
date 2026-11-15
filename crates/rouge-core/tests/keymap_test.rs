@@ -1,5 +1,5 @@
 use rouge_core::testing::{TestResult, TestUiBuilder};
-use rouge_core::{Chord, Key, Modifiers, Styled, div, text, use_binding};
+use rouge_core::{APPLE, Chord, Key, Modifiers, Styled, div, text, use_binding};
 use rouge_reactive::{Runtime, signal};
 
 #[test]
@@ -79,22 +79,11 @@ fn command_aliases_and_platform_labels_are_consistent() -> TestResult {
     let command = Chord::parse("secondary-s")?;
     assert_eq!(command, Chord::new(Key::character("s"), Modifiers::COMMAND));
     assert_eq!(command, Chord::parse("cmd-s")?);
-    assert_eq!(
-        command.display(),
-        if cfg!(target_os = "macos") {
-            "⌘S"
-        } else {
-            "Ctrl+S"
-        }
-    );
+    assert_eq!(command.display(), if APPLE { "⌘S" } else { "Ctrl+S" });
     let shifted = Chord::parse("secondary-shift-s")?;
     assert_eq!(
         shifted.display(),
-        if cfg!(target_os = "macos") {
-            "⇧⌘S"
-        } else {
-            "Ctrl+Shift+S"
-        }
+        if APPLE { "⇧⌘S" } else { "Ctrl+Shift+S" }
     );
     Ok(())
 }
