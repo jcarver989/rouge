@@ -1,45 +1,40 @@
-use crate::{
-    incremental::IncrementalDocument,
-    text::{MarkdownText, openable},
+use crate::text::{MarkdownText, TextBuilder};
+use pulldown_cmark::{
+    Alignment, BrokenLink, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
-use linkify::{LinkFinder, LinkKind};
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Tag};
-use rouge_syntax::{LanguageHint, SourceSyntax, analyze};
+use rouge_syntax::{SourceSyntax, analyze};
 use serde::{Deserialize, Serialize};
 use std::{
-    cmp, fmt,
+    collections::HashMap,
+    fmt,
     ops::Range,
     slice,
     sync::{Arc, OnceLock},
 };
+use unicase::UniCase;
 
-/// A one-based, inclusive range of lines in the original Markdown source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct MarkdownLineRange {
     pub start: usize,
     pub end: usize,
 }
 
-/// A byte and line range into the original, unmodified source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceRange {
     pub bytes: Range<usize>,
     pub lines: MarkdownLineRange,
 }
 
-/// An opaque identifier valid only for the lifetime of one parsed document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MarkdownTargetId(usize);
 
 impl MarkdownTargetId {
-    /// Returns the document-local ordinal of this target.
     #[must_use]
     pub const fn index(self) -> usize {
         self.0
     }
 }
 
-/// The semantic kinds that can be selected and commented on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MarkdownTargetKind {
     Heading,
@@ -51,31 +46,11 @@ pub enum MarkdownTargetKind {
     CodeLine,
 }
 
-/// A formatted inline Markdown node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MarkdownInline {
-    Text(String),
-    Code(String),
-    Strong(Vec<MarkdownInline>),
-    Emphasis(Vec<MarkdownInline>),
-    Strikethrough(Vec<MarkdownInline>),
-    Link {
-        destination: String,
-        title: Option<String>,
-        content: Vec<MarkdownInline>,
-    },
-    SoftBreak,
-    HardBreak,
-    /// Images intentionally do not load assets. Their alt text is the fallback.
-    ImageAlt(String),
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MarkdownOptions {
     pub intra_doc_links: bool,
 }
 
-/// A commentable or structurally significant Markdown block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownBlock {
     pub source: SourceRange,
@@ -92,15 +67,14 @@ impl MarkdownBlock {
     }
 }
 
-/// The semantic kinds of blocks exposed to renderers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarkdownBlockKind {
     Heading {
         level: u8,
-        content: Vec<MarkdownInline>,
+        content: Arc<MarkdownText>,
     },
     Paragraph {
-        content: Vec<MarkdownInline>,
+        content: Arc<MarkdownText>,
     },
     List {
         ordered: bool,
@@ -112,27 +86,23 @@ pub enum MarkdownBlockKind {
     },
     CodeBlock(Arc<MarkdownCodeBlock>),
     Table(MarkdownTable),
-    /// Raw HTML is retained as escaped/plain fallback text, but is not a target.
     HtmlFallback {
-        content: Vec<MarkdownInline>,
+        content: Arc<MarkdownText>,
     },
     Rule,
 }
 
-/// One list item. The list container itself is not a review target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownListItem {
     pub depth: usize,
     pub source: SourceRange,
-    pub content: Vec<MarkdownInline>,
+    pub content: Arc<MarkdownText>,
     pub blocks: Vec<MarkdownBlock>,
     pub target_id: Option<MarkdownTargetId>,
 }
 
-/// A fenced or indented code block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownCodeBlock {
-    pub(crate) language: Option<String>,
     pub(crate) info: Option<String>,
     pub source: SourceRange,
     pub content: SourceRange,
@@ -146,7 +116,7 @@ pub struct MarkdownCodeBlock {
 impl MarkdownCodeBlock {
     #[must_use]
     pub fn language(&self) -> Option<&str> {
-        self.language.as_deref()
+        self.info.as_deref()?.split_whitespace().next()
     }
 
     #[must_use]
@@ -164,14 +134,23 @@ impl MarkdownCodeBlock {
         self.text.get(line.text.clone()).unwrap_or_default()
     }
 
-    pub(crate) fn push_line(&mut self, (mut line, text): (MarkdownCodeLine, &str)) {
+    #[must_use]
+    pub fn syntax(&self) -> &SourceSyntax {
+        self.syntax
+            .get(|| analyze(self.language().unwrap_or_default(), &self.text))
+    }
+
+    pub(crate) fn push_line(&mut self, source: SourceRange, text: &str) {
         if !self.lines.is_empty() {
             self.text.push('\n');
         }
         let start = self.text.len();
         self.text.push_str(text);
-        line.text = start..self.text.len();
-        self.lines.push(line);
+        self.lines.push(MarkdownCodeLine {
+            source,
+            text: start..self.text.len(),
+            target_id: None,
+        });
     }
 
     pub(crate) fn truncate_lines(&mut self, lines: usize) {
@@ -184,19 +163,6 @@ impl MarkdownCodeBlock {
         lines
             .checked_sub(1)
             .map_or(0, |last| self.lines[last].text.end)
-    }
-
-    pub(crate) fn highlight_hint(&self) -> &str {
-        self.info
-            .as_deref()
-            .or(self.language.as_deref())
-            .unwrap_or_default()
-    }
-
-    #[must_use]
-    pub fn syntax(&self) -> &SourceSyntax {
-        self.syntax
-            .get(|| analyze(LanguageHint::InfoString(self.highlight_hint()), &self.text))
     }
 
     pub(crate) fn split_fenced_lines(
@@ -215,15 +181,11 @@ impl MarkdownCodeBlock {
         let Some(code) = source.get(offset..content.end) else {
             return 0;
         };
-        for (line_index, line) in code.split('\n').enumerate() {
-            let code_line = MarkdownCodeLine {
-                index: from + line_index,
-                source: source_range(offset..offset + line.len(), index),
-                source_line: Some(first_line + line_index),
-                text: 0..0,
-                target_id: None,
-            };
-            self.push_line((code_line, line.strip_suffix('\r').unwrap_or(line)));
+        for line in code.split('\n') {
+            self.push_line(
+                source_range(offset..offset + line.len(), index),
+                line.strip_suffix('\r').unwrap_or(line),
+            );
             offset += line.len() + 1;
         }
         code.len()
@@ -259,24 +221,19 @@ impl fmt::Debug for SyntaxCell {
     }
 }
 
-/// One content line inside a code block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownCodeLine {
-    pub index: usize,
     pub source: SourceRange,
-    pub source_line: Option<usize>,
     pub(crate) text: Range<usize>,
     pub target_id: Option<MarkdownTargetId>,
 }
 
-/// A table and its rows. Cells are structural and are not independent targets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownTable {
     pub alignments: Vec<MarkdownTableAlignment>,
     pub rows: Vec<MarkdownTableRow>,
 }
 
-/// Alignment requested by a Markdown table delimiter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarkdownTableAlignment {
     None,
@@ -285,7 +242,6 @@ pub enum MarkdownTableAlignment {
     Right,
 }
 
-/// One table row, including the header row when one exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownTableRow {
     pub header: bool,
@@ -294,29 +250,17 @@ pub struct MarkdownTableRow {
     pub target_id: Option<MarkdownTargetId>,
 }
 
-/// One structural table cell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownTableCell {
     pub source: SourceRange,
-    pub content: Vec<MarkdownInline>,
+    pub content: Arc<MarkdownText>,
 }
 
-/// A heading in document outline order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MarkdownHeading {
-    pub level: u8,
-    pub title: String,
-    pub source: SourceRange,
-    pub target_id: MarkdownTargetId,
-}
-
-/// A selectable target in document order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownTarget {
     pub id: MarkdownTargetId,
     pub kind: MarkdownTargetKind,
     pub source: SourceRange,
-    pub display_label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,20 +280,17 @@ pub struct MarkdownSourceStyle {
     pub role: MarkdownSourceRole,
 }
 
-/// A parsed Markdown document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct MarkdownDocument {
     pub(crate) source_path: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) source: String,
     pub(crate) blocks: Vec<MarkdownBlock>,
-    pub(crate) outline: Vec<MarkdownHeading>,
     pub(crate) targets: Vec<MarkdownTarget>,
     pub(crate) source_styles: Vec<MarkdownSourceStyle>,
 }
 
 impl MarkdownDocument {
-    /// Parses Markdown with the supported GFM extensions enabled.
     #[must_use]
     pub fn parse(source: impl Into<String>) -> Self {
         Self::parse_with(source, MarkdownOptions::default())
@@ -357,7 +298,17 @@ impl MarkdownDocument {
 
     #[must_use]
     pub fn parse_with(source: impl Into<String>, options: MarkdownOptions) -> Self {
-        IncrementalDocument::parse(source.into(), options)
+        let source = source.into();
+        let index = LineIndex::new(&source);
+        let parsed = parse_from(&source, &index, 0, &Definitions::default(), options);
+        let mut document = Self {
+            source,
+            source_styles: parsed.styles,
+            blocks: parsed.blocks,
+            ..Self::default()
+        };
+        assign_targets(&mut document.blocks, &mut document.targets);
+        document
     }
 
     #[must_use]
@@ -372,43 +323,31 @@ impl MarkdownDocument {
         &self.source_styles
     }
 
-    /// Returns the original source, including its original line endings.
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
     }
 
-    /// Returns the optional source path supplied by the host.
     #[must_use]
     pub fn source_path(&self) -> Option<&str> {
         self.source_path.as_deref()
     }
 
-    /// Returns the optional display title supplied by the host.
     #[must_use]
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
 
-    /// Returns the top-level semantic blocks.
     #[must_use]
     pub fn blocks(&self) -> &[MarkdownBlock] {
         &self.blocks
     }
 
-    /// Returns headings in document order.
-    #[must_use]
-    pub fn outline(&self) -> &[MarkdownHeading] {
-        &self.outline
-    }
-
-    /// Returns all commentable targets in document order.
     #[must_use]
     pub fn targets(&self) -> &[MarkdownTarget] {
         &self.targets
     }
 
-    /// Finds a target by its document-local ID.
     #[must_use]
     pub fn target(&self, id: MarkdownTargetId) -> Option<&MarkdownTarget> {
         self.targets.get(id.0)
@@ -430,91 +369,474 @@ fn collect_code_blocks<'a>(blocks: &'a [MarkdownBlock], output: &mut Vec<&'a Mar
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct Node {
-    pub(crate) event: Option<Event<'static>>,
-    pub(crate) range: Range<usize>,
-    pub(crate) children: Vec<Node>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Definition {
+    pub destination: String,
+    pub title: Option<String>,
 }
 
-const fn is_label_link(link_type: LinkType) -> bool {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Definitions(HashMap<UniCase<String>, Definition>);
+
+impl Definitions {
+    pub(crate) fn get(&self, label: &str) -> Option<&Definition> {
+        self.0.get(&label_key(label))
+    }
+
+    pub(crate) fn insert(&mut self, label: UniCase<String>, definition: Definition) {
+        self.0.entry(label).or_insert(definition);
+    }
+}
+
+pub(crate) fn label_key(label: &str) -> UniCase<String> {
+    UniCase::new(label.split_ascii_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TailDefinition {
+    pub span: Range<usize>,
+    pub label: UniCase<String>,
+    pub definition: Definition,
+}
+
+pub(crate) struct TailParse {
+    pub blocks: Vec<MarkdownBlock>,
+    pub styles: Vec<MarkdownSourceStyle>,
+    pub definitions: Vec<TailDefinition>,
+    pub parsed_bytes: usize,
+}
+
+pub(crate) fn parse_from(
+    source: &str,
+    index: &LineIndex,
+    start: usize,
+    settled: &Definitions,
+    options: MarkdownOptions,
+) -> TailParse {
+    let text = &source[start..];
+    let callback = |link: BrokenLink<'_>| {
+        (settled.get(&link.reference).is_some()
+            || (options.intra_doc_links && is_intra_doc_link(text, &link)))
+        .then_some((CowStr::Borrowed(""), CowStr::Borrowed("")))
+    };
+    let parser = Parser::new_with_broken_link_callback(
+        text,
+        Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH,
+        Some(callback),
+    );
+    let mut definitions = parser
+        .reference_definitions()
+        .iter()
+        .map(|(label, definition)| TailDefinition {
+            span: definition.span.start + start..definition.span.end + start,
+            label: label_key(label),
+            definition: Definition {
+                destination: definition.dest.to_string(),
+                title: definition.title.as_ref().map(ToString::to_string),
+            },
+        })
+        .collect::<Vec<_>>();
+    definitions.sort_by_key(|definition| definition.span.start);
+    let mut builder = Builder {
+        source,
+        index,
+        settled,
+        stack: Vec::new(),
+        blocks: Vec::new(),
+        styles: Vec::new(),
+    };
+    for (event, range) in parser.into_offset_iter() {
+        builder.event(&event, range.start + start..range.end + start);
+    }
+    TailParse {
+        blocks: builder.blocks,
+        styles: builder.styles,
+        definitions,
+        parsed_bytes: text.len(),
+    }
+}
+
+fn is_intra_doc_link(source: &str, link: &BrokenLink<'_>) -> bool {
+    if link.link_type == pulldown_cmark::LinkType::Reference {
+        return true;
+    }
+    let label = link.reference.as_ref();
+    let follows_word = source[..link.span.start]
+        .chars()
+        .next_back()
+        .is_some_and(|character| character.is_alphanumeric() || character == '_');
+    let code = label.len() > 1 && label.starts_with('`') && label.ends_with('`');
+    let path = label.chars().next().is_some_and(char::is_alphabetic)
+        && label
+            .chars()
+            .all(|character| character.is_alphanumeric() || "_:.<>!()".contains(character));
+    !follows_word && (code || path)
+}
+
+enum Sink {
+    Paragraph,
+    Heading(u8),
+    Html,
+    Cell,
+}
+
+enum Frame {
+    Inline {
+        sink: Sink,
+        range: Range<usize>,
+        text: TextBuilder,
+    },
+    ItemParagraph,
+    Quote {
+        range: Range<usize>,
+        blocks: Vec<MarkdownBlock>,
+    },
+    List {
+        range: Range<usize>,
+        start: Option<u64>,
+        depth: usize,
+        items: Vec<MarkdownListItem>,
+    },
+    Item {
+        range: Range<usize>,
+        content: TextBuilder,
+        took_paragraph: bool,
+        blocks: Vec<MarkdownBlock>,
+    },
+    Code {
+        range: Range<usize>,
+        info: Option<String>,
+        text: String,
+    },
+    Table {
+        range: Range<usize>,
+        alignments: Vec<MarkdownTableAlignment>,
+        rows: Vec<MarkdownTableRow>,
+    },
+    Row {
+        range: Range<usize>,
+        header: bool,
+        cells: Vec<MarkdownTableCell>,
+    },
+    Skip,
+}
+
+struct Builder<'a> {
+    source: &'a str,
+    index: &'a LineIndex,
+    settled: &'a Definitions,
+    stack: Vec<Frame>,
+    blocks: Vec<MarkdownBlock>,
+    styles: Vec<MarkdownSourceStyle>,
+}
+
+const fn is_inline(tag: TagEnd) -> bool {
     matches!(
-        link_type,
-        LinkType::ReferenceUnknown | LinkType::CollapsedUnknown | LinkType::ShortcutUnknown
+        tag,
+        TagEnd::Strong
+            | TagEnd::Emphasis
+            | TagEnd::Strikethrough
+            | TagEnd::Link
+            | TagEnd::Image
+            | TagEnd::Superscript
+            | TagEnd::Subscript
     )
 }
 
-pub(crate) fn event_tree(events: &[(Event<'static>, Range<usize>)]) -> Vec<Node> {
-    let mut stack = vec![Node {
-        event: None,
-        range: 0..0,
-        children: Vec::new(),
-    }];
-    for (event, range) in events {
-        match event {
-            Event::Start(_) => {
-                stack.push(Node {
-                    event: Some(event.clone()),
-                    range: range.clone(),
-                    children: Vec::new(),
-                });
+impl Builder<'_> {
+    fn event(&mut self, event: &Event<'_>, range: Range<usize>) {
+        self.style(event, &range);
+        if matches!(self.stack.last(), Some(Frame::Skip)) {
+            match event {
+                Event::Start(_) => self.stack.push(Frame::Skip),
+                Event::End(_) => {
+                    self.stack.pop();
+                }
+                _ => {}
             }
-            Event::End(_) => {
-                if stack.len() > 1
-                    && let Some(mut node) = stack.pop()
-                {
-                    node.range.end = cmp::max(node.range.end, range.end);
-                    if let Some(parent) = stack.last_mut() {
-                        parent.children.push(node);
-                    }
+            return;
+        }
+        match event {
+            Event::Start(tag) if is_inline(tag.to_end()) => {
+                let settled = self.settled;
+                if let Some(text) = self.sink() {
+                    text.start(tag, |label| settled.get(label).cloned());
+                } else {
+                    self.stack.push(Frame::Skip);
                 }
             }
-            _ => {
-                if let Some(parent) = stack.last_mut() {
-                    parent.children.push(Node {
-                        event: Some(event.clone()),
-                        range: range.clone(),
-                        children: Vec::new(),
+            Event::End(tag) if is_inline(*tag) => {
+                if let Some(text) = self.sink() {
+                    text.end();
+                }
+            }
+            Event::Start(tag) => self.start(tag, range),
+            Event::End(_) => self.end(range),
+            Event::Rule => {
+                let block = self.block(range, MarkdownBlockKind::Rule);
+                self.attach(block);
+            }
+            Event::Text(text) if matches!(self.stack.last(), Some(Frame::Code { .. })) => {
+                if let Some(Frame::Code { text: code, .. }) = self.stack.last_mut() {
+                    code.push_str(text);
+                }
+            }
+            event => {
+                if let Some(text) = self.sink() {
+                    text.event(event);
+                }
+            }
+        }
+    }
+
+    fn style(&mut self, event: &Event<'_>, range: &Range<usize>) {
+        let role = match event {
+            Event::Start(Tag::Heading { .. }) => MarkdownSourceRole::Heading,
+            Event::Start(Tag::Link { .. }) => MarkdownSourceRole::Link,
+            Event::Start(Tag::BlockQuote(_)) => MarkdownSourceRole::Quote,
+            Event::Start(Tag::Strong) => MarkdownSourceRole::Strong,
+            Event::Start(Tag::Emphasis) => MarkdownSourceRole::Emphasis,
+            Event::Start(Tag::Strikethrough) => MarkdownSourceRole::Strikethrough,
+            Event::Code(_) => MarkdownSourceRole::Code,
+            _ => return,
+        };
+        self.styles.push(MarkdownSourceStyle {
+            source: source_range(range.clone(), self.index),
+            role,
+        });
+    }
+
+    fn sink(&mut self) -> Option<&mut TextBuilder> {
+        let paragraph = matches!(self.stack.last(), Some(Frame::ItemParagraph));
+        let frames = self.stack.len();
+        let frame = self.stack.get_mut(frames - 1 - usize::from(paragraph))?;
+        match frame {
+            Frame::Inline { text, .. } => Some(text),
+            Frame::Item { content, .. } => Some(content),
+            _ => None,
+        }
+    }
+
+    fn start(&mut self, tag: &Tag<'_>, range: Range<usize>) {
+        let parent = self.stack.last_mut();
+        let frame = match (tag, parent) {
+            (Tag::Paragraph, Some(Frame::Item { took_paragraph, .. })) if !*took_paragraph => {
+                *took_paragraph = true;
+                Frame::ItemParagraph
+            }
+            (Tag::Paragraph, _) => inline(Sink::Paragraph, range),
+            (Tag::Heading { level, .. }, _) => inline(Sink::Heading(heading_level(*level)), range),
+            (Tag::HtmlBlock, _) => Frame::Inline {
+                sink: Sink::Html,
+                range,
+                text: TextBuilder::raw(),
+            },
+            (Tag::BlockQuote(_), _) => Frame::Quote {
+                range,
+                blocks: Vec::new(),
+            },
+            (Tag::List(start), _) => Frame::List {
+                range,
+                start: *start,
+                depth: self
+                    .stack
+                    .iter()
+                    .filter(|frame| matches!(frame, Frame::Item { .. }))
+                    .count(),
+                items: Vec::new(),
+            },
+            (Tag::Item, Some(Frame::List { .. })) => Frame::Item {
+                range,
+                content: TextBuilder::default(),
+                took_paragraph: false,
+                blocks: Vec::new(),
+            },
+            (Tag::CodeBlock(kind), _) => Frame::Code {
+                range,
+                info: match kind {
+                    CodeBlockKind::Indented => None,
+                    CodeBlockKind::Fenced(info) => Some(info.to_string()),
+                },
+                text: String::new(),
+            },
+            (Tag::Table(alignments), _) => Frame::Table {
+                range,
+                alignments: alignments.iter().copied().map(table_alignment).collect(),
+                rows: Vec::new(),
+            },
+            (Tag::TableHead | Tag::TableRow, Some(Frame::Table { .. })) => Frame::Row {
+                range,
+                header: matches!(tag, Tag::TableHead),
+                cells: Vec::new(),
+            },
+            (Tag::TableCell, Some(Frame::Row { .. })) => inline(Sink::Cell, range),
+            _ => Frame::Skip,
+        };
+        self.stack.push(frame);
+    }
+
+    fn end(&mut self, end: Range<usize>) {
+        let Some(frame) = self.stack.pop() else {
+            return;
+        };
+        let range = |range: Range<usize>| range.start..range.end.max(end.end);
+        let kind = match frame {
+            Frame::Skip | Frame::ItemParagraph => return,
+            Frame::Inline {
+                sink: Sink::Cell,
+                range: cell,
+                text,
+            } => {
+                if let Some(Frame::Row { cells, .. }) = self.stack.last_mut() {
+                    cells.push(MarkdownTableCell {
+                        source: source_range(range(cell), self.index),
+                        content: Arc::new(text.finish()),
                     });
                 }
+                return;
+            }
+            Frame::Row {
+                range: row,
+                header,
+                cells,
+            } => {
+                if let Some(Frame::Table { rows, .. }) = self.stack.last_mut() {
+                    rows.push(MarkdownTableRow {
+                        header,
+                        source: source_range(range(row), self.index),
+                        cells,
+                        target_id: None,
+                    });
+                }
+                return;
+            }
+            Frame::Item {
+                range: item,
+                content,
+                blocks,
+                ..
+            } => {
+                if let Some(Frame::List { items, depth, .. }) = self.stack.last_mut() {
+                    items.push(MarkdownListItem {
+                        depth: *depth,
+                        source: source_range(range(item), self.index),
+                        content: Arc::new(content.finish()),
+                        blocks,
+                        target_id: None,
+                    });
+                }
+                return;
+            }
+            Frame::Inline {
+                sink,
+                range: block,
+                text,
+            } => {
+                let content = Arc::new(text.finish());
+                let kind = match sink {
+                    Sink::Heading(level) => MarkdownBlockKind::Heading { level, content },
+                    Sink::Html => MarkdownBlockKind::HtmlFallback { content },
+                    Sink::Paragraph | Sink::Cell => MarkdownBlockKind::Paragraph { content },
+                };
+                (block, kind)
+            }
+            Frame::Quote {
+                range: block,
+                blocks,
+            } => (block, MarkdownBlockKind::BlockQuote { blocks }),
+            Frame::List {
+                range: block,
+                start,
+                items,
+                ..
+            } => (
+                block,
+                MarkdownBlockKind::List {
+                    ordered: start.is_some(),
+                    start,
+                    items,
+                },
+            ),
+            Frame::Code {
+                range: block,
+                info,
+                text,
+            } => {
+                let block = range(block);
+                let code = self.code_block(block.clone(), info, &text);
+                (block, MarkdownBlockKind::CodeBlock(Arc::new(code)))
+            }
+            Frame::Table {
+                range: block,
+                alignments,
+                rows,
+            } => (
+                block,
+                MarkdownBlockKind::Table(MarkdownTable { alignments, rows }),
+            ),
+        };
+        let block = self.block(range(kind.0), kind.1);
+        self.attach(block);
+    }
+
+    fn block(&self, range: Range<usize>, kind: MarkdownBlockKind) -> MarkdownBlock {
+        MarkdownBlock {
+            source: source_range(range, self.index),
+            kind,
+            target_id: None,
+        }
+    }
+
+    fn attach(&mut self, block: MarkdownBlock) {
+        match self.stack.last_mut() {
+            None => self.blocks.push(block),
+            Some(Frame::Quote { blocks, .. } | Frame::Item { blocks, .. }) => blocks.push(block),
+            Some(_) => {}
+        }
+    }
+
+    fn code_block(
+        &self,
+        range: Range<usize>,
+        info: Option<String>,
+        text: &str,
+    ) -> MarkdownCodeBlock {
+        let block_source = source_range(range.clone(), self.index);
+        let fenced = info.is_some();
+        let mut block = MarkdownCodeBlock {
+            info,
+            content: block_source.clone(),
+            source: block_source,
+            text: String::new(),
+            lines: Vec::new(),
+            target_id: None,
+            syntax: SyntaxCell::default(),
+        };
+        if fenced {
+            let content = fenced_content_range(range, self.source);
+            block.content = source_range(content.clone(), self.index);
+            block.split_fenced_lines(0, content, self.source, self.index);
+            return block;
+        }
+        let code = text.strip_suffix('\n').unwrap_or(text);
+        let first_source_line = self.index.line_for_offset(range.start);
+        if !code.is_empty() {
+            for (index, line) in code.split('\n').enumerate() {
+                block.push_line(
+                    self.index.source_line_range(first_source_line + index),
+                    line.strip_suffix('\r').unwrap_or(line),
+                );
             }
         }
+        block
     }
-    // pulldown-cmark promises balanced events. Recovering here still makes the
-    // model useful if a future parser extension violates that promise.
-    while stack.len() > 1 {
-        if let Some(node) = stack.pop()
-            && let Some(parent) = stack.last_mut()
-        {
-            parent.children.push(node);
-        }
-    }
-    stack.pop().map_or_else(Vec::new, |root| root.children)
 }
 
-pub(crate) fn collect_source_styles(
-    nodes: &[Node],
-    index: &LineIndex,
-    output: &mut Vec<MarkdownSourceStyle>,
-) {
-    for node in nodes {
-        let role = match node.event.as_ref() {
-            Some(Event::Start(Tag::Heading { .. })) => Some(MarkdownSourceRole::Heading),
-            Some(Event::Start(Tag::Link { .. })) => Some(MarkdownSourceRole::Link),
-            Some(Event::Start(Tag::BlockQuote(_))) => Some(MarkdownSourceRole::Quote),
-            Some(Event::Start(Tag::Strong)) => Some(MarkdownSourceRole::Strong),
-            Some(Event::Start(Tag::Emphasis)) => Some(MarkdownSourceRole::Emphasis),
-            Some(Event::Start(Tag::Strikethrough)) => Some(MarkdownSourceRole::Strikethrough),
-            Some(Event::Code(_)) => Some(MarkdownSourceRole::Code),
-            _ => None,
-        };
-        if let Some(role) = role {
-            output.push(MarkdownSourceStyle {
-                source: source_range(node.range.clone(), index),
-                role,
-            });
-        }
-        collect_source_styles(&node.children, index, output);
+fn inline(sink: Sink, range: Range<usize>) -> Frame {
+    Frame::Inline {
+        sink,
+        range,
+        text: TextBuilder::default(),
     }
 }
 
@@ -523,148 +845,6 @@ pub(crate) fn source_range(range: Range<usize>, index: &LineIndex) -> SourceRang
         lines: index.range(range.clone()),
         bytes: range,
     }
-}
-
-pub(crate) fn parse_block(
-    node: &Node,
-    depth: usize,
-    source: &str,
-    line_index: &LineIndex,
-) -> Option<MarkdownBlock> {
-    let event = node.event.as_ref()?;
-    let kind = match event {
-        Event::Start(Tag::Heading { level, .. }) => MarkdownBlockKind::Heading {
-            level: heading_level(*level),
-            content: inline_content(&node.children),
-        },
-        Event::Start(Tag::Paragraph) => MarkdownBlockKind::Paragraph {
-            content: inline_content(&node.children),
-        },
-        Event::Start(Tag::BlockQuote(_)) => MarkdownBlockKind::BlockQuote {
-            blocks: node
-                .children
-                .iter()
-                .filter_map(|child| parse_block(child, depth, source, line_index))
-                .collect(),
-        },
-        Event::Start(Tag::List(start)) => MarkdownBlockKind::List {
-            ordered: start.is_some(),
-            start: *start,
-            items: node
-                .children
-                .iter()
-                .filter_map(|child| parse_item(child, depth, source, line_index))
-                .collect(),
-        },
-        Event::Start(Tag::CodeBlock(kind)) => {
-            MarkdownBlockKind::CodeBlock(Arc::new(parse_code_block(node, kind, source, line_index)))
-        }
-        Event::Start(Tag::Table(alignments)) => {
-            MarkdownBlockKind::Table(parse_table(node, alignments, line_index))
-        }
-        Event::Rule => MarkdownBlockKind::Rule,
-        Event::Start(Tag::HtmlBlock) => MarkdownBlockKind::HtmlFallback {
-            content: html_fallback(&node.children),
-        },
-        _ => return None,
-    };
-    Some(MarkdownBlock {
-        source: source_range(node.range.clone(), line_index),
-        kind,
-        target_id: None,
-    })
-}
-
-fn parse_item(
-    node: &Node,
-    depth: usize,
-    source: &str,
-    line_index: &LineIndex,
-) -> Option<MarkdownListItem> {
-    if !matches!(node.event, Some(Event::Start(Tag::Item))) {
-        return None;
-    }
-    let mut content = Vec::new();
-    let mut blocks = Vec::new();
-    let mut took_paragraph = false;
-    for child in &node.children {
-        if !took_paragraph && matches!(child.event, Some(Event::Start(Tag::Paragraph))) {
-            content = inline_children(&child.children);
-            took_paragraph = true;
-        } else if let Some(inline) = inline_node(child) {
-            // Tight list items may contain inline events directly rather than
-            // a paragraph wrapper. Preserve those events as the item's content.
-            content.push(inline);
-        } else if let Some(block) = parse_block(child, depth + 1, source, line_index) {
-            blocks.push(block);
-        }
-    }
-    Some(MarkdownListItem {
-        depth,
-        source: source_range(node.range.clone(), line_index),
-        content: autolink(content),
-        blocks,
-        target_id: None,
-    })
-}
-
-fn parse_code_block(
-    node: &Node,
-    kind: &CodeBlockKind<'static>,
-    source: &str,
-    line_index: &LineIndex,
-) -> MarkdownCodeBlock {
-    let (info, language) = match kind {
-        CodeBlockKind::Indented => (None, None),
-        CodeBlockKind::Fenced(info) => {
-            let info = info.to_string();
-            let language = info.split_whitespace().next().map(str::to_owned);
-            (Some(info), language)
-        }
-    };
-    let block_source = source_range(node.range.clone(), line_index);
-    let mut block = MarkdownCodeBlock {
-        language,
-        info,
-        content: block_source.clone(),
-        source: block_source,
-        text: String::new(),
-        lines: Vec::new(),
-        target_id: None,
-        syntax: SyntaxCell::default(),
-    };
-    if matches!(kind, CodeBlockKind::Fenced(_)) {
-        let content = fenced_content_range(node.range.clone(), source);
-        block.content = source_range(content.clone(), line_index);
-        block.split_fenced_lines(0, content, source, line_index);
-        return block;
-    }
-    let text = node
-        .children
-        .iter()
-        .filter_map(|child| match child.event.as_ref()? {
-            Event::Text(text) => Some(text.as_ref()),
-            _ => None,
-        })
-        .collect::<String>();
-    let code = text.strip_suffix('\n').unwrap_or(&text);
-    let first_source_line = line_index.line_for_offset(node.range.start);
-    if !code.is_empty() {
-        for (index, line) in code.split('\n').enumerate() {
-            let source_line = first_source_line + index;
-            block.push_line((
-                MarkdownCodeLine {
-                    index,
-                    source: line_index.source_line_range(source_line),
-                    source_line: Some(source_line),
-                    text: 0..0,
-                    target_id: None,
-                },
-                line.strip_suffix('\r').unwrap_or(line),
-            ));
-        }
-    }
-    block
 }
 
 pub(crate) fn fenced_content_range(block: Range<usize>, source: &str) -> Range<usize> {
@@ -753,54 +933,6 @@ pub(crate) fn fence_line(line: &[u8], marker: u8, count: usize) -> FenceLine {
     }
 }
 
-fn parse_table(node: &Node, alignments: &[Alignment], line_index: &LineIndex) -> MarkdownTable {
-    let rows = node
-        .children
-        .iter()
-        .filter_map(|section| {
-            let header = matches!(section.event, Some(Event::Start(Tag::TableHead)));
-            if !matches!(section.event, Some(Event::Start(Tag::TableHead)))
-                && !matches!(section.event, Some(Event::Start(Tag::TableRow)))
-            {
-                return None;
-            }
-            table_row(section, header, line_index)
-        })
-        .collect();
-    MarkdownTable {
-        alignments: alignments.iter().copied().map(table_alignment).collect(),
-        rows,
-    }
-}
-
-fn table_row(node: &Node, header: bool, line_index: &LineIndex) -> Option<MarkdownTableRow> {
-    if !matches!(
-        node.event,
-        Some(Event::Start(Tag::TableRow | Tag::TableHead))
-    ) {
-        return None;
-    }
-    let cells = node
-        .children
-        .iter()
-        .filter_map(|cell| {
-            if !matches!(cell.event, Some(Event::Start(Tag::TableCell))) {
-                return None;
-            }
-            Some(MarkdownTableCell {
-                source: source_range(cell.range.clone(), line_index),
-                content: inline_content(&cell.children),
-            })
-        })
-        .collect();
-    Some(MarkdownTableRow {
-        header,
-        source: source_range(node.range.clone(), line_index),
-        cells,
-        target_id: None,
-    })
-}
-
 fn table_alignment(alignment: Alignment) -> MarkdownTableAlignment {
     match alignment {
         Alignment::None => MarkdownTableAlignment::None,
@@ -810,174 +942,37 @@ fn table_alignment(alignment: Alignment) -> MarkdownTableAlignment {
     }
 }
 
-fn inline_children(children: &[Node]) -> Vec<MarkdownInline> {
-    let mut inlines = Vec::new();
-    for child in children {
-        match &child.event {
-            Some(Event::Start(Tag::Link { link_type, .. })) if is_label_link(*link_type) => {
-                inlines.extend(inline_children(&child.children));
-            }
-            _ => inlines.extend(inline_node(child)),
-        }
-    }
-    inlines
-}
-
-fn inline_content(children: &[Node]) -> Vec<MarkdownInline> {
-    autolink(inline_children(children))
-}
-
-fn autolink(inlines: Vec<MarkdownInline>) -> Vec<MarkdownInline> {
-    let mut merged: Vec<MarkdownInline> = Vec::with_capacity(inlines.len());
-    for inline in inlines {
-        match (inline, merged.last_mut()) {
-            (MarkdownInline::Text(text), Some(MarkdownInline::Text(previous))) => {
-                previous.push_str(&text);
-            }
-            (MarkdownInline::Strong(children), _) => {
-                merged.push(MarkdownInline::Strong(autolink(children)));
-            }
-            (MarkdownInline::Emphasis(children), _) => {
-                merged.push(MarkdownInline::Emphasis(autolink(children)));
-            }
-            (MarkdownInline::Strikethrough(children), _) => {
-                merged.push(MarkdownInline::Strikethrough(autolink(children)));
-            }
-            (inline, _) => merged.push(inline),
-        }
-    }
-    merged.into_iter().flat_map(split_links).collect()
-}
-
-fn split_links(inline: MarkdownInline) -> Vec<MarkdownInline> {
-    let MarkdownInline::Text(text) = inline else {
-        return vec![inline];
-    };
-    let mut output = Vec::new();
-    let mut rest = 0;
-    for link in LinkFinder::new().links(&text) {
-        let destination = match link.kind() {
-            LinkKind::Url if openable(link.as_str()) => link.as_str().to_owned(),
-            LinkKind::Email => format!("mailto:{}", link.as_str()),
-            _ => continue,
-        };
-        if link.start() > rest {
-            output.push(MarkdownInline::Text(text[rest..link.start()].to_owned()));
-        }
-        let content = vec![MarkdownInline::Text(link.as_str().to_owned())];
-        output.push(MarkdownInline::Link {
-            destination,
-            title: None,
-            content,
-        });
-        rest = link.end();
-    }
-    if output.is_empty() {
-        return vec![MarkdownInline::Text(text)];
-    }
-    if rest < text.len() {
-        output.push(MarkdownInline::Text(text[rest..].to_owned()));
-    }
-    output
-}
-
-fn inline_node(node: &Node) -> Option<MarkdownInline> {
-    let event = node.event.as_ref()?;
-    Some(match event {
-        Event::Text(text) => MarkdownInline::Text(text.to_string()),
-        Event::Code(text) => MarkdownInline::Code(text.to_string()),
-        Event::Start(Tag::Strong) => MarkdownInline::Strong(inline_children(&node.children)),
-        Event::Start(Tag::Emphasis) => MarkdownInline::Emphasis(inline_children(&node.children)),
-        Event::Start(Tag::Strikethrough) => {
-            MarkdownInline::Strikethrough(inline_children(&node.children))
-        }
-        Event::Start(Tag::Link {
-            dest_url, title, ..
-        }) => MarkdownInline::Link {
-            destination: dest_url.to_string(),
-            title: (!title.is_empty()).then(|| title.to_string()),
-            content: inline_children(&node.children),
-        },
-        Event::Start(Tag::Image { .. }) => {
-            MarkdownInline::ImageAlt(plain_text(&inline_children(&node.children)))
-        }
-        Event::SoftBreak => MarkdownInline::SoftBreak,
-        Event::HardBreak => MarkdownInline::HardBreak,
-        Event::InlineHtml(html) | Event::Html(html) => MarkdownInline::Text(html.to_string()),
-        Event::TaskListMarker(checked) => MarkdownInline::Text(if *checked {
-            "☑".to_owned()
-        } else {
-            "☐".to_owned()
-        }),
-        // Math, footnotes, and metadata are not enabled by this parser. Keep a
-        // useful textual fallback if a future option starts producing them.
-        Event::InlineMath(text) | Event::DisplayMath(text) | Event::FootnoteReference(text) => {
-            MarkdownInline::Text(text.to_string())
-        }
-        Event::Start(_) | Event::End(_) | Event::Rule => return None,
-    })
-}
-
-fn html_fallback(children: &[Node]) -> Vec<MarkdownInline> {
-    children
-        .iter()
-        .filter_map(|child| match child.event.as_ref()? {
-            Event::Html(text) | Event::InlineHtml(text) => {
-                Some(MarkdownInline::Text(text.to_string()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-pub(crate) fn assign_targets(
-    blocks: &mut [MarkdownBlock],
-    targets: &mut Vec<MarkdownTarget>,
-    outline: &mut Vec<MarkdownHeading>,
-) {
+pub(crate) fn assign_targets(blocks: &mut [MarkdownBlock], targets: &mut Vec<MarkdownTarget>) {
     for block in blocks {
         let source = &block.source;
         block.target_id = match &mut block.kind {
-            MarkdownBlockKind::Heading { level, content } => {
-                let title = plain_text(content);
-                let kind = MarkdownTargetKind::Heading;
-                let id = push_target(kind, source.clone(), title.clone(), targets);
-                outline.push(MarkdownHeading {
-                    level: *level,
-                    title,
-                    source: source.clone(),
-                    target_id: id,
-                });
-                Some(id)
+            MarkdownBlockKind::Heading { .. } => {
+                Some(push_target(MarkdownTargetKind::Heading, source, targets))
             }
-            MarkdownBlockKind::Paragraph { content } => {
-                let label = plain_text(content);
-                let kind = MarkdownTargetKind::Paragraph;
-                Some(push_target(kind, source.clone(), label, targets))
+            MarkdownBlockKind::Paragraph { .. } => {
+                Some(push_target(MarkdownTargetKind::Paragraph, source, targets))
             }
             MarkdownBlockKind::List { items, .. } => {
                 assign_item_targets(items, targets);
                 None
             }
-            MarkdownBlockKind::BlockQuote { blocks } => {
-                let label = block_text(blocks);
-                let kind = MarkdownTargetKind::BlockQuote;
-                Some(push_target(kind, source.clone(), label, targets))
+            MarkdownBlockKind::BlockQuote { .. } => {
+                Some(push_target(MarkdownTargetKind::BlockQuote, source, targets))
             }
             MarkdownBlockKind::CodeBlock(code) => {
                 let code = Arc::make_mut(code);
-                let label = "Code block".to_owned();
-                let kind = MarkdownTargetKind::CodeBlock;
-                let id = push_target(kind, code.source.clone(), label, targets);
+                let id = push_target(MarkdownTargetKind::CodeBlock, &code.source, targets);
                 code.target_id = Some(id);
                 push_code_line_targets(&mut code.lines, targets);
                 Some(id)
             }
             MarkdownBlockKind::Table(table) => {
                 for row in &mut table.rows {
-                    let kind = MarkdownTargetKind::TableRow;
-                    let id = push_target(kind, row.source.clone(), row_text(row), targets);
-                    row.target_id = Some(id);
+                    row.target_id = Some(push_target(
+                        MarkdownTargetKind::TableRow,
+                        &row.source,
+                        targets,
+                    ));
                 }
                 None
             }
@@ -988,9 +983,11 @@ pub(crate) fn assign_targets(
 
 fn assign_item_targets(items: &mut [MarkdownListItem], targets: &mut Vec<MarkdownTarget>) {
     for item in items {
-        let label = plain_text(&item.content);
-        let kind = MarkdownTargetKind::ListItem;
-        item.target_id = Some(push_target(kind, item.source.clone(), label, targets));
+        item.target_id = Some(push_target(
+            MarkdownTargetKind::ListItem,
+            &item.source,
+            targets,
+        ));
         for block in &mut item.blocks {
             if let MarkdownBlockKind::List { items, .. } = &mut block.kind {
                 assign_item_targets(items, targets);
@@ -1004,64 +1001,26 @@ pub(crate) fn push_code_line_targets(
     targets: &mut Vec<MarkdownTarget>,
 ) {
     for line in lines {
-        let label = format!("Code line {}", line.index + 1);
-        let kind = MarkdownTargetKind::CodeLine;
-        line.target_id = Some(push_target(kind, line.source.clone(), label, targets));
+        line.target_id = Some(push_target(
+            MarkdownTargetKind::CodeLine,
+            &line.source,
+            targets,
+        ));
     }
 }
 
 fn push_target(
     kind: MarkdownTargetKind,
-    source: SourceRange,
-    display_label: String,
+    source: &SourceRange,
     targets: &mut Vec<MarkdownTarget>,
 ) -> MarkdownTargetId {
     let id = MarkdownTargetId(targets.len());
     targets.push(MarkdownTarget {
         id,
         kind,
-        source,
-        display_label,
+        source: source.clone(),
     });
     id
-}
-
-fn block_text(blocks: &[MarkdownBlock]) -> String {
-    blocks
-        .iter()
-        .map(|block| match &block.kind {
-            MarkdownBlockKind::Heading { content, .. }
-            | MarkdownBlockKind::Paragraph { content }
-            | MarkdownBlockKind::HtmlFallback { content } => plain_text(content),
-            MarkdownBlockKind::List { items, .. } => items
-                .iter()
-                .map(|item| plain_text(&item.content))
-                .collect::<Vec<_>>()
-                .join(" "),
-            MarkdownBlockKind::BlockQuote { blocks } => block_text(blocks),
-            MarkdownBlockKind::CodeBlock(code) => code.text.clone(),
-            MarkdownBlockKind::Table(table) => table
-                .rows
-                .iter()
-                .map(row_text)
-                .collect::<Vec<_>>()
-                .join(" "),
-            MarkdownBlockKind::Rule => String::new(),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn row_text(row: &MarkdownTableRow) -> String {
-    row.cells
-        .iter()
-        .map(|cell| plain_text(&cell.content))
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-fn plain_text(inlines: &[MarkdownInline]) -> String {
-    MarkdownText::new(inlines).text
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {

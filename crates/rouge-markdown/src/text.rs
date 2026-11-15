@@ -1,4 +1,6 @@
-use crate::document::MarkdownInline;
+use crate::document::Definition;
+use linkify::{LinkFinder, LinkKind};
+use pulldown_cmark::{Event, LinkType, Tag};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
@@ -48,25 +50,20 @@ pub struct MarkdownLinkRange {
 impl MarkdownLinkRange {
     #[must_use]
     pub fn openable(&self) -> bool {
-        openable(&self.destination)
+        OPENABLE_SCHEMES
+            .iter()
+            .any(|scheme| self.destination.starts_with(scheme))
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkdownText {
-    pub(crate) text: String,
+    text: String,
     marks: Vec<MarkdownMarkRange>,
     links: Vec<MarkdownLinkRange>,
 }
 
 impl MarkdownText {
-    #[must_use]
-    pub fn new(content: &[MarkdownInline]) -> Self {
-        let mut text = Self::default();
-        text.push_all(content, MarkdownMarks::NONE);
-        text
-    }
-
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
@@ -90,46 +87,6 @@ impl MarkdownText {
             .filter(|link| link.range.contains(&offset))
     }
 
-    fn push_all(&mut self, content: &[MarkdownInline], marks: MarkdownMarks) {
-        for inline in content {
-            self.push(inline, marks);
-        }
-    }
-
-    fn push(&mut self, inline: &MarkdownInline, marks: MarkdownMarks) {
-        match inline {
-            MarkdownInline::Text(text) => self.leaf(text, marks),
-            MarkdownInline::Code(text) => self.leaf(text, marks.with(MarkdownMarks::CODE)),
-            MarkdownInline::ImageAlt(text) => self.leaf(text, marks.with(MarkdownMarks::IMAGE)),
-            MarkdownInline::SoftBreak => self.leaf(" ", marks),
-            MarkdownInline::HardBreak => self.leaf("\n", marks),
-            MarkdownInline::Strong(children) => {
-                self.push_all(children, marks.with(MarkdownMarks::STRONG));
-            }
-            MarkdownInline::Emphasis(children) => {
-                self.push_all(children, marks.with(MarkdownMarks::EMPHASIS));
-            }
-            MarkdownInline::Strikethrough(children) => {
-                self.push_all(children, marks.with(MarkdownMarks::STRIKETHROUGH));
-            }
-            MarkdownInline::Link {
-                destination,
-                title,
-                content,
-            } => {
-                let start = self.text.len();
-                self.push_all(content, marks.with(MarkdownMarks::LINK));
-                if self.text.len() > start {
-                    self.links.push(MarkdownLinkRange {
-                        range: start..self.text.len(),
-                        destination: destination.clone(),
-                        title: title.clone(),
-                    });
-                }
-            }
-        }
-    }
-
     fn leaf(&mut self, text: &str, marks: MarkdownMarks) {
         let start = self.text.len();
         self.text.push_str(text);
@@ -145,10 +102,229 @@ impl MarkdownText {
             }),
         }
     }
+
+    fn link(&mut self, start: usize, destination: String, title: Option<String>) {
+        if self.text.len() > start {
+            self.links.push(MarkdownLinkRange {
+                range: start..self.text.len(),
+                destination,
+                title,
+            });
+        }
+    }
 }
 
-pub(crate) fn openable(destination: &str) -> bool {
-    OPENABLE_SCHEMES
-        .iter()
-        .any(|scheme| destination.starts_with(scheme))
+enum Open {
+    Marks(MarkdownMarks),
+    Label,
+    Link {
+        marks: MarkdownMarks,
+        start: usize,
+        destination: String,
+        title: Option<String>,
+    },
+    Image(MarkdownMarks),
+}
+
+#[derive(Default)]
+pub(crate) struct TextBuilder {
+    text: MarkdownText,
+    open: Vec<Open>,
+    run: String,
+    alt: Option<String>,
+    links: usize,
+    raw: bool,
+}
+
+impl TextBuilder {
+    pub(crate) fn raw() -> Self {
+        Self {
+            raw: true,
+            ..Self::default()
+        }
+    }
+
+    fn marks(&self) -> MarkdownMarks {
+        self.open
+            .iter()
+            .rev()
+            .find_map(|open| match open {
+                Open::Marks(marks) | Open::Image(marks) | Open::Link { marks, .. } => Some(*marks),
+                Open::Label => None,
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn start(
+        &mut self,
+        tag: &Tag<'_>,
+        resolve: impl FnOnce(&str) -> Option<Definition>,
+    ) {
+        let marks = self.marks();
+        if self.alt.is_some() {
+            self.open.push(Open::Marks(marks));
+            return;
+        }
+        let mut open = match tag {
+            Tag::Strong => Open::Marks(marks.with(MarkdownMarks::STRONG)),
+            Tag::Emphasis => Open::Marks(marks.with(MarkdownMarks::EMPHASIS)),
+            Tag::Strikethrough => Open::Marks(marks.with(MarkdownMarks::STRIKETHROUGH)),
+            Tag::Image { .. } => {
+                self.alt = Some(String::new());
+                Open::Image(marks.with(MarkdownMarks::IMAGE))
+            }
+            Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            } => {
+                let resolved = is_reference(*link_type).then(|| resolve(id)).flatten();
+                match resolved {
+                    None if is_unknown(*link_type) => {
+                        self.open.push(Open::Label);
+                        return;
+                    }
+                    resolved => {
+                        let (destination, title) = resolved.map_or_else(
+                            || {
+                                (
+                                    dest_url.to_string(),
+                                    (!title.is_empty()).then(|| title.to_string()),
+                                )
+                            },
+                            |resolved| (resolved.destination, resolved.title),
+                        );
+                        self.links += 1;
+                        Open::Link {
+                            marks: marks.with(MarkdownMarks::LINK),
+                            start: 0,
+                            destination,
+                            title,
+                        }
+                    }
+                }
+            }
+            _ => Open::Marks(marks),
+        };
+        self.flush();
+        if let Open::Link { start, .. } = &mut open {
+            *start = self.text.text.len();
+        }
+        self.open.push(open);
+    }
+
+    pub(crate) fn end(&mut self) {
+        let alt = self.alt.is_some();
+        match self.open.last() {
+            None => return,
+            Some(Open::Label | Open::Image(_)) => {}
+            Some(_) if alt => {}
+            Some(_) => self.flush(),
+        }
+        match self.open.pop() {
+            Some(Open::Link {
+                start,
+                destination,
+                title,
+                ..
+            }) if !alt => {
+                self.links -= 1;
+                self.text.link(start, destination, title);
+            }
+            Some(Open::Image(marks)) => {
+                let alt = self.alt.take().unwrap_or_default();
+                self.text.leaf(&alt, marks);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn event(&mut self, event: &Event<'_>) {
+        match event {
+            Event::Text(text)
+            | Event::InlineMath(text)
+            | Event::DisplayMath(text)
+            | Event::FootnoteReference(text)
+            | Event::InlineHtml(text)
+            | Event::Html(text) => self.push_text(text),
+            Event::TaskListMarker(checked) => self.push_text(if *checked { "☑" } else { "☐" }),
+            Event::Code(code) => self.leaf(code, MarkdownMarks::CODE),
+            Event::SoftBreak => self.leaf(" ", MarkdownMarks::NONE),
+            Event::HardBreak => self.leaf("\n", MarkdownMarks::NONE),
+            Event::Start(_) | Event::End(_) | Event::Rule => {}
+        }
+    }
+
+    fn push_text(&mut self, text: &str) {
+        if let Some(alt) = &mut self.alt {
+            alt.push_str(text);
+        } else if self.raw || self.links > 0 {
+            let marks = self.marks();
+            self.text.leaf(text, marks);
+        } else {
+            self.run.push_str(text);
+        }
+    }
+
+    fn leaf(&mut self, text: &str, marks: MarkdownMarks) {
+        if let Some(alt) = &mut self.alt {
+            alt.push_str(text);
+            return;
+        }
+        self.flush();
+        let marks = self.marks().with(marks);
+        self.text.leaf(text, marks);
+    }
+
+    fn flush(&mut self) {
+        if self.run.is_empty() {
+            return;
+        }
+        let marks = self.marks();
+        let run = std::mem::take(&mut self.run);
+        let mut rest = 0;
+        for link in LinkFinder::new().links(&run) {
+            let destination = match link.kind() {
+                LinkKind::Url
+                    if OPENABLE_SCHEMES
+                        .iter()
+                        .any(|scheme| link.as_str().starts_with(scheme)) =>
+                {
+                    link.as_str().to_owned()
+                }
+                LinkKind::Email => format!("mailto:{}", link.as_str()),
+                _ => continue,
+            };
+            self.text.leaf(&run[rest..link.start()], marks);
+            let start = self.text.text.len();
+            self.text
+                .leaf(link.as_str(), marks.with(MarkdownMarks::LINK));
+            self.text.link(start, destination, None);
+            rest = link.end();
+        }
+        self.text.leaf(&run[rest..], marks);
+        self.run = run;
+        self.run.clear();
+    }
+
+    pub(crate) fn finish(mut self) -> MarkdownText {
+        self.flush();
+        self.text
+    }
+}
+
+const fn is_unknown(link_type: LinkType) -> bool {
+    matches!(
+        link_type,
+        LinkType::ReferenceUnknown | LinkType::CollapsedUnknown | LinkType::ShortcutUnknown
+    )
+}
+
+const fn is_reference(link_type: LinkType) -> bool {
+    is_unknown(link_type)
+        || matches!(
+            link_type,
+            LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut
+        )
 }

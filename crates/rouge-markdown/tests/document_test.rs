@@ -1,60 +1,51 @@
 use rouge_markdown::{
-    MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownInline as Inline,
-    MarkdownOptions, MarkdownTargetKind, MarkdownText,
+    MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownMarks, MarkdownOptions,
+    MarkdownTargetKind, MarkdownText,
 };
 use rouge_syntax::{SymbolTags, analyze};
-use std::error::Error;
+use std::{error::Error, ops::Range, sync::Arc};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
 #[test]
-fn bare_urls_become_links_without_trailing_punctuation() {
+fn bare_urls_become_links_without_trailing_punctuation() -> TestResult {
+    let content = paragraph("see https://example.com/a?b=1&c=2.")?;
+    assert_eq!(content.text(), "see https://example.com/a?b=1&c=2.");
     assert_eq!(
-        paragraph("see https://example.com/a?b=1&c=2."),
-        [
-            text("see "),
-            link(
-                "https://example.com/a?b=1&c=2",
-                "https://example.com/a?b=1&c=2"
-            ),
-            text(".")
-        ]
+        links(&content),
+        [(4..33, "https://example.com/a?b=1&c=2".to_owned())]
     );
+    Ok(())
 }
 
 #[test]
-fn bare_urls_inside_emphasis_become_links() {
+fn bare_urls_inside_emphasis_become_links() -> TestResult {
+    let content = paragraph("*docs at http://docs.rs*")?;
+    assert_eq!(links(&content), [(8..22, "http://docs.rs".to_owned())]);
     assert_eq!(
-        paragraph("*docs at http://docs.rs*"),
-        [Inline::Emphasis(vec![
-            text("docs at "),
-            link("http://docs.rs", "http://docs.rs")
-        ])]
+        content.marks()[1].marks,
+        MarkdownMarks::EMPHASIS.with(MarkdownMarks::LINK)
     );
+    Ok(())
 }
 
 #[test]
-fn bare_email_addresses_become_mailto_links() {
+fn bare_email_addresses_become_mailto_links() -> TestResult {
+    let content = paragraph("mail me@example.com")?;
     assert_eq!(
-        paragraph("mail me@example.com"),
-        [
-            text("mail "),
-            link("mailto:me@example.com", "me@example.com")
-        ]
+        links(&content),
+        [(5..19, "mailto:me@example.com".to_owned())]
     );
+    Ok(())
 }
 
 #[test]
-fn explicit_links_code_and_other_schemes_are_left_alone() {
-    assert_eq!(
-        paragraph("[docs](https://a.dev) `https://b.dev` ftp://c.dev"),
-        [
-            link("https://a.dev", "docs"),
-            text(" "),
-            Inline::Code("https://b.dev".to_owned()),
-            text(" ftp://c.dev")
-        ]
-    );
+fn explicit_links_code_and_other_schemes_are_left_alone() -> TestResult {
+    let content = paragraph("[docs](https://a.dev) `https://b.dev` ftp://c.dev")?;
+    assert_eq!(content.text(), "docs https://b.dev ftp://c.dev");
+    assert_eq!(links(&content), [(0..4, "https://a.dev".to_owned())]);
+    assert_eq!(content.marks()[1].marks, MarkdownMarks::CODE);
+    Ok(())
 }
 
 #[test]
@@ -66,11 +57,14 @@ fn bare_urls_in_list_items_and_headings_become_links() {
     let MarkdownBlockKind::Heading { content, .. } = &heading.kind else {
         panic!("{heading:?}")
     };
-    assert_eq!(content, &[link("https://a.dev", "https://a.dev")]);
+    assert_eq!(links(content), [(0..13, "https://a.dev".to_owned())]);
     let MarkdownBlockKind::List { items, .. } = &list.kind else {
         panic!("{list:?}")
     };
-    assert_eq!(items[0].content, [link("https://b.dev", "https://b.dev")]);
+    assert_eq!(
+        links(&items[0].content),
+        [(0..13, "https://b.dev".to_owned())]
+    );
 }
 
 #[test]
@@ -85,7 +79,6 @@ fn parses_targets_in_document_order() {
             MarkdownTargetKind::CodeLine,
         ]
     );
-    assert_eq!(document.outline()[0].title, "Title");
 }
 
 #[test]
@@ -94,7 +87,7 @@ fn preserves_source_and_maps_crlf_lines() -> TestResult {
     let document = MarkdownDocument::parse(source);
     assert_eq!(document.source(), source);
     let code = code_block(&document, 1)?;
-    assert_eq!(source_lines(code), [Some(4), Some(5)]);
+    assert_eq!(source_lines(code), [4, 5]);
     assert_eq!(line_texts(code), ["one", "two"]);
     Ok(())
 }
@@ -190,7 +183,7 @@ fn indented_code_strips_parser_indentation() -> TestResult {
     let document = MarkdownDocument::parse("    first\n    second\n");
     let code = code_block(&document, 0)?;
     assert_eq!(line_texts(code), ["first", "second"]);
-    assert_eq!(code.lines()[0].source_line, Some(1));
+    assert_eq!(code.lines()[0].source.lines.start, 1);
     assert_eq!(code.lines()[1].source.bytes, 10..20);
     Ok(())
 }
@@ -200,7 +193,7 @@ fn indented_code_preserves_blank_content_lines() -> TestResult {
     let document = MarkdownDocument::parse("    one\n\n    two\n");
     let code = code_block(&document, 0)?;
     assert_eq!(line_texts(code), ["one", "", "two"]);
-    assert_eq!(source_lines(code), [Some(1), Some(2), Some(3)]);
+    assert_eq!(source_lines(code), [1, 2, 3]);
     Ok(())
 }
 
@@ -225,12 +218,14 @@ fn empty_and_malformed_documents_are_safe() {
 #[test]
 fn soft_breaks_render_as_spaces_in_labels_and_titles() -> TestResult {
     let document = MarkdownDocument::parse("Setext\ntitle\n===\n\nfirst\nsecond  \nthird\n");
-    assert_eq!(document.outline()[0].title, "Setext title");
-    assert_eq!(document.targets()[1].display_label, "first second\nthird");
+    let MarkdownBlockKind::Heading { content, .. } = &document.blocks()[0].kind else {
+        return Err("expected heading".into());
+    };
+    assert_eq!(content.text(), "Setext title");
     let MarkdownBlockKind::Paragraph { content } = &document.blocks()[1].kind else {
         return Err("expected paragraph".into());
     };
-    assert_eq!(MarkdownText::new(content).text(), "first second\nthird");
+    assert_eq!(content.text(), "first second\nthird");
     Ok(())
 }
 
@@ -265,30 +260,29 @@ fn metadata_is_carried_without_changing_the_parse() {
 fn an_unclosed_fence_at_the_end_of_a_document_is_fully_analyzed() -> TestResult {
     let document = MarkdownDocument::parse("```rust\nfn main() {}\n");
     let syntax = code_block(&document, 0)?.syntax();
-    assert_ne!(*syntax.symbols, SymbolTags::default());
-    assert_eq!(syntax.symbols, analyze("rust", "fn main() {}\n").symbols);
+    assert_ne!(**syntax.symbols(), SymbolTags::default());
+    assert_eq!(
+        syntax.symbols(),
+        analyze("rust", "fn main() {}\n").symbols()
+    );
     assert!(!syntax.highlights.line(0).ok_or("line")?.is_empty());
     Ok(())
 }
 
-fn paragraph(source: &str) -> Vec<Inline> {
+fn paragraph(source: &str) -> Result<Arc<MarkdownText>, Box<dyn Error>> {
     let document = MarkdownDocument::parse(source);
-    match &document.blocks()[0].kind {
-        MarkdownBlockKind::Paragraph { content } => content.clone(),
-        other => panic!("expected a paragraph, found {other:?}"),
+    match &document.blocks().first().ok_or("no blocks")?.kind {
+        MarkdownBlockKind::Paragraph { content } => Ok(Arc::clone(content)),
+        other => Err(format!("expected a paragraph, found {other:?}").into()),
     }
 }
 
-fn text(text: &str) -> Inline {
-    Inline::Text(text.to_owned())
-}
-
-fn link(destination: &str, label: &str) -> Inline {
-    Inline::Link {
-        destination: destination.to_owned(),
-        title: None,
-        content: vec![text(label)],
-    }
+fn links(content: &MarkdownText) -> Vec<(Range<usize>, String)> {
+    content
+        .links()
+        .iter()
+        .map(|link| (link.range.clone(), link.destination.clone()))
+        .collect()
 }
 
 fn kinds(document: &MarkdownDocument) -> Vec<MarkdownTargetKind> {
@@ -316,15 +310,16 @@ fn line_texts(code: &MarkdownCodeBlock) -> Vec<&str> {
         .collect()
 }
 
-fn source_lines(code: &MarkdownCodeBlock) -> Vec<Option<usize>> {
-    code.lines().iter().map(|line| line.source_line).collect()
+fn source_lines(code: &MarkdownCodeBlock) -> Vec<usize> {
+    code.lines()
+        .iter()
+        .map(|line| line.source.lines.start)
+        .collect()
 }
 
 fn paragraph_text(document: &MarkdownDocument) -> Result<String, Box<dyn Error>> {
     match &document.blocks().first().ok_or("no blocks")?.kind {
-        MarkdownBlockKind::Paragraph { content } => {
-            Ok(MarkdownText::new(content).text().to_owned())
-        }
+        MarkdownBlockKind::Paragraph { content } => Ok(content.text().to_owned()),
         other => Err(format!("expected a paragraph, found {other:?}").into()),
     }
 }

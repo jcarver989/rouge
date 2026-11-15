@@ -1,6 +1,6 @@
 use rouge_markdown::{
-    MarkdownBlockKind, MarkdownDocument, MarkdownInline, MarkdownLinkRange, MarkdownMarkRange,
-    MarkdownMarks, MarkdownText,
+    MarkdownBlockKind, MarkdownDocument, MarkdownLinkRange, MarkdownMarkRange, MarkdownMarks,
+    MarkdownText,
 };
 use std::error::Error;
 
@@ -79,17 +79,13 @@ fn link_lookup_finds_the_link_under_a_byte_offset() -> TestResult {
 }
 
 #[test]
-fn empty_content_and_empty_links_produce_no_ranges() {
-    let text = MarkdownText::new(&[
-        MarkdownInline::Link {
-            destination: "https://a.dev".to_owned(),
-            title: None,
-            content: Vec::new(),
-        },
-        MarkdownInline::Strong(vec![MarkdownInline::Text(String::new())]),
-    ]);
-    assert_eq!(text, MarkdownText::default());
-    assert_eq!(MarkdownText::new(&[]).text(), "");
+fn empty_links_and_empty_marks_produce_no_ranges() -> TestResult {
+    let text = paragraph_text("[](https://a.dev)**x**")?;
+    assert_eq!(text.text(), "x");
+    assert_eq!(text.links(), []);
+    assert_eq!(text.marks(), [mark(0..1, MarkdownMarks::STRONG)]);
+    assert_eq!(MarkdownText::default().text(), "");
+    Ok(())
 }
 
 #[test]
@@ -102,15 +98,15 @@ fn list_items_table_cells_and_headings_flatten_like_paragraphs() -> TestResult {
     let MarkdownBlockKind::Heading { content, .. } = &heading.kind else {
         return Err("expected heading".into());
     };
-    assert_eq!(MarkdownText::new(content).text(), "Title em");
+    assert_eq!(content.text(), "Title em");
     let MarkdownBlockKind::List { items, .. } = &list.kind else {
         return Err("expected list".into());
     };
-    assert_eq!(MarkdownText::new(&items[0].content).text(), "item wrapped");
+    assert_eq!(items[0].content.text(), "item wrapped");
     let MarkdownBlockKind::Table(table) = &table.kind else {
         return Err("expected table".into());
     };
-    let cell = MarkdownText::new(&table.rows[0].cells[0].content);
+    let cell = &table.rows[0].cells[0].content;
     assert_eq!(cell.text(), "a b");
     assert_eq!(cell.marks(), [mark(2..3, MarkdownMarks::STRONG)]);
     Ok(())
@@ -130,7 +126,7 @@ fn marks_combine_and_report_containment() {
 fn paragraph_text(source: &str) -> Result<MarkdownText, Box<dyn Error>> {
     let document = MarkdownDocument::parse(source);
     match &document.blocks().first().ok_or("no blocks")?.kind {
-        MarkdownBlockKind::Paragraph { content } => Ok(MarkdownText::new(content)),
+        MarkdownBlockKind::Paragraph { content } => Ok(MarkdownText::clone(content)),
         other => Err(format!("expected a paragraph, found {other:?}").into()),
     }
 }
