@@ -1090,6 +1090,36 @@ fn linear_links_translate_by_a_clamped_multiple_of_the_offset() {
 }
 
 #[test]
+fn scrolling_swaps_rows_in_and_out_in_the_same_frame() {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().size(200.0, 130.0).build(|| {
+        virtual_list(
+            || 1000,
+            20.0,
+            |index| text(format!("row {index}")).into_any(),
+        )
+        .size_full()
+    });
+    ui.pointer_moved(Point::new(100.0, 60.0));
+    ui.scroll(Point::new(0.0, -400.0));
+    ui.advance(0.0);
+    let mut swaps = 0;
+    for _ in 0..80 {
+        let before = ui.stats();
+        ui.scroll(Point::new(0.0, -20.0));
+        ui.advance(0.016);
+        let frame = ui.stats() - before;
+        assert_eq!(
+            frame.elements_created > 0,
+            frame.elements_removed > 0,
+            "rows mount and unmount together: {frame:?}"
+        );
+        swaps += usize::from(frame.elements_created > 0);
+    }
+    assert!(swaps > 0 && swaps < 40, "{swaps} frames swapped rows");
+}
+
+#[test]
 fn scrolling_within_mounted_rows_does_no_layout_paint_or_building() {
     let _rt = Runtime::new().enter();
     let mut ui = TestUiBuilder::default().size(200.0, 200.0).build(|| {

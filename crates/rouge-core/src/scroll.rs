@@ -341,9 +341,11 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         }
         let range = {
             let rows = rows.clone();
+            let mounted = Cell::new((0, 0));
             memo(move || {
                 let visible = visible.get();
                 if visible.is_empty() {
+                    mounted.set((0, 0));
                     return (0, 0);
                 }
                 let count = rows.with(Heights::count);
@@ -352,8 +354,16 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                     .end
                     .div_ceil(overscan)
                     .saturating_add(1)
-                    .saturating_mul(overscan);
-                (start, end.min(count))
+                    .saturating_mul(overscan)
+                    .min(count);
+                let (kept_start, kept_end) = mounted.get();
+                let next = if kept_start <= start && end <= kept_end && kept_end <= count {
+                    (kept_start, kept_end)
+                } else {
+                    (start, end)
+                };
+                mounted.set(next);
+                next
             })
         };
         let top = {
