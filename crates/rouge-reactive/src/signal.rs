@@ -1,6 +1,7 @@
 use crate::handle::Handle;
 use crate::runtime::{Graph, NodeId, Value, with_rt};
 use crate::sender::SignalSender;
+use slotmap::Key;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::hash::{Hash, Hasher};
@@ -106,8 +107,26 @@ impl<T: 'static> ReadSignal<T> {
         self.handle.try_read(true, T::clone)
     }
 
+    pub fn id(&self) -> u64 {
+        self.handle.id.data().as_ffi()
+    }
+
     pub fn is_alive(&self) -> bool {
         self.handle.is_alive()
+    }
+}
+
+impl ReadSignal<bool> {
+    pub fn pick<T: Clone + 'static>(self, on: T, off: T) -> impl Fn() -> T + Clone + 'static {
+        move || {
+            if self.get() { on.clone() } else { off.clone() }
+        }
+    }
+}
+
+impl Signal<bool> {
+    pub fn toggle(&self) {
+        self.update(|on| *on = !*on);
     }
 }
 

@@ -48,6 +48,7 @@ pub(crate) struct Graph {
     observer: Cell<Option<NodeId>>,
     owner: Cell<Option<NodeId>>,
     pending_effects: RefCell<Vec<NodeId>>,
+    marks: RefCell<Vec<(NodeId, State, NodeId)>>,
     batch_depth: Cell<u32>,
     flushing: Cell<bool>,
     pub(crate) executor: Executor,
@@ -198,6 +199,26 @@ impl Graph {
         self.owner.get()
     }
 
+    pub(crate) fn read(&self, id: NodeId, tracked: bool) -> Option<Value> {
+        {
+            let mut nodes = self.nodes.borrow_mut();
+            let node = nodes.get(id)?;
+            if node.state == State::Clean {
+                let value = node.value.clone();
+                if tracked {
+                    self.track_in(&mut nodes, id);
+                }
+                return value;
+            }
+        }
+        self.update_if_necessary(id);
+        let value = self.value(id)?;
+        if tracked {
+            self.track(id);
+        }
+        Some(value)
+    }
+
     pub(crate) fn value(&self, id: NodeId) -> Option<Value> {
         self.nodes.borrow().get(id).and_then(|n| n.value.clone())
     }
@@ -276,13 +297,16 @@ impl Graph {
     }
 
     pub(crate) fn track(&self, source: NodeId) {
+        self.track_in(&mut self.nodes.borrow_mut(), source);
+    }
+
+    fn track_in(&self, nodes: &mut SlotMap<NodeId, Node>, source: NodeId) {
         let Some(observer) = self.observer.get() else {
             return;
         };
         if observer == source {
             return;
         }
-        let mut nodes = self.nodes.borrow_mut();
         if !nodes.contains_key(source) {
             return;
         }
@@ -313,11 +337,8 @@ impl Graph {
             return;
         };
         let mut pending = self.pending_effects.borrow_mut();
-        let mut stack: Vec<_> = node
-            .subscribers
-            .iter()
-            .map(|s| (*s, State::Dirty, source))
-            .collect();
+        let mut stack = self.marks.borrow_mut();
+        stack.extend(node.subscribers.iter().map(|s| (*s, State::Dirty, source)));
         while let Some((id, state, from)) = stack.pop() {
             let Some(node) = nodes.get_mut(id) else {
                 continue;
@@ -335,15 +356,18 @@ impl Graph {
 
     pub(crate) fn update_if_necessary(&self, id: NodeId) {
         if self.state(id) == Some(State::Check) {
-            let sources = match self.nodes.borrow().get(id) {
-                Some(node) => node.sources.clone(),
-                None => return,
-            };
-            for source in sources {
+            let mut index = 0;
+            loop {
+                let source = match self.nodes.borrow().get(id) {
+                    Some(node) => node.sources.get(index).copied(),
+                    None => return,
+                };
+                let Some(source) = source else { break };
                 self.update_if_necessary(source);
                 if self.state(id) != Some(State::Check) {
                     break;
                 }
+                index += 1;
             }
             if let Some(node) = self.nodes.borrow_mut().get_mut(id)
                 && node.state == State::Check

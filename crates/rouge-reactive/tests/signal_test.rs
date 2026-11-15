@@ -61,3 +61,15 @@ fn many_subscribers_all_notified_once() {
         assert_eq!(runs.get(), 2000);
     });
 }
+
+#[test]
+fn a_bool_signal_toggles_and_picks_between_two_values() {
+    in_root(|| {
+        let on = signal(false);
+        let label = on.pick("on", "off");
+        assert_eq!(label(), "off");
+        on.toggle();
+        assert!(on.get());
+        assert_eq!(label(), "on");
+    });
+}

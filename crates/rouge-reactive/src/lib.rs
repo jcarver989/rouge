@@ -1,11 +1,12 @@
+mod action;
 mod effect;
-mod emitter;
 mod handle;
 mod interval;
 mod memo;
 mod resource;
 mod runtime;
 mod scope;
+mod selector;
 mod sender;
 mod signal;
 mod stats;
@@ -17,8 +18,8 @@ pub mod testing;
 mod timer;
 mod watch;
 
+pub use action::{Action, action};
 pub use effect::{Effect, effect};
-pub use emitter::{Emitter, emitter};
 pub use interval::interval;
 pub use memo::{Memo, memo};
 pub use resource::{Resource, resource};
@@ -26,6 +27,7 @@ pub use runtime::{Entered, Runtime};
 pub use scope::{
     Scope, batch, expect_context, on_cleanup, provide_context, run_in, untrack, use_context,
 };
+pub use selector::{Selector, selector};
 pub use sender::SignalSender;
 pub use signal::{ReadSignal, Signal, signal};
 pub use stats::{ReactiveStats, stats};

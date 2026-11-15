@@ -61,14 +61,7 @@ impl Handle {
         tracked: bool,
         f: impl FnOnce(&T) -> U,
     ) -> Option<U> {
-        let value = with_rt(|rt| {
-            rt.update_if_necessary(self.id);
-            let value = rt.value(self.id)?;
-            if tracked {
-                rt.track(self.id);
-            }
-            Some(value)
-        })?;
+        let value = with_rt(|rt| rt.read(self.id, tracked))?;
         let guard = value.try_borrow().unwrap_or_else(|_| {
             panic!("rouge-reactive: value read while it is being mutated (read inside `update` of the same signal?)")
         });
