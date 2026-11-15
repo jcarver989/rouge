@@ -88,6 +88,8 @@ impl Key {
     pub fn character(text: &str) -> Key {
         match text {
             " " => Key::Space,
+            "\n" | "\r" => Key::Enter,
+            "\t" => Key::Tab,
             text => Key::Character(text.to_lowercase()),
         }
     }

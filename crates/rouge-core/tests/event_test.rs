@@ -54,6 +54,14 @@ fn chords_match_events_by_key_and_modifiers() -> Result<(), ChordError> {
 }
 
 #[test]
+fn typed_whitespace_control_characters_become_named_keys() {
+    assert_eq!(Key::character("\n"), Key::Enter);
+    assert_eq!(Key::character("\r"), Key::Enter);
+    assert_eq!(Key::character("\t"), Key::Tab);
+    assert_eq!(Key::character("A"), Key::Character("a".into()));
+}
+
+#[test]
 fn dropped_files_reach_the_element_under_the_pointer_or_else_the_focus_path() {
     let _rt = Runtime::new().enter();
     let (mut ui, dropped) = TestUiBuilder::default().size(200.0, 100.0).build_with(|| {

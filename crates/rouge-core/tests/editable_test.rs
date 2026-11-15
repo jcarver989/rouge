@@ -135,6 +135,21 @@ fn ime_commit_is_one_undo_transaction_and_selection_clamps_to_utf8_boundaries() 
 }
 
 #[test]
+fn a_typed_newline_submits_a_single_line_field_without_inserting_it() {
+    let _rt = Runtime::new().enter();
+    let value = signal(String::new());
+    let submitted = signal(String::new());
+    let mut ui = TestUiBuilder::default().build(|| {
+        editable(value)
+            .on_submit(move |value| submitted.set(value.to_owned()))
+            .autofocus()
+    });
+    ui.type_text("buy milk\n");
+    assert_eq!(submitted.get_untracked(), "buy milk");
+    assert_eq!(value.get_untracked(), "buy milk");
+}
+
+#[test]
 fn multiline_grows_to_row_limit_scrolls_caret_and_supports_submit_with_shift_newline() -> TestResult
 {
     let _rt = Runtime::new().enter();
