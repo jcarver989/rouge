@@ -1,4 +1,4 @@
-use crate::fuzzy::FuzzyFilter;
+use crate::fuzzy::fuzzy_filter;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -80,7 +80,6 @@ pub struct PickerState<T = PickerOption> {
     matches: Vec<usize>,
     positions: Vec<Option<usize>>,
     highlighted: usize,
-    filter: FuzzyFilter,
 }
 
 impl<T: PickerEntry> PickerState<T> {
@@ -94,7 +93,6 @@ impl<T: PickerEntry> PickerState<T> {
             matches: Vec::new(),
             positions: Vec::new(),
             highlighted: 0,
-            filter: FuzzyFilter::default(),
         };
         state.set_options(options);
         state
@@ -199,7 +197,7 @@ impl<T: PickerEntry> PickerState<T> {
     fn refilter(&mut self) {
         if self.filtered {
             let keys = self.options.iter().map(PickerEntry::text);
-            self.filter.filter(&self.query, keys, &mut self.matches);
+            fuzzy_filter(&self.query, keys, &mut self.matches);
         } else {
             self.matches.clear();
             self.matches.extend(0..self.options.len());

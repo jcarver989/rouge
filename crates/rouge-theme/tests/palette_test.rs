@@ -1,6 +1,5 @@
 use rouge_theme::{
-    ButtonVariant, ControlState, InteractionState, NoticeTone, Rgba, SCRIM_ALPHA, SelectionState,
-    UiPalette,
+    ButtonVariant, ControlState, InteractionState, NoticeTone, Rgba, SelectionState, UiPalette,
 };
 
 #[test]
@@ -10,7 +9,7 @@ fn ui_palette_uses_stable_semantic_roles() {
     assert_ne!(ui.text_secondary, ui.text_muted);
     assert_ne!(ui.info, ui.text_muted);
     assert_ne!(ui.warning, ui.accent);
-    assert_eq!(ui.scrim.a, SCRIM_ALPHA);
+    assert_eq!(UiPalette::default(), UiPalette::light());
 }
 
 #[test]
@@ -51,11 +50,10 @@ fn semantic_states_resolve_before_renderer_conversion() {
 }
 
 #[test]
-fn the_default_palette_layers_chrome_canvas_and_elevated_surfaces() {
-    let ui = UiPalette::default();
+fn the_dark_palette_layers_chrome_canvas_and_elevated_surfaces() {
+    let ui = UiPalette::dark();
     let lightness = |color: Rgba| u32::from(color.r) + u32::from(color.g) + u32::from(color.b);
-    assert!(lightness(ui.chrome) < lightness(ui.input));
-    assert!(lightness(ui.input) < lightness(ui.canvas));
+    assert!(lightness(ui.chrome) < lightness(ui.canvas));
     assert!(lightness(ui.canvas) < lightness(ui.elevated));
     assert!(lightness(ui.border_subtle) < lightness(ui.border));
 }

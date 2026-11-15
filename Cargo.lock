@@ -2926,7 +2926,6 @@ dependencies = [
  "rouge-widgets",
  "serde",
  "serde_json",
- "slotmap",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -2972,6 +2971,7 @@ dependencies = [
  "quote",
  "rouge-core",
  "rouge-reactive",
+ "rouge-widgets",
  "syn 2.0.119",
 ]
 
@@ -2983,6 +2983,14 @@ dependencies = [
  "pulldown-cmark",
  "rouge-syntax",
  "serde",
+ "unicase",
+]
+
+[[package]]
+name = "rouge-picker"
+version = "0.1.0"
+dependencies = [
+ "nucleo-matcher",
 ]
 
 [[package]]
@@ -2992,6 +3000,7 @@ dependencies = [
  "gloo-timers",
  "indexmap",
  "rouge-reactive",
+ "rustc-hash 2.1.3",
  "slotmap",
  "thiserror 2.0.21",
  "tokio",
@@ -3011,6 +3020,7 @@ dependencies = [
  "pollster",
  "rouge-theme",
  "rustc-hash 2.1.3",
+ "slotmap",
  "thiserror 2.0.21",
  "tokio",
  "web-time",
@@ -3095,7 +3105,6 @@ dependencies = [
 name = "rouge-theme"
 version = "0.1.0"
 dependencies = [
- "nucleo-matcher",
  "serde",
  "serde_json",
 ]
@@ -3107,6 +3116,7 @@ dependencies = [
  "rouge",
  "rouge-core",
  "rouge-markdown",
+ "rouge-picker",
  "rouge-reactive",
  "rouge-render",
  "rouge-syntax",

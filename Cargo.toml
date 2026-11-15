@@ -19,7 +19,7 @@ rouge-core = { path = "crates/rouge-core" }
 rouge-macros = { path = "crates/rouge-macros" }
 wgpu = "30"
 winit = "0.30"
-taffy = "0.15"
+taffy = { version = "0.15", default-features = false, features = ["std", "flexbox", "flexbox_balance", "grid", "block_layout", "float_layout", "calc", "content_size"] }
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "1"
 web-time = "1"
@@ -30,6 +30,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 rouge-widgets = { path = "crates/rouge-widgets" }
 rouge = { path = "crates/rouge" }
 rouge-theme = { path = "crates/rouge-theme" }
+rouge-picker = { path = "crates/rouge-picker" }
 rouge-syntax = { path = "crates/rouge-syntax" }
 rouge-markdown = { path = "crates/rouge-markdown" }
 nucleo-matcher = "0.3"

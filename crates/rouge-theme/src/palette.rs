@@ -1,44 +1,58 @@
 use crate::Rgba;
 use serde::{Deserialize, Serialize};
 
-pub const SCRIM_ALPHA: u8 = 184;
-
 macro_rules! roles {
-    ($($role:ident),* $(,)?) => {
+    ($($role:ident: $name:ident),* $(,)?) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         pub struct UiPalette<T = Rgba> {
             $(pub $role: T,)*
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        pub enum Role {
+            $($name,)*
         }
 
         impl<T> UiPalette<T> {
             pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> UiPalette<U> {
                 UiPalette { $($role: f(self.$role),)* }
             }
+
+            #[must_use]
+            pub const fn get(&self, role: Role) -> &T {
+                match role {
+                    $(Role::$name => &self.$role,)*
+                }
+            }
+        }
+
+        impl UiPalette<Role> {
+            pub const ROLES: Self = UiPalette { $($role: Role::$name,)* };
         }
     };
 }
 
 roles!(
-    canvas,
-    surface,
-    surface_hover,
-    surface_selected,
-    chrome,
-    elevated,
-    input,
-    text,
-    text_secondary,
-    text_muted,
-    border,
-    border_subtle,
-    accent,
-    accent_foreground,
-    info,
-    positive,
-    warning,
-    destructive,
-    destructive_foreground,
-    scrim,
+    canvas: Canvas,
+    surface: Surface,
+    surface_hover: SurfaceHover,
+    surface_selected: SurfaceSelected,
+    chrome: Chrome,
+    elevated: Elevated,
+    input: Input,
+    text: Text,
+    text_secondary: TextSecondary,
+    text_muted: TextMuted,
+    border: Border,
+    border_subtle: BorderSubtle,
+    accent: Accent,
+    accent_foreground: AccentForeground,
+    info: Info,
+    positive: Positive,
+    warning: Warning,
+    destructive: Destructive,
+    destructive_foreground: DestructiveForeground,
+    scrim: Scrim,
 );
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -78,25 +92,12 @@ impl ControlState {
     }
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ControlSize {
-    Small,
-    #[default]
-    Medium,
-}
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SelectionState {
     #[default]
     None,
     Selected,
     Focused,
     Disabled,
-}
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CheckState {
-    #[default]
-    Unchecked,
-    Checked,
-    Indeterminate,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -120,6 +121,16 @@ pub struct SemanticStyle<T = Rgba> {
     pub foreground: T,
     pub background: Option<T>,
     pub emphasized: bool,
+}
+
+impl<T> SemanticStyle<T> {
+    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> SemanticStyle<U> {
+        SemanticStyle {
+            foreground: f(self.foreground),
+            background: self.background.map(f),
+            emphasized: self.emphasized,
+        }
+    }
 }
 
 impl<T: Copy> UiPalette<T> {
@@ -248,27 +259,6 @@ impl UiPalette {
 
 impl Default for UiPalette {
     fn default() -> Self {
-        Self {
-            canvas: Rgba::new(13, 17, 16, 255),
-            surface: Rgba::new(13, 17, 16, 255),
-            surface_hover: Rgba::new(34, 46, 45, 255),
-            surface_selected: Rgba::new(32, 44, 45, 255),
-            chrome: Rgba::new(3, 4, 4, 255),
-            elevated: Rgba::new(37, 42, 38, 255),
-            input: Rgba::new(9, 12, 11, 255),
-            text: Rgba::new(212, 221, 214, 255),
-            text_secondary: Rgba::new(156, 165, 160, 255),
-            text_muted: Rgba::new(92, 112, 104, 255),
-            border: Rgba::new(70, 78, 78, 255),
-            border_subtle: Rgba::new(37, 45, 44, 255),
-            accent: Rgba::new(143, 188, 176, 255),
-            accent_foreground: Rgba::new(0, 0, 0, 255),
-            info: Rgba::new(130, 177, 204, 255),
-            positive: Rgba::new(167, 192, 128, 255),
-            warning: Rgba::new(216, 181, 106, 255),
-            destructive: Rgba::new(230, 126, 128, 255),
-            destructive_foreground: Rgba::new(0, 0, 0, 255),
-            scrim: Rgba::new(13, 17, 16, SCRIM_ALPHA),
-        }
+        Self::light()
     }
 }

@@ -1,4 +1,4 @@
-use rouge_theme::{PickerOption, PickerRow, PickerState};
+use rouge_picker::{PickerOption, PickerRow, PickerState};
 
 #[test]
 fn an_empty_query_keeps_every_option_in_order() {

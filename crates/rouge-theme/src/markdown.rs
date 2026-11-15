@@ -12,18 +12,3 @@ pub struct MarkdownPalette {
     pub code: Rgba,
     pub code_background: Rgba,
 }
-
-impl MarkdownPalette {
-    #[must_use]
-    pub const fn colors(&self) -> [Rgba; 7] {
-        [
-            self.heading,
-            self.link,
-            self.quote,
-            self.inline_code,
-            self.inline_code_background,
-            self.code,
-            self.code_background,
-        ]
-    }
-}
