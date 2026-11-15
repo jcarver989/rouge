@@ -230,7 +230,7 @@ pub fn config_dir(name: &str) -> Option<PathBuf> {
     {
         return Some(dir.join(name.to_lowercase()));
     }
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         home_dir().map(|home| home.join("Library/Application Support").join(name))
     } else if cfg!(target_os = "windows") {
         var_os("APPDATA").map(|root| PathBuf::from(root).join(name))

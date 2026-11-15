@@ -1,12 +1,23 @@
+#[cfg(not(target_os = "ios"))]
 mod clipboard;
 #[cfg(target_os = "macos")]
 mod menu;
+#[cfg(target_os = "ios")]
+mod pasteboard;
 mod runner;
+
+#[cfg(not(target_os = "ios"))]
+use clipboard::NativeClipboard;
+#[cfg(target_os = "ios")]
+use pasteboard::NativeClipboard;
 
 pub(crate) use runner::run;
 
 use super::{LINE_SCROLL, css_cursor};
-use rouge_core::{Appearance, Cursor, Key, Modifiers, PointerButton, ResizeEdge, WindowCommand};
+use rouge_core::{
+    Appearance, Cursor, Key, Modifiers, PointerButton, ResizeEdge, TouchPhase as UiTouchPhase,
+    WindowCommand,
+};
 use rouge_render::{Point, Size};
 use std::time::{Duration, Instant};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -140,6 +151,30 @@ impl Wheel {
         };
         self.0 = next;
         gesture
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PrimaryTouch(Option<u64>);
+
+impl PrimaryTouch {
+    pub fn input(&mut self, id: u64, phase: TouchPhase) -> Option<UiTouchPhase> {
+        match phase {
+            TouchPhase::Started if self.0.is_none() => {
+                self.0 = Some(id);
+                Some(UiTouchPhase::Start)
+            }
+            TouchPhase::Moved if self.0 == Some(id) => Some(UiTouchPhase::Move),
+            TouchPhase::Ended if self.0 == Some(id) => {
+                self.0 = None;
+                Some(UiTouchPhase::End)
+            }
+            TouchPhase::Cancelled if self.0 == Some(id) => {
+                self.0 = None;
+                Some(UiTouchPhase::Cancel)
+            }
+            _ => None,
+        }
     }
 }
 

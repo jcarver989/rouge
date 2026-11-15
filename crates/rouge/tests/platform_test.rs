@@ -1,9 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use rouge::core::{Cursor, Key, Modifiers, Point, PointerButton, Size};
+use rouge::core::{Cursor, Key, Modifiers, Point, PointerButton, Size, TouchPhase as UiTouchPhase};
 use rouge::platform::{
-    Wheel, WheelGesture, cursor_icon, logical_point, logical_size, modifiers, named_key,
-    pointer_button, scroll_delta,
+    PrimaryTouch, Wheel, WheelGesture, cursor_icon, logical_point, logical_size, modifiers,
+    named_key, pointer_button, scroll_delta,
 };
 use std::time::{Duration, Instant};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -175,6 +175,47 @@ fn line_deltas_always_scroll_even_mid_gesture() {
         wheel.input(pixels(-6.0), TouchPhase::Moved, 1.0, now),
         WheelGesture::Drag(Point::new(0.0, -6.0)),
         "and leave the trackpad gesture alone"
+    );
+}
+
+#[test]
+fn the_first_finger_down_drives_touch_input_until_it_lifts() {
+    let mut touch = PrimaryTouch::default();
+    let phases = [
+        (1, TouchPhase::Started),
+        (2, TouchPhase::Started),
+        (1, TouchPhase::Moved),
+        (2, TouchPhase::Moved),
+        (2, TouchPhase::Ended),
+        (1, TouchPhase::Ended),
+        (1, TouchPhase::Moved),
+    ]
+    .map(|(id, phase)| touch.input(id, phase));
+    assert_eq!(
+        phases,
+        [
+            Some(UiTouchPhase::Start),
+            None,
+            Some(UiTouchPhase::Move),
+            None,
+            None,
+            Some(UiTouchPhase::End),
+            None,
+        ]
+    );
+}
+
+#[test]
+fn a_cancelled_touch_frees_the_tracker_for_the_next_finger() {
+    let mut touch = PrimaryTouch::default();
+    touch.input(1, TouchPhase::Started);
+    assert_eq!(
+        touch.input(1, TouchPhase::Cancelled),
+        Some(UiTouchPhase::Cancel)
+    );
+    assert_eq!(
+        touch.input(2, TouchPhase::Started),
+        Some(UiTouchPhase::Start)
     );
 }
 

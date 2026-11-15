@@ -1,9 +1,10 @@
-use super::clipboard::NativeClipboard;
+#[cfg(target_os = "ios")]
+use super::PrimaryTouch;
 #[cfg(target_os = "macos")]
 use super::menu::NativeMenus;
 use super::{
-    Wheel, WheelGesture, appearance, cursor_icon, logical_point, modifiers, named_key,
-    pointer_button, window_command,
+    NativeClipboard, Wheel, WheelGesture, appearance, cursor_icon, logical_point, modifiers,
+    named_key, pointer_button, window_command,
 };
 use crate::app::{App, AppError, RootFn, WindowOptions};
 use crate::driver::{Driver, Setup, TextInput, connect, latch};
@@ -16,6 +17,8 @@ use rouge_core::{
 use rouge_reactive::Runtime;
 #[cfg(feature = "tokio-rt")]
 use rouge_reactive::set_tokio;
+#[cfg(target_os = "ios")]
+use rouge_render::Edges;
 use rouge_render::{Gpu, Point, Surfaces};
 use std::borrow::Cow;
 use std::env::var;
@@ -35,6 +38,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, SmolStr};
+#[cfg(not(target_os = "ios"))]
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
 
@@ -104,10 +108,14 @@ impl Runner {
             .with_title(options.title.clone())
             .with_maximized(options.maximized)
             .with_decorations(options.decorations == Decorations::Server)
-            .with_resizable(options.resizable)
-            .with_inner_size(LogicalSize::new(options.size.width, options.size.height));
-        if let Some(size) = options.min_size {
-            attributes = attributes.with_min_inner_size(LogicalSize::new(size.width, size.height));
+            .with_resizable(options.resizable);
+        if !cfg!(target_os = "ios") {
+            attributes = attributes
+                .with_inner_size(LogicalSize::new(options.size.width, options.size.height));
+            if let Some(size) = options.min_size {
+                attributes =
+                    attributes.with_min_inner_size(LogicalSize::new(size.width, size.height));
+            }
         }
         let window = Arc::new(event_loop.create_window(attributes)?);
         let instance = || {
@@ -123,8 +131,9 @@ impl Runner {
                 let _ = waker.send_event(());
             })
         });
-        let physical = window.inner_size();
-        let chrome = options.decorations == Decorations::Client || !window.is_decorated();
+        let physical = surface_size(&window);
+        let chrome = !cfg!(target_os = "ios")
+            && (options.decorations == Decorations::Client || !window.is_decorated());
         let bar = if self.bar {
             self.menus.clone()
         } else {
@@ -149,8 +158,14 @@ impl Runner {
             interval,
             occluded: false,
             wheel: Wheel::default(),
+            #[cfg(target_os = "ios")]
+            touch: PrimaryTouch::default(),
             modifiers: Modifiers::NONE,
         });
+        #[cfg(target_os = "ios")]
+        if let Some(state) = self.windows.last_mut() {
+            state.sync_safe_area();
+        }
         Ok(())
     }
 
@@ -268,6 +283,8 @@ struct WindowState {
     interval: Duration,
     occluded: bool,
     wheel: Wheel,
+    #[cfg(target_os = "ios")]
+    touch: PrimaryTouch,
     modifiers: Modifiers,
 }
 
@@ -289,7 +306,7 @@ impl WindowState {
             WindowEvent::Resized(size) => self.resize(size, self.window.scale_factor()),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.interval = refresh_interval(&self.window);
-                self.resize(self.window.inner_size(), scale_factor);
+                self.resize(surface_size(&self.window), scale_factor);
             }
             WindowEvent::Moved(_) => self.interval = refresh_interval(&self.window),
             WindowEvent::CursorMoved { position, .. } => {
@@ -308,6 +325,13 @@ impl WindowState {
                 ..
             } => ui.pointer_up(pointer_button(button)),
             WindowEvent::MouseWheel { delta, phase, .. } => self.wheel(delta, phase),
+            #[cfg(target_os = "ios")]
+            WindowEvent::Touch(touch) => {
+                if let Some(phase) = self.touch.input(touch.id, touch.phase) {
+                    let position = logical_point(touch.location, ui.scale());
+                    ui.touch(phase, position);
+                }
+            }
             WindowEvent::ModifiersChanged(changed) => {
                 self.modifiers = modifiers(changed.state());
                 ui.set_modifiers(self.modifiers);
@@ -333,7 +357,7 @@ impl WindowState {
     }
 
     fn key(&mut self, event: WinitKeyEvent) {
-        let key = match event.key_without_modifiers() {
+        let key = match unmodified_key(&event) {
             WinitKey::Named(named) => named_key(named),
             WinitKey::Character(text) => Key::character(&text),
             _ => Key::Other,
@@ -368,7 +392,15 @@ impl WindowState {
     fn resize(&mut self, physical: PhysicalSize<u32>, scale: f64) {
         self.driver
             .resize((physical.width, physical.height), scale as f32);
+        #[cfg(target_os = "ios")]
+        self.sync_safe_area();
         self.window.request_redraw();
+    }
+
+    #[cfg(target_os = "ios")]
+    fn sync_safe_area(&mut self) {
+        let insets = safe_area(&self.window);
+        self.driver.ui().set_safe_area(insets);
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
@@ -397,6 +429,45 @@ impl WindowState {
             window.request_redraw();
         }
     }
+}
+
+#[cfg(not(target_os = "ios"))]
+fn surface_size(window: &Window) -> PhysicalSize<u32> {
+    window.inner_size()
+}
+
+#[cfg(target_os = "ios")]
+fn surface_size(window: &Window) -> PhysicalSize<u32> {
+    window.outer_size()
+}
+
+#[cfg(target_os = "ios")]
+fn safe_area(window: &Window) -> Edges {
+    let (Ok(inner), Ok(outer)) = (window.inner_position(), window.outer_position()) else {
+        return Edges::ZERO;
+    };
+    let (inner_size, outer_size) = (window.inner_size(), window.outer_size());
+    let scale = window.scale_factor() as f32;
+    let left = (inner.x - outer.x) as f32;
+    let top = (inner.y - outer.y) as f32;
+    let right = outer_size.width as f32 - inner_size.width as f32 - left;
+    let bottom = outer_size.height as f32 - inner_size.height as f32 - top;
+    Edges {
+        top: (top / scale).max(0.0),
+        right: (right / scale).max(0.0),
+        bottom: (bottom / scale).max(0.0),
+        left: (left / scale).max(0.0),
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+fn unmodified_key(event: &WinitKeyEvent) -> WinitKey {
+    event.key_without_modifiers()
+}
+
+#[cfg(target_os = "ios")]
+fn unmodified_key(event: &WinitKeyEvent) -> WinitKey {
+    event.logical_key.clone()
 }
 
 fn refresh_interval(window: &Window) -> Duration {
