@@ -400,7 +400,7 @@ impl MarkdownRow {
                 if *header { row.bg(Role::Surface) } else { row }
             }
             Kind::Rule => view! {
-                <div py=12.0><div h=1.0 w_full bg=Role::Border/></div>
+                <div py=12.0><div w_full border_t=1.0 border_color=Role::Border/></div>
             },
             Kind::Html { content } => paint
                 .prose()

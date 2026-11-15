@@ -35,6 +35,34 @@ fn scale_factor_maps_logical_to_device_pixels() -> Result<(), GpuError> {
 }
 
 #[test]
+fn stacked_quads_meet_without_seams_at_fractional_scales() -> Result<(), GpuError> {
+    let row = |index: u8, clipped: bool| {
+        let bounds = Rect::new(0.0, f32::from(index) * 20.0, 100.0, 20.0);
+        Quad {
+            clip: if clipped { bounds } else { Rect::EVERYTHING },
+            ..Quad::new(bounds, Color::RED)
+        }
+    };
+    for clipped in [false, true] {
+        let img = render(
+            1.875,
+            160,
+            Color::BLACK,
+            quads((0..4).map(|index| row(index, clipped))),
+        )?;
+        for y in 0..150 {
+            assert_near(
+                img.pixel(10, y),
+                RED,
+                &format!("row pixel {y}, clipped: {clipped}"),
+            );
+        }
+        assert_near(img.pixel(10, 150), [0, 0, 0, 255], "below the last row");
+    }
+    Ok(())
+}
+
+#[test]
 fn rounded_corners_are_cut_and_antialiased() -> Result<(), GpuError> {
     let list = quads([Quad {
         corner_radii: Corners::all(50.0),
@@ -92,6 +120,59 @@ fn border_is_drawn_inside_bounds_with_per_side_widths() -> Result<(), GpuError> 
     assert_near(img.pixel(97, 50), RED, "no right border");
     assert_near(img.pixel(50, 97), BLUE, "bottom border");
     assert_near(img.pixel(50, 94), RED, "just above bottom border");
+    Ok(())
+}
+
+#[test]
+fn hairline_borders_are_whole_device_pixels_wherever_they_sit() -> Result<(), GpuError> {
+    let boxed = |top: f32| Quad {
+        border_color: Color::BLUE,
+        border_widths: Edges {
+            top: 1.0,
+            ..Edges::ZERO
+        },
+        ..Quad::new(Rect::new(0.0, top, 100.0, 10.0), Color::RED)
+    };
+    let img = render(
+        1.875,
+        160,
+        Color::BLACK,
+        quads([0.0, 12.0, 24.0, 36.0, 48.0].map(boxed)),
+    )?;
+    assert_eq!(
+        runs(column(&img), BLUE),
+        vec![2; 5],
+        "every border is 2 device pixels"
+    );
+    Ok(())
+}
+
+#[test]
+fn lines_are_whole_device_pixels_wherever_they_sit() -> Result<(), GpuError> {
+    let offsets = [0.0, 4.0, 8.0, 12.0, 16.0];
+    let horizontal = offsets.map(|y| Quad::line(Rect::new(0.0, y, 100.0, 1.0), Color::BLUE));
+    let vertical = offsets.map(|x| Quad::line(Rect::new(x, 0.0, 1.0, 100.0), Color::BLUE));
+    let img = render(1.875, 160, Color::BLACK, quads(horizontal))?;
+    assert_eq!(runs(column(&img), BLUE), vec![2; 5], "horizontal lines");
+    let img = render(1.875, 160, Color::BLACK, quads(vertical))?;
+    assert_eq!(runs(row(&img), BLUE), vec![2; 5], "vertical lines");
+    Ok(())
+}
+
+#[test]
+fn quads_keep_their_device_size_wherever_they_sit() -> Result<(), GpuError> {
+    let strip = |top: f32| Quad::new(Rect::new(0.0, top, 100.0, 8.0), Color::RED);
+    let img = render(
+        1.875,
+        160,
+        Color::BLACK,
+        quads([4.0, 16.0, 28.0, 40.0].map(strip)),
+    )?;
+    assert_eq!(
+        runs(column(&img), RED),
+        vec![15; 4],
+        "8 logical pixels are 15 device pixels"
+    );
     Ok(())
 }
 
@@ -745,6 +826,32 @@ fn render(scale: f32, size: u32, clear: Color, list: DrawList) -> Result<Image, 
     let list = canvas.add(list);
     canvas.frame(&[LayerDraw::new(list)]);
     canvas.image()
+}
+
+fn column(img: &Image) -> Vec<[u8; 4]> {
+    (0..img.height).map(|y| img.pixel(10, y)).collect()
+}
+
+fn row(img: &Image) -> Vec<[u8; 4]> {
+    (0..img.width).map(|x| img.pixel(x, 10)).collect()
+}
+
+fn runs(pixels: Vec<[u8; 4]>, color: [u8; 4]) -> Vec<usize> {
+    let mut runs = Vec::new();
+    let mut length = 0;
+    for (at, pixel) in pixels.into_iter().enumerate() {
+        assert!(
+            pixel == color || pixel == [0, 0, 0, 255] || pixel == RED,
+            "pixel {at} is a blend: {pixel:?}"
+        );
+        if pixel == color {
+            length += 1;
+        } else if length > 0 {
+            runs.push(length);
+            length = 0;
+        }
+    }
+    runs
 }
 
 fn square(color: Color) -> DrawList {

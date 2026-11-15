@@ -68,6 +68,26 @@ impl Quad {
             ..Quad::new(bounds, Color::TRANSPARENT)
         }
     }
+
+    pub fn line(bounds: Rect, color: Color) -> Self {
+        let Size { width, height } = bounds.size;
+        let border_widths = if height <= width {
+            Edges {
+                top: height,
+                ..Edges::ZERO
+            }
+        } else {
+            Edges {
+                left: width,
+                ..Edges::ZERO
+            }
+        };
+        Quad {
+            border_color: color,
+            border_widths,
+            ..Quad::new(bounds, Color::TRANSPARENT)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

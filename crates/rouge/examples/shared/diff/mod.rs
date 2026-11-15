@@ -512,7 +512,7 @@ fn row(review: Review, index: usize) -> impl View {
                 .flex()
                 .size_full()
                 .child(code_cell(review, &row, Side::Old, old.as_ref()))
-                .child(div().w(1.0).h_full().flex_none().bg(RIM))
+                .child(div().h_full().flex_none().border_l(1.0).border_color(RIM))
                 .child(code_cell(review, &row, Side::New, new.as_ref())),
         }
     })

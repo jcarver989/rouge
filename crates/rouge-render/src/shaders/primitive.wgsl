@@ -3,6 +3,7 @@
 
 const ROW_FILL: u32 = 4u;
 const KIND: u32 = 3u;
+const QUAD: u32 = 0u;
 const SHADOW: u32 = 1u;
 const GLYPH: u32 = 2u;
 const IMAGE: u32 = 3u;
@@ -49,16 +50,23 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOu
         origin = round(origin);
         size = instance.params.zw;
         margin = vec2<f32>(0.0);
+    } else if (kind == QUAD) {
+        let edges = snap(vec4<f32>(origin, (instance.bounds.xy + instance.bounds.zw) * scale_factor()));
+        let border = select(vec4<f32>(0.0), max(snap(params), vec4<f32>(1.0)), params > vec4<f32>(0.0));
+        let solid = instance.params.wx + instance.params.yz >= instance.bounds.zw;
+        origin = edges.xy;
+        size = select(edges.zw - edges.xy, border.wx + border.yz, solid);
+        params = border;
     }
     let position = origin - margin + unit * (size + 2.0 * margin);
-    let clip_min = instance.clip.xy * scale_factor();
+    let clip = snap(vec4<f32>(instance.clip.xy, instance.clip.xy + instance.clip.zw) * scale_factor());
 
     var out: VsOut;
     out.position = device_to_clip(to_device(position));
     out.local = position;
     out.texel = instance.params.xy + unit * instance.params.zw;
     out.rect = vec4<f32>(origin + size * 0.5, size * 0.5);
-    out.clip = vec4<f32>(clip_min, clip_min + instance.clip.zw * scale_factor());
+    out.clip = clip;
     out.color = premultiply(instance.color);
     if ((instance.flags & LAYER_FILL) != 0u) {
         out.color = row(ROW_FILL);
@@ -78,6 +86,10 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOu
     out.kind = kind;
     out.opacity = layer_opacity();
     return out;
+}
+
+fn snap(v: vec4<f32>) -> vec4<f32> {
+    return floor(v + 0.5);
 }
 
 fn gaussian(x: f32, sigma: f32) -> f32 {

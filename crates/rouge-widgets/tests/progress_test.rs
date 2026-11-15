@@ -1,6 +1,6 @@
 mod common;
 
-use common::builder;
+use common::{builder, line_widths};
 use rouge_core::testing::{TestResult, assert_near};
 use rouge_core::{Color, Rect, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
@@ -52,6 +52,24 @@ fn vertical_separators_span_the_height_of_a_row() -> TestResult {
     let _entered = Runtime::new().enter();
     let mut ui = builder().build(|| div().size_full().flex().child(separator().vertical()));
     assert_eq!(ui.bounds(0.5, 100.0)?, Rect::new(0.0, 0.0, 1.0, 200.0));
+    Ok(())
+}
+
+#[test]
+fn separators_are_whole_device_pixels_wherever_they_sit() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = builder().scale(1.875).build(|| {
+        div()
+            .size_full()
+            .flex()
+            .col()
+            .gap(3.0)
+            .children((0..5).map(|_| separator()))
+    });
+    let border = UiPalette::light().map(Color::from).border.to_rgba8();
+    let img = ui.render()?;
+    let column = (0..img.height).map(|y| img.pixel(50, y));
+    assert_eq!(line_widths(column, border), vec![2; 5]);
     Ok(())
 }
 

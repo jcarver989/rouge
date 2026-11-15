@@ -542,14 +542,14 @@ fn paint_text(
         let underline = Rect::new(line.origin.x, line.max().y - 1.5, line.size.width, 1.0);
         out.push_quad(Quad {
             clip,
-            ..Quad::new(underline, text.color.resolve(&cx.palette))
+            ..Quad::line(underline, text.color.resolve(&cx.palette))
         });
     }
     if selection.is_collapsed() && edit.caret_visible {
         let caret = rect(&layout.caret(selection, CARET_WIDTH));
         out.push_quad(Quad {
             clip,
-            ..Quad::new(
+            ..Quad::line(
                 caret,
                 edit.caret_color.unwrap_or(text.color.resolve(&cx.palette)),
             )
@@ -565,21 +565,20 @@ fn paint_glyphs(
     out: &mut DrawList,
     cx: &mut PaintCx<'_>,
 ) {
-    let paint_rect = |out: &mut DrawList, rect: TextRect, override_color: Option<Color>| {
+    let bounds = |rect: TextRect| {
+        Rect::new(
+            origin.x + rect.x,
+            origin.y + rect.y,
+            rect.width,
+            rect.height,
+        )
+    };
+    layout.for_each_rect(false, |rect, fill| {
         out.push_quad(Quad {
             clip,
-            ..Quad::new(
-                Rect::new(
-                    origin.x + rect.x,
-                    origin.y + rect.y,
-                    rect.width,
-                    rect.height,
-                ),
-                override_color.unwrap_or(color),
-            )
+            ..Quad::new(bounds(rect), fill.unwrap_or(color))
         });
-    };
-    layout.for_each_rect(false, |rect, color| paint_rect(out, rect, color));
+    });
     let PaintCache {
         atlas,
         glyphs,
@@ -614,5 +613,10 @@ fn paint_glyphs(
             mask: cached.mask,
         });
     });
-    layout.for_each_rect(true, |rect, color| paint_rect(out, rect, color));
+    layout.for_each_rect(true, |rect, stroke| {
+        out.push_quad(Quad {
+            clip,
+            ..Quad::line(bounds(rect), stroke.unwrap_or(color))
+        });
+    });
 }

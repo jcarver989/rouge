@@ -84,7 +84,7 @@ fn render_items(
     let mut index = 0;
     let rows = items.iter().cloned().map(|item| {
         if matches!(item, MenuItem::Separator) {
-            return div().h(1.0).my(4.0).bg(Role::Border);
+            return div().my(4.0).border_t(1.0).border_color(Role::Border);
         }
         let current = index;
         index += 1;

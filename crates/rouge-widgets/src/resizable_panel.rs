@@ -185,7 +185,7 @@ pub fn panel_toggle(side: Side, open: Signal<bool>, name: &str) -> IconButton {
 fn divider(side: Side, color: Option<Prop<Fill>>, engaged: Memo<bool>) -> Div {
     let theme = Theme::current();
     let resting = color.unwrap_or_else(|| Role::Border.into_prop());
-    let line = pin_to_edge(div().absolute(), side).bg(move || {
+    let line = pin_to_edge(div().absolute(), side).border_color(move || {
         if engaged.get() {
             Fill::Color(theme.get().accent.with_alpha(ACTIVE_DIVIDER_ALPHA))
         } else {
@@ -199,7 +199,10 @@ fn divider(side: Side, color: Option<Prop<Fill>>, engaged: Memo<bool>) -> Div {
             DIVIDER_SIZE
         }
     };
-    thickness(line, side, weight)
+    match side {
+        Side::Left | Side::Right => line.border_l(weight),
+        Side::Top | Side::Bottom => line.border_t(weight),
+    }
 }
 
 fn pin_to_edge(element: Div, side: Side) -> Div {

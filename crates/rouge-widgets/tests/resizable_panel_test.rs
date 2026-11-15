@@ -1,6 +1,6 @@
 mod common;
 
-use common::builder;
+use common::{builder, line_widths};
 use rouge_core::testing::{BLACK, GREEN, RED, TestError, TestResult, TestUi, WHITE};
 use rouge_core::{Color, Palette, Point, PointerButton, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
@@ -102,18 +102,42 @@ fn a_divider_color_overrides_the_resting_line_reactively() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn the_resting_divider_is_whole_device_pixels_at_any_panel_size() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let size = signal(100.0);
+    let mut ui = builder().scale(1.875).palette(palette()).build(move || {
+        div().size_full().child(
+            resizable_panel(Side::Left, size)
+                .h(100.0)
+                .child(div().size_full()),
+        )
+    });
+    let mut widths = Vec::new();
+    for width in [100.0, 101.0, 102.0, 103.0] {
+        size.set(width);
+        ui.advance(0.0);
+        let img = ui.render()?;
+        widths.extend(line_widths((0..img.width).map(|x| img.pixel(x, 90)), RED));
+    }
+    assert_eq!(widths, vec![2; 4]);
+    Ok(())
+}
+
 fn render(panel: impl FnOnce() -> ResizablePanel + 'static) -> TestUi {
-    builder()
-        .palette(Palette {
-            border: Color::RED,
-            accent: Color::BLUE,
-            ..UiPalette::light().map(Color::from)
-        })
-        .build(|| {
-            div()
-                .size_full()
-                .child(panel().w(100.0).h(100.0).child(div().size_full()))
-        })
+    builder().palette(palette()).build(|| {
+        div()
+            .size_full()
+            .child(panel().w(100.0).h(100.0).child(div().size_full()))
+    })
+}
+
+fn palette() -> Palette {
+    Palette {
+        border: Color::RED,
+        accent: Color::BLUE,
+        ..UiPalette::light().map(Color::from)
+    }
 }
 
 fn pixel(ui: &mut TestUi, at: Point) -> Result<[u8; 4], TestError> {

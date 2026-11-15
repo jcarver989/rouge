@@ -30,11 +30,11 @@ styled!(Separator => style);
 
 impl View for Separator {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let line = div().flex_none().self_stretch().bg(Role::Border);
+        let line = div().flex_none().self_stretch().border_color(Role::Border);
         let line = if self.vertical {
-            line.h(auto()).w(1.0)
+            line.h(auto()).border_l(1.0)
         } else {
-            line.h(1.0)
+            line.border_t(1.0)
         };
         self.style.apply(line).build(cx);
     }
