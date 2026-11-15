@@ -152,7 +152,19 @@ impl Tree {
         if let Some(observer) = canvas.overflow.filter(|o| o.is_alive()) {
             observer.set_if_changed(overflow);
         }
+        let tracks = ops
+            .iter()
+            .any(|op| matches!(op, PaintOp::Text(shaped) if shaped.run.track.is_some()));
         canvas.ops = ops;
+        if tracks && !self.observers.contains(&id) {
+            self.observers.push(id);
+        }
+        let Some(element) = self.elements.get_mut(id) else {
+            return;
+        };
+        let Kind::Canvas(canvas) = &mut element.kind else {
+            return;
+        };
         let laid_out = element.bounds.size.width;
         let resized = canvas.measure.as_mut().is_some_and(|measure| {
             let Some(last) = measure

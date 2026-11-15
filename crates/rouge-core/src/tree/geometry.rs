@@ -217,6 +217,22 @@ impl Tree {
                 observer.set_if_changed(self.paint_region(id));
             }
         }
+        if let Some(canvas) = element.kind.canvas() {
+            for op in &canvas.ops {
+                if let PaintOp::Text(shaped) = op
+                    && let Some((observer, rect)) = shaped.tracked()
+                    && observer.is_alive()
+                {
+                    let local = Rect::new(
+                        element.bounds.origin.x + rect.origin.x,
+                        element.bounds.origin.y + rect.origin.y,
+                        rect.size.width,
+                        rect.size.height,
+                    );
+                    observer.set_if_changed(self.to_window(id, local));
+                }
+            }
+        }
         let edit = element.kind.text().and_then(|text| text.edit.as_ref());
         if let Some(edit) = edit
             && let Some(observer) = edit.selection_signal.filter(|o| o.is_alive())

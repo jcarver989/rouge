@@ -10,6 +10,7 @@ use rouge_macros::component;
 use rouge_reactive::{Scope, Signal, effect, run_in, signal, untrack, use_context};
 use rouge_render::{Color, ImageData, ImageQuad, Point, Quad, Rect, Size};
 use rouge_theme::Role;
+use std::ops::Range;
 use std::rc::Rc;
 
 pub(crate) type HitListener = Rc<dyn Fn(Option<TextHit>, Modifiers)>;
@@ -71,6 +72,7 @@ pub struct TextRun {
     pub tag: Option<u32>,
     pub name: Option<String>,
     pub right_aligned: bool,
+    pub track: Option<(Range<usize>, Signal<Rect>)>,
 }
 
 impl TextRun {
@@ -86,6 +88,7 @@ impl TextRun {
             tag: None,
             name: None,
             right_aligned: false,
+            track: None,
         }
     }
 
@@ -121,6 +124,11 @@ impl TextRun {
 
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    pub fn track_range(mut self, range: Range<usize>, bounds: Signal<Rect>) -> Self {
+        self.track = Some((range, bounds));
         self
     }
 }
@@ -173,6 +181,24 @@ impl ShapedRun {
             origin: self.run.origin,
             size: Size::new(width, height),
         }
+    }
+
+    pub(crate) fn tracked(&self) -> Option<(Signal<Rect>, Rect)> {
+        let (range, bounds) = self.run.track.as_ref()?;
+        let layout = self.layout.as_ref()?;
+        let end = range.end.min(self.run.content.len());
+        let start = range.start.min(end);
+        let first = layout
+            .selection_rects(layout.select(start, end))
+            .into_iter()
+            .next()?;
+        let rect = Rect::new(
+            self.run.origin.x + first.x,
+            self.run.origin.y + first.y,
+            first.width,
+            first.height,
+        );
+        Some((*bounds, rect))
     }
 
     pub(crate) fn hit(&self, point: Point) -> Option<TextHit> {

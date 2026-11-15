@@ -345,3 +345,54 @@ fn wrapped(content: Signal<String>, color: Signal<Color>) -> Canvas {
     canvas(move |painter| painter.run(run(painter.size().width)))
         .measure(move |measure, width| measure.text(&run(width)).max().y + PADDING / 2.0)
 }
+
+#[test]
+fn tracked_ranges_report_their_window_bounds() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let word = signal(Rect::ZERO);
+    let whole = signal(Rect::ZERO);
+    let mut ui = TestUiBuilder::default().size(300.0, 100.0).build(move || {
+        let drawing = canvas(move |painter| {
+            let style = TextStyle::default();
+            painter.run(
+                TextRun::new("hello world", Point::new(10.0, 5.0), &style, Color::BLACK)
+                    .track_range(6..11, word),
+            );
+            painter.run(
+                TextRun::new("hello world", Point::new(10.0, 40.0), &style, Color::BLACK)
+                    .track_range(0..11, whole),
+            );
+        });
+        div().size_full().p(20.0).child(drawing.w(200.0).h(80.0))
+    });
+    ui.advance(0.0);
+    let (word, whole) = (word.get_untracked(), whole.get_untracked());
+    assert!(word.size.width > 0.0 && word.size.height > 0.0, "{word:?}");
+    assert!(
+        word.origin.x > whole.origin.x,
+        "the second word starts right of the line start"
+    );
+    assert_near_f32(
+        whole.origin.x,
+        30.0,
+        "window x includes padding and run origin",
+    );
+    assert_near_f32(
+        whole.origin.y,
+        60.0,
+        "window y includes padding and run origin",
+    );
+    assert_near_f32(
+        word.max().x,
+        whole.max().x,
+        "the last word ends where the line ends",
+    );
+    Ok(())
+}
+
+fn assert_near_f32(actual: f32, expected: f32, message: &str) {
+    assert!(
+        (actual - expected).abs() < 0.5,
+        "{message}: {actual} vs {expected}"
+    );
+}
