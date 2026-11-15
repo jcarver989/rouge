@@ -1,7 +1,7 @@
 use thiserror::Error;
 use wgpu::{
     Adapter, BlendState, Color as ClearColor, ColorTargetState, ColorWrites, CommandEncoder,
-    Device, DeviceDescriptor, Extent3d, FragmentState, Instance, LoadOp, MultisampleState,
+    Device, DeviceDescriptor, Extent3d, FragmentState, Instance, Limits, LoadOp, MultisampleState,
     Operations, PipelineCompilationOptions, PipelineLayout, PowerPreference, PrimitiveState,
     PrimitiveTopology, Queue, RenderPass, RenderPassColorAttachment, RenderPassDescriptor,
     RenderPipeline, RenderPipelineDescriptor, RequestAdapterError, RequestAdapterOptions,
@@ -48,6 +48,7 @@ impl Gpu {
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("rouge device"),
+                required_limits: Limits::default().or_worse_values_from(&adapter.limits()),
                 ..Default::default()
             })
             .await?;
