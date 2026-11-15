@@ -3,8 +3,12 @@
 #[allow(dead_code)]
 #[path = "../examples/shared/mod.rs"]
 mod shared;
+#[path = "../examples/shared/todo/mod.rs"]
+mod todo;
 
+use rouge::core::WindowCommand;
 use rouge::core::testing::{TestResult, TestUi, TestUiBuilder};
+use rouge::persist::MemoryStorage;
 use rouge::prelude::*;
 use rouge::widgets::bundled_fonts;
 use shared::counter_view::counter;
@@ -13,6 +17,8 @@ use shared::effects_view::effects_demo;
 use shared::glass_view::glass;
 use shared::motion_view::motion_demo;
 use shared::settings_view::settings;
+use std::error::Error;
+use std::rc::Rc;
 
 #[test]
 fn the_counter_example_counts() -> TestResult {
@@ -77,6 +83,156 @@ fn the_settings_example_switches_tabs_and_checks_for_updates() -> TestResult {
     assert!(ui.text_bounds("Checking…").is_some());
     ui.render()?;
     Ok(())
+}
+
+#[test]
+fn the_todomvc_example_adds_completes_filters_and_clears() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(640.0, 760.0, todo::todo_app);
+    add(&mut ui, "Buy milk");
+    add(&mut ui, "  Walk the dog  ");
+    add(&mut ui, "   ");
+    assert!(ui.text_bounds("2 items left").is_some());
+    assert!(ui.text_bounds("Walk the dog").is_some());
+    assert!(ui.bounds_of("todo-2").is_none(), "blank titles are ignored");
+    ui.click_on("todo-0-toggle")?;
+    assert!(ui.text_bounds("1 item left").is_some());
+    ui.click_on("filter-active")?;
+    ui.run(0.5);
+    assert!(ui.bounds_of("todo-0").is_none());
+    assert!(ui.bounds_of("todo-1").is_some());
+    ui.click_on("filter-all")?;
+    ui.click_on("clear-completed")?;
+    ui.run(0.5);
+    assert!(ui.bounds_of("todo-0").is_none());
+    assert!(ui.bounds_of("clear-completed").is_none());
+    ui.click_on("toggle-all")?;
+    assert!(ui.text_bounds("0 items left").is_some());
+    ui.click_on("todo-1-delete")?;
+    ui.run(0.5);
+    assert!(
+        ui.bounds_of("toggle-all").is_none(),
+        "the list and footer hide when empty"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_todomvc_filter_follows_the_route() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(640.0, 760.0, todo::todo_app);
+    add(&mut ui, "Read");
+    add(&mut ui, "Write");
+    ui.click_on("todo-1-toggle")?;
+    ui.take_window_commands();
+    ui.click_on("filter-completed")?;
+    assert!(
+        matches!(&ui.take_window_commands()[..], [WindowCommand::Navigate(path)] if path == "/completed")
+    );
+    ui.run(0.5);
+    assert!(ui.bounds_of("todo-0").is_none());
+    ui.set_route("/active");
+    ui.run(0.5);
+    assert!(ui.bounds_of("todo-0").is_some());
+    assert!(ui.bounds_of("todo-1").is_none());
+    Ok(())
+}
+
+#[test]
+fn the_todomvc_example_edits_with_commit_cancel_and_delete_on_empty() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(640.0, 760.0, todo::todo_app);
+    add(&mut ui, "Buy milk");
+    add(&mut ui, "Walk the dog");
+    ui.double_click_on("todo-0-title")?;
+    ui.type_text("Buy oat milk");
+    ui.press("enter");
+    assert!(ui.text_bounds("Buy oat milk").is_some());
+    ui.double_click_on("todo-0-title")?;
+    ui.type_text("Something else");
+    ui.press("escape");
+    assert!(ui.text_bounds("Buy oat milk").is_some());
+    ui.double_click_on("todo-1-title")?;
+    ui.type_text("Walk the cat");
+    ui.click_on("todo-0-title")?;
+    assert!(
+        ui.text_bounds("Walk the cat").is_some(),
+        "leaving the editor commits it"
+    );
+    ui.double_click_on("todo-1-title")?;
+    ui.press("backspace enter");
+    ui.run(0.5);
+    assert!(
+        ui.bounds_of("todo-1").is_none(),
+        "an empty title deletes the todo"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_todomvc_example_restores_saved_todos() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let storage = MemoryStorage::default();
+    storage.insert(
+        "todos",
+        r#"[{"id":4,"title":"Saved","done":true},{"id":7,"title":"Open","done":false}]"#,
+    );
+    let mut ui = saved_todos(&storage);
+    assert!(ui.text_bounds("Saved").is_some());
+    assert!(ui.text_bounds("1 item left").is_some());
+    add(&mut ui, "New");
+    assert!(
+        ui.bounds_of("todo-8").is_some(),
+        "ids continue after the saved ones"
+    );
+    drop(ui);
+    let saved = storage.get("todos").ok_or("saved on close")?;
+    assert!(saved.contains("\"New\""));
+    Ok(())
+}
+
+#[test]
+fn toggling_one_todo_costs_the_same_in_a_long_list() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let short = toggle_work(50)?;
+    assert!(short[0] > 0, "the toggle ran its effects");
+    assert_eq!(short, toggle_work(500)?);
+    Ok(())
+}
+
+fn add(ui: &mut TestUi, title: &str) {
+    ui.type_text(title);
+    ui.press("enter");
+}
+
+fn saved_todos(storage: &MemoryStorage) -> TestUi {
+    let storage = storage.clone();
+    let mut ui = example(640.0, 760.0, move || {
+        provide_storage(Rc::new(storage));
+        todo::todo_app()
+    });
+    ui.advance(0.0);
+    ui
+}
+
+fn toggle_work(count: u64) -> Result<[u64; 4], Box<dyn Error>> {
+    let storage = MemoryStorage::default();
+    let todos: Vec<String> = (0..count)
+        .map(|id| format!(r#"{{"id":{id},"title":"Todo {id}","done":false}}"#))
+        .collect();
+    storage.insert("todos", format!("[{}]", todos.join(",")));
+    let mut ui = saved_todos(&storage);
+    ui.click_on("todo-0-toggle")?;
+    ui.run(0.5);
+    let before = ui.stats();
+    ui.click_on("todo-0-toggle")?;
+    let work = ui.stats() - before;
+    Ok([
+        work.reactive.effects_run,
+        work.reactive.memos_run,
+        work.layer_paints,
+        work.layouts,
+    ])
 }
 
 fn example<T: View>(width: f32, height: f32, root: impl FnOnce() -> T) -> TestUi {
