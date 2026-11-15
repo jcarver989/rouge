@@ -1,3 +1,4 @@
+use rouge_core::Corners;
 use rouge_core::testing::{BLUE, CLEAR, RED, TestResult, TestUiBuilder, assert_near, recorder};
 use rouge_core::{
     Fit, ImageData, ImageError, ImageLoadError, ImageSource, Rect, Styled, decode_image, div, image,
@@ -35,7 +36,7 @@ fn fit_modes_contain_cover_and_fill() -> TestResult {
         div()
             .flex()
             .child(cell(Fit::Contain))
-            .child(cell(Fit::Cover).rounded(50.0))
+            .child(cell(Fit::Cover).rounded(Corners::all(50.0)))
             .child(cell(Fit::Fill))
     });
     ui.advance(0.0);

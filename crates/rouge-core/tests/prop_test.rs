@@ -22,9 +22,8 @@ fn props_accept_values_closures_signals_and_memos() {
             .w(width)
             .w(wide)
             .w(move || width.get() + 1.0)
-            .rounded(4.0)
             .rounded(Corners::all(4.0))
-            .rounded(move || width.get())
+            .rounded(move || Corners::all(width.get()))
             .shadow(BoxShadow::md())
             .flex_grow(1.0)
     });

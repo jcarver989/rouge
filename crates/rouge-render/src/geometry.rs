@@ -185,11 +185,6 @@ impl Corners {
     }
 }
 
-impl From<f32> for Corners {
-    fn from(radius: f32) -> Self {
-        Corners::all(radius)
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Edges {

@@ -1,3 +1,4 @@
+use rouge_core::Corners;
 use rouge_core::testing::{BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder};
 use rouge_core::{
     Color, Palette, Point, Rect, Size, Styled, Theme, UiPalette, div, dynamic, editable, rich_text,
@@ -18,7 +19,10 @@ fn ten_props_changed_in_one_batch_resolve_the_element_once() -> TestResult {
                 .h(pick(40.0, 48.0))
                 .p(pick(4.0, 6.0))
                 .px(pick(8.0, 10.0))
-                .rounded(pick(2.0, 6.0))
+                .rounded({
+                    let radius = pick(2.0, 6.0);
+                    move || Corners::all(radius())
+                })
                 .border(pick(1.0, 2.0))
                 .text_size(pick(12.0, 14.0))
                 .gap(pick(1.0, 2.0))

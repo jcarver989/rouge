@@ -1,3 +1,4 @@
+use rouge_core::Corners;
 use rouge_core::Wake;
 use rouge_core::testing::{
     BLACK, BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
@@ -631,7 +632,7 @@ fn background_and_radius_of_a_layer_animate_without_painting() -> TestResult {
     let bound = move || {
         div()
             .bg(move || if on.get() { Color::BLUE } else { Color::RED })
-            .rounded(move || if on.get() { 20.0 } else { 0.0 })
+            .rounded(move || Corners::all(if on.get() { 20.0 } else { 0.0 }))
     };
     let (half, done) = fade_to_blue(bound, |_| on.set(true))?;
     assert_eq!(half.pixel(1, 1), WHITE, "the corner is rounding off");
@@ -646,7 +647,7 @@ fn background_and_radius_of_a_layer_animate_without_painting() -> TestResult {
 fn enter_poses_can_animate_background_and_radius() -> TestResult {
     let _rt = Runtime::new().enter();
     let mut ui = TestUi::canvas(|| {
-        let from = Pose::new().background(Color::BLUE).rounded(20.0);
+        let from = Pose::new().background(Color::BLUE).rounded(Corners::all(20.0));
         let swatch = show(|| true, || div().size(40.0).bg(Color::RED)).enter(from, LINEAR);
         div().size_full().child(swatch)
     });

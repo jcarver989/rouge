@@ -56,7 +56,7 @@ fn view(source: SurfaceSource) -> impl View {
             .child(
                 surface(source)
                     .size_full()
-                    .rounded(20.0)
+                    .rounded(Corners::all(20.0))
                     .fallback(|error| text(error.to_string()).color(Color::WHITE)),
             )
             .child(
@@ -65,7 +65,7 @@ fn view(source: SurfaceSource) -> impl View {
                     .left(32.0)
                     .top(32.0)
                     .p(20.0)
-                    .rounded(28.0)
+                    .rounded(Corners::all(28.0))
                     .backdrop(Glass::new().blur(3.0).edge_width(18.0))
                     .child(
                         text("Glass over a live GPU surface")

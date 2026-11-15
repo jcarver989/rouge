@@ -9,7 +9,7 @@ fn panel(title: &'static str) -> Div {
         .col()
         .gap(12.0)
         .p(16.0)
-        .rounded(12.0)
+        .rounded(Corners::all(12.0))
         .bg(SURFACE)
         .child(text(title).text_size(13.0).weight(600.0).color(MUTED))
 }
@@ -49,7 +49,7 @@ fn cards() -> impl View {
             .justify_between()
             .h(40.0)
             .px(12.0)
-            .rounded(8.0)
+            .rounded(Corners::all(8.0))
             .bg(RAISED)
             .hover(|s| s.bg(0x585b70))
             .layout_transition(Spring::snappy())
@@ -65,7 +65,7 @@ fn cards() -> impl View {
         .items_center()
         .justify_center()
         .h(32.0)
-        .rounded(8.0)
+        .rounded(Corners::all(8.0))
         .bg(ACCENT)
         .on_click(add)
         .child(text("Add card").text_size(13.0).weight(600.0).color(BASE));
@@ -79,14 +79,14 @@ fn switch() -> impl View {
     let knob = div()
         .size(24.0)
         .m(2.0)
-        .rounded(12.0)
+        .rounded(Corners::all(12.0))
         .bg(Color::WHITE)
         .translate_x(on.pick(28.0, 0.0))
         .transition(Spring::bouncy());
     div()
         .w(56.0)
         .h(28.0)
-        .rounded(14.0)
+        .rounded(Corners::all(14.0))
         .bg(on.pick(ACCENT, RAISED))
         .on_click(move |_| on.toggle())
         .child(knob)
@@ -98,7 +98,7 @@ fn spinner() -> impl View {
         .at(1.0, |pose| pose.rotate(360.0))
         .duration(1.2)
         .repeat();
-    div().size(22.0).rounded(5.0).bg(ACCENT).animate(spin)
+    div().size(22.0).rounded(Corners::all(5.0)).bg(ACCENT).animate(spin)
 }
 
 pub(crate) fn motion_demo() -> impl View {

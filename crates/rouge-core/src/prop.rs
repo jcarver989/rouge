@@ -1,7 +1,7 @@
 use crate::Cursor;
 use crate::length::Length;
 use rouge_reactive::{ReadSignal, Signal, memo};
-use rouge_render::{Color, Corners, EffectInstance, ShaderEffect};
+use rouge_render::{Color, EffectInstance, ShaderEffect};
 use std::borrow::Cow;
 
 pub enum Prop<T> {
@@ -97,20 +97,6 @@ impl PropFrom<u32> for Color {
     }
 }
 
-impl PropFrom<f32> for Corners {
-    fn prop_from(value: f32) -> Self {
-        Corners::all(value)
-    }
-}
-
-impl PropFrom<Length> for Corners {
-    fn prop_from(value: Length) -> Self {
-        match value {
-            Length::Px(value) => Corners::all(value),
-            Length::Fraction(_) | Length::Auto => Corners::ZERO,
-        }
-    }
-}
 
 pub struct AnyEffect(pub(crate) EffectInstance);
 

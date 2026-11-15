@@ -25,7 +25,7 @@ fn row(label: &'static str, children: impl View) -> impl View {
 #[component]
 fn section(title: &'static str) -> Div {
     view! {
-        <div flex col p=16.0 rounded=12.0 bg=Role::Elevated border=1.0 border_color=Role::Border>
+        <div flex col p=16.0 rounded={Corners::all(12.0)} bg=Role::Elevated border=1.0 border_color=Role::Border>
             <text color=Role::TextMuted text_size=12.0 bold>{title}</text>
         </div>
     }
@@ -95,7 +95,7 @@ fn appearance(dark: Signal<bool>) -> impl View {
     };
     let swatch = move |index: usize| {
         view! {
-            <div size=22.0 rounded=11.0 bg=swatches[index] border=2.0 cursor=Cursor::Pointer
+            <div size=22.0 rounded={Corners::all(11.0)} bg=swatches[index] border=2.0 cursor=Cursor::Pointer
                  border_color={move || if accent.get() == index { theme.get().text } else { Color::TRANSPARENT }}
                  on_click={move |_| accent.set(index)}/>
         }

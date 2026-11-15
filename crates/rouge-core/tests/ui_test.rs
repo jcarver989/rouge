@@ -1,3 +1,4 @@
+use rouge_core::Corners;
 use rouge_core::Wake;
 use rouge_core::testing::{
     BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
@@ -339,7 +340,7 @@ fn zoom_shrinks_the_logical_window_and_paints_everything_at_the_higher_scale() -
             .test_id("block")
             .w(32.0)
             .h(20.0)
-            .rounded(8.0)
+            .rounded(Corners::all(8.0))
             .bg(Color::RED);
         (div().test_id("root").size_full().child(block), zoom())
     });

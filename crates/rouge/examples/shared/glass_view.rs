@@ -6,7 +6,7 @@ fn blob(x: f32, y: f32, size: f32, color: u32) -> impl View {
         .left(x)
         .top(y)
         .size(size)
-        .rounded(size / 2.0)
+        .rounded(Corners::all(size / 2.0))
         .bg(color)
 }
 
@@ -14,7 +14,7 @@ fn pill(label: &'static str) -> impl View {
     div()
         .px(14.0)
         .py(7.0)
-        .rounded(16.0)
+        .rounded(Corners::all(16.0))
         .backdrop(Glass::new().blur(2.0).edge_width(8.0))
         .child(
             text(label)
@@ -51,7 +51,7 @@ pub(crate) fn glass(lifted: Signal<bool>) -> impl View {
                 .col()
                 .justify_between()
                 .p(22.0)
-                .rounded(36.0)
+                .rounded(Corners::all(36.0))
                 .backdrop(Glass::new().blur(3.0).edge_width(22.0))
                 .translate_y(lifted.pick(-24.0, 0.0))
                 .scale(lifted.pick(1.04, 1.0))

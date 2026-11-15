@@ -1,5 +1,6 @@
 mod common;
 
+use rouge_core::Corners;
 use common::{Stage, StageBuilder, background, quads, settled, square};
 use rouge_core::testing::{BLUE, LINEAR, RED, TestResult, WHITE, assert_near};
 use rouge_core::{
@@ -343,7 +344,7 @@ fn fill_and_corner_radius_animate_without_uploading_instances() -> TestResult {
         .set_transition(stage.child, Some(LINEAR.into()));
     stage.pose(
         stage.child,
-        Pose::new().background(Color::BLUE).rounded(20.0),
+        Pose::new().background(Color::BLUE).rounded(Corners::all(20.0)),
         true,
     );
     stage.run(0.5);
@@ -733,7 +734,7 @@ fn masks_can_clip_to_the_rounded_shape_or_fade_radially() -> TestResult {
         .child(square())
         .at(40.0, 40.0)
         .build()?;
-    stage.pose(stage.child, Pose::new().rounded(10.0), false);
+    stage.pose(stage.child, Pose::new().rounded(Corners::all(10.0)), false);
     stage.effect(stage.child, EffectSlot::Mask, &Mask::shape(), false);
     stage.draw();
     assert_eq!(

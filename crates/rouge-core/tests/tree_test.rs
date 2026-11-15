@@ -1,3 +1,4 @@
+use rouge_core::Corners;
 use rouge_core::Wake;
 use rouge_core::testing::{BLACK, BLUE, GREEN, RED, TestResult, TestUi, WHITE, counter};
 use rouge_core::{Color, Div, Glass, Point, Spring, Styled, div};
@@ -236,7 +237,7 @@ fn backdrop_blurs_content_behind_the_element_and_keeps_children_sharp() -> TestR
             .top(10.0)
             .w(100.0)
             .h(60.0)
-            .rounded(12.0);
+            .rounded(Corners::all(12.0));
         let child = div()
             .absolute()
             .left(40.0)

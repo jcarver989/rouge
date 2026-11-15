@@ -8,7 +8,7 @@ pub(crate) fn counter() -> impl View {
 
     view! {
         <div size_full flex col items_center justify_center gap=20.0 bg=BASE>
-            <div flex col items_center gap=4.0 px=40.0 py=24.0 rounded=16.0 bg=SURFACE
+            <div flex col items_center gap=4.0 px=40.0 py=24.0 rounded={Corners::all(16.0)} bg=SURFACE
                  shadow=BoxShadow::lg()>
                 <text text_size=56.0 bold color={move || if count.get() < 0 { RED } else { ACCENT }}>
                     "{count}"

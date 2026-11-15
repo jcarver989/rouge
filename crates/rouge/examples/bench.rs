@@ -175,7 +175,7 @@ fn layers_bench(layers: usize) -> Result<(), TestError> {
                     .left(col * 20.0)
                     .top(row * 20.0)
                     .size(16.0)
-                    .rounded(4.0)
+                    .rounded(Corners::all(4.0))
                     .bg(Color::hsl(i as f32 * 3.0, 0.7, 0.6))
                     .translate_x(move || if on.get() { 12.0 } else { 0.0 })
                     .rotate(move || if on.get() { 90.0 } else { 0.0 })
@@ -430,7 +430,10 @@ fn batched_props() -> Result<Report, TestError> {
                 .h(pick(40.0, 48.0))
                 .p(pick(4.0, 6.0))
                 .px(pick(8.0, 10.0))
-                .rounded(pick(2.0, 6.0))
+                .rounded({
+                    let radius = pick(2.0, 6.0);
+                    move || Corners::all(radius())
+                })
                 .border(pick(1.0, 2.0))
                 .opacity(pick(1.0, 0.9))
                 .text_size(pick(12.0, 14.0))

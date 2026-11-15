@@ -1,3 +1,4 @@
+use rouge_core::Corners;
 use rouge_core::testing::{TestResult, TestUiBuilder, assert_near};
 use rouge_core::{Color, Fill, Palette, Role, Styled, Theme, div, text};
 use rouge_reactive::Runtime;
@@ -10,7 +11,7 @@ fn a_default_theme_is_provided_and_switching_it_repaints_bound_props_only() -> T
     let _rt = Runtime::new().enter();
     let (mut ui, theme) = TestUiBuilder::default().build_with(|| {
         let theme = Theme::current();
-        let root = div().size_full().bg(Role::Elevated).rounded(8.0);
+        let root = div().size_full().bg(Role::Elevated).rounded(Corners::all(8.0));
         (root, theme)
     });
     assert_eq!(theme.get_untracked(), UiPalette::light().map(Color::from));

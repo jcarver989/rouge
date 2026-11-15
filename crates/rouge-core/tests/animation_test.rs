@@ -1,3 +1,4 @@
+use rouge_core::Corners;
 use rouge_core::{Color, Ease, Keyframes, LayerProp, Pose};
 
 #[test]
@@ -67,7 +68,7 @@ fn poses_list_only_the_props_they_set() {
 
     let styled = Pose::new()
         .background(Color::RED.with_alpha(0.5))
-        .rounded(6.0);
+        .rounded(Corners::all(6.0));
     let fill = LayerProp::FILL.map(|prop| styled.get(prop));
     assert_eq!(
         fill,
