@@ -11,6 +11,7 @@ rouge-theme.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 rustc-hash.workspace = true
+slotmap.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 image.workspace = true

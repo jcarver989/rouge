@@ -7,7 +7,7 @@ use rouge_render::{Color, Corners, EffectDraw, Glass, GpuError, LayerDraw, Point
 #[test]
 fn backdrop_blur_softens_what_is_behind_it_only_inside_its_shape() -> Result<(), GpuError> {
     let glass = backdrop(Rect::new(0.0, 0.0, 100.0, 50.0), 16.0);
-    let img = over(&split_scene(), glass)?;
+    let img = over(split_scene(), glass)?;
 
     let row = |y: u32| (0..100).map(|x| img.pixel(x, y)[0]).collect::<Vec<u8>>();
     let blurred = row(25);
@@ -49,7 +49,7 @@ fn backdrop_blur_softens_what_is_behind_it_only_inside_its_shape() -> Result<(),
 fn larger_blur_radius_spreads_further() -> Result<(), GpuError> {
     let at = |blur: f32| {
         let glass = backdrop(Rect::new(0.0, 0.0, 100.0, 100.0), blur);
-        Ok::<_, GpuError>(over(&split_scene(), glass)?.pixel(38, 50)[0])
+        Ok::<_, GpuError>(over(split_scene(), glass)?.pixel(38, 50)[0])
     };
     let (small, large) = (at(4.0)?, at(32.0)?);
     assert!(
@@ -69,7 +69,7 @@ fn backdrop_tint_and_rounded_shape() -> Result<(), GpuError> {
             Rect::new(10.0, 10.0, 80.0, 80.0),
         )
     };
-    let img = over(&quads([full(Color::WHITE)]), glass)?;
+    let img = over(quads([full(Color::WHITE)]), glass)?;
     assert_near(
         img.pixel(50, 50),
         [255, 127, 127, 255],
@@ -85,16 +85,15 @@ fn layer_content_draws_sharp_on_top_of_its_backdrop() -> Result<(), GpuError> {
     let scene = split_scene();
     let content = quads([Quad::new(Rect::new(40.0, 40.0, 20.0, 20.0), Color::RED)]);
     let glass = backdrop(Rect::new(0.0, 0.0, 100.0, 100.0), 16.0);
-    let img = render_layers(
-        100,
-        &[
-            LayerDraw::new(&scene),
+    let img = render_layers(100, |canvas| {
+        vec![
+            LayerDraw::new(canvas.add(scene)),
             LayerDraw {
                 backdrop: Some(glass),
-                ..LayerDraw::new(&content)
+                ..LayerDraw::new(canvas.add(content))
             },
-        ],
-    )?;
+        ]
+    })?;
     assert_near(img.pixel(50, 50), RED, "content is above the glass");
     assert_near(img.pixel(40, 40), RED, "and has crisp edges");
     assert_ne!(img.pixel(39, 39), RED);
@@ -108,7 +107,7 @@ fn refraction_and_highlight_affect_only_the_rim() -> Result<(), GpuError> {
             corner_radii: Corners::all(20.0),
             ..EffectDraw::new(&glass, bounds)
         };
-        over(&split_scene(), backdrop)
+        over(split_scene(), backdrop)
     };
     let bounds = Rect::new(10.0, 10.0, 80.0, 80.0);
     let plain = Glass::frosted(4.0).edge_width(12.0);
@@ -145,7 +144,7 @@ fn saturation_scales_how_colorful_the_backdrop_shows_through() -> Result<(), Gpu
     let chroma = |glass: Glass| {
         let scene = quads([full(Color::new(0.8, 0.4, 0.4, 1.0))]);
         let img = over(
-            &scene,
+            scene,
             EffectDraw::new(&glass, Rect::new(10.0, 10.0, 80.0, 80.0)),
         )?;
         let [r, g, ..] = img.pixel(50, 50);
@@ -168,7 +167,7 @@ fn a_light_brightens_the_rim_nearest_to_it_and_leaves_the_far_side_alone() -> Re
             corner_radii: Corners::all(20.0),
             ..EffectDraw::new(&glass, Rect::new(10.0, 10.0, 80.0, 80.0))
         };
-        over(&quads([full(Color::BLACK)]), backdrop)
+        over(quads([full(Color::BLACK)]), backdrop)
     };
     let dark = Glass::frosted(0.0).edge_width(12.0);
     let (unlit, lit) = (
@@ -202,7 +201,7 @@ fn an_overhead_rim_light_lights_the_top_edge_and_leaves_the_bottom_unfilled() ->
             corner_radii: Corners::all(20.0),
             ..EffectDraw::new(&glass, Rect::new(10.0, 10.0, 80.0, 80.0))
         };
-        over(&quads([full(Color::BLACK)]), backdrop)
+        over(quads([full(Color::BLACK)]), backdrop)
     };
     let lit = Glass::frosted(0.0).edge_width(1.5).highlight(1.0);
     let (diagonal, overhead) = (draw(lit)?, draw(lit.rim_light(0.0, 0.0))?);
@@ -236,7 +235,7 @@ fn shadow_falls_outside_the_glass_and_never_darkens_it() -> Result<(), GpuError>
             corner_radii: Corners::all(8.0),
             ..EffectDraw::new(&glass, bounds)
         };
-        over(&quads([full(Color::WHITE)]), backdrop)
+        over(quads([full(Color::WHITE)]), backdrop)
     };
     let (plain, shadowed) = (
         draw(Glass::frosted(2.0))?,

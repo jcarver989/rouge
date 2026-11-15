@@ -2,11 +2,41 @@ use crate::atlas::AtlasRect;
 use crate::image::{ImageData, ImageFormat};
 use crate::{Color, Corners, Edges, Point, Rect, Size};
 use bytemuck::{Pod, Zeroable};
+use slotmap::{SlotMap, new_key_type};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use wgpu::{VertexAttribute, vertex_attr_array};
 
 static NEXT_LIST: AtomicU64 = AtomicU64::new(1);
+
+new_key_type! {
+    pub struct ListKey;
+}
+
+#[derive(Default)]
+pub struct DrawLists(SlotMap<ListKey, DrawList>);
+
+impl DrawLists {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, list: DrawList) -> ListKey {
+        self.0.insert(list)
+    }
+
+    pub fn get(&self, key: ListKey) -> Option<&DrawList> {
+        self.0.get(key)
+    }
+
+    pub fn get_mut(&mut self, key: ListKey) -> Option<&mut DrawList> {
+        self.0.get_mut(key)
+    }
+
+    pub fn remove(&mut self, key: ListKey) -> Option<DrawList> {
+        self.0.remove(key)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quad {
@@ -170,10 +200,8 @@ impl DrawList {
     }
 
     pub fn replace(&mut self, other: DrawList) {
-        self.instances.clear();
-        self.instances.extend_from_slice(&other.instances);
-        self.batches.clear();
-        self.batches.extend(other.batches);
+        self.instances = other.instances;
+        self.batches = other.batches;
         self.extent = other.extent;
         self.revision += 1;
     }

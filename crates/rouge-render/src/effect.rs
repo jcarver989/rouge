@@ -128,12 +128,6 @@ impl EffectInstance {
     }
 }
 
-impl<T: ShaderEffect> From<&T> for EffectInstance {
-    fn from(effect: &T) -> Self {
-        EffectInstance::new(effect)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EffectDraw {
     pub effect: EffectInstance,
@@ -444,12 +438,7 @@ impl Glass {
             highlight: 0.0,
             edge_width: 1.0,
             shadow: 0.0,
-            saturation: 1.0,
-            light: Point::new(0.0, 0.0),
-            light_strength: 0.0,
-            light_reach: 1.0,
-            rim_angle: DIAGONAL_RIM_ANGLE,
-            rim_fill: 0.6,
+            ..Glass::new()
         }
     }
 

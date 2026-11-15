@@ -9,7 +9,8 @@ use rouge_render::{Color, LayerDraw, Quad, Rect};
 fn frames_read_back_at_device_size_and_round_trip_through_png() -> TestResult {
     let list = quads([Quad::new(Rect::new(0.0, 0.0, 3.0, 2.0), Color::RED)]);
     let mut canvas = Canvas::new(5, 2.0, Color::TRANSPARENT)?;
-    canvas.frame(&[LayerDraw::new(&list)]);
+    let key = canvas.add(list);
+    canvas.frame(&[LayerDraw::new(key)]);
     let img = canvas.image()?;
     assert_eq!((img.width, img.height, img.pixels.len()), (5, 5, 100));
     assert_near(img.pixel(4, 3), RED, "inside the quad at 2x");

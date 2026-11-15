@@ -23,12 +23,11 @@ pub use geometry::{Affine, Corners, Edges, Point, Rect, Size};
 pub use gpu::{Gpu, GpuError};
 pub use image::{ImageData, ImageError, ImageFormat};
 pub use renderer::{
-    Group, Item, LayerDraw, RenderStats, Renderer, SurfaceDraw, Viewport, device_rect,
+    Command, Group, LayerDraw, RenderStats, Renderer, Scene, SurfaceDraw, Viewport, device_rect,
 };
-pub use scene::{DrawList, Glyph, ImageQuad, Quad, Shadow};
+pub use scene::{DrawList, DrawLists, Glyph, ImageQuad, ListKey, Quad, Shadow};
 pub use surface::{
-    Acquire, AlphaMode, BufferDesc, BufferRef, BufferSetId, Fence, FenceSignal, Frame, FrameId,
-    NativeBuffer, Origin, Placement, QueueMode, SharedBuffer, Sharing, SurfaceConfig, SurfaceCx,
-    SurfaceError, SurfaceEvent, SurfaceId, SurfaceProducer, SurfaceSource, SurfaceStats,
+    AlphaMode, BufferDesc, BufferRef, Frame, Origin, SharedBuffer, Sharing, SurfaceConfig,
+    SurfaceCx, SurfaceError, SurfaceEvent, SurfaceId, SurfaceProducer, SurfaceSource, SurfaceStats,
     SurfaceStatus, Surfaces, surface_channel,
 };

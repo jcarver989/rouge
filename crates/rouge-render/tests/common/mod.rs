@@ -2,8 +2,8 @@
 
 use rouge_render::headless::{Headless, Image};
 use rouge_render::{
-    Atlas, Color, DrawList, EffectDraw, Glass, GpuError, Item, LayerDraw, Quad, Rect, RenderStats,
-    Viewport,
+    Atlas, Color, Command, DrawList, DrawLists, EffectDraw, Glass, GpuError, LayerDraw, ListKey,
+    Quad, Rect, RenderStats, Scene, Viewport,
 };
 use std::error::Error;
 
@@ -18,6 +18,8 @@ pub(crate) struct Canvas {
     headless: Headless,
     atlas: Atlas,
     clear: Color,
+    lists: DrawLists,
+    commands: Vec<Command>,
 }
 
 impl Canvas {
@@ -26,6 +28,8 @@ impl Canvas {
             headless: Headless::new(Viewport::new(size, size, scale))?,
             atlas: Atlas::new(),
             clear,
+            lists: DrawLists::new(),
+            commands: Vec::new(),
         })
     }
 
@@ -33,9 +37,20 @@ impl Canvas {
         &mut self.atlas
     }
 
-    pub(crate) fn frame(&mut self, layers: &[LayerDraw<'_>]) -> RenderStats {
-        let items: Vec<_> = layers.iter().copied().map(Item::Layer).collect();
-        self.headless.render(self.clear, &items, &mut self.atlas)
+    pub(crate) fn add(&mut self, list: DrawList) -> ListKey {
+        self.lists.insert(list)
+    }
+
+    pub(crate) fn list(&mut self, key: ListKey) -> Result<&mut DrawList, &'static str> {
+        self.lists.get_mut(key).ok_or("the list was never added")
+    }
+
+    pub(crate) fn frame(&mut self, layers: &[LayerDraw]) -> RenderStats {
+        self.commands.clear();
+        self.commands
+            .extend(layers.iter().copied().map(Command::Draw));
+        let scene = Scene::new(&self.commands, &self.lists);
+        self.headless.render(self.clear, scene, &mut self.atlas)
     }
 
     pub(crate) fn image(&self) -> Result<Image, GpuError> {
@@ -43,19 +58,24 @@ impl Canvas {
     }
 }
 
-pub(crate) fn render_layers(size: u32, layers: &[LayerDraw<'_>]) -> Result<Image, GpuError> {
+pub(crate) fn render_layers(
+    size: u32,
+    layers: impl FnOnce(&mut Canvas) -> Vec<LayerDraw>,
+) -> Result<Image, GpuError> {
     let mut canvas = Canvas::new(size, 1.0, Color::TRANSPARENT)?;
-    canvas.frame(layers);
+    let layers = layers(&mut canvas);
+    canvas.frame(&layers);
     canvas.image()
 }
 
-pub(crate) fn over(scene: &DrawList, glass: EffectDraw) -> Result<Image, GpuError> {
-    let empty = DrawList::new();
-    let glass = LayerDraw {
-        backdrop: Some(glass),
-        ..LayerDraw::new(&empty)
-    };
-    render_layers(100, &[LayerDraw::new(scene), glass])
+pub(crate) fn over(scene: DrawList, glass: EffectDraw) -> Result<Image, GpuError> {
+    render_layers(100, |canvas| {
+        let glass = LayerDraw {
+            backdrop: Some(glass),
+            ..LayerDraw::default()
+        };
+        vec![LayerDraw::new(canvas.add(scene)), glass]
+    })
 }
 
 pub(crate) fn quads(quads: impl IntoIterator<Item = Quad>) -> DrawList {

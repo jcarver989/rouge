@@ -1,18 +1,17 @@
 use crate::gpu::create_texture;
 #[cfg(target_os = "macos")]
-use crate::interop::{InteropError, IoSurface, import_io_surface};
+use crate::interop::{IoSurface, import_io_surface};
 use crate::{Gpu, Rect};
-use std::collections::{HashMap, VecDeque};
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+use rustc_hash::FxHashMap;
+use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
 use std::mem::take;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::sync::oneshot::{self, error::TryRecvError as FenceError};
 #[cfg(target_arch = "wasm32")]
 use web_time::{Duration, Instant};
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,23 +28,10 @@ type StatusSink = Box<dyn Fn(SurfaceStatus)>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SurfaceId(u64);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BufferSetId(u64);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BufferRef {
-    pub set: BufferSetId,
-    pub index: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FrameId(u64);
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum QueueMode {
-    #[default]
-    Mailbox,
-    Timed,
+    pub(crate) set: u64,
+    index: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,36 +48,12 @@ pub enum AlphaMode {
     Opaque,
 }
 
-pub struct Fence(oneshot::Receiver<()>);
-
-pub struct FenceSignal {
-    sender: oneshot::Sender<()>,
-    waker: Option<Waker>,
-}
-
-impl FenceSignal {
-    pub fn signal(self) {
-        let _ = self.sender.send(());
-        if let Some(waker) = &self.waker {
-            waker();
-        }
-    }
-}
-
-#[derive(Default)]
-pub enum Acquire {
-    #[default]
-    Ready,
-    Fence(Fence),
-}
-
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     buffer: BufferRef,
     region: Option<Rect>,
     origin: Origin,
     alpha: AlphaMode,
-    acquire: Acquire,
-    present_at: Option<Instant>,
 }
 
 impl Frame {
@@ -101,8 +63,6 @@ impl Frame {
             region: None,
             origin: Origin::TopLeft,
             alpha: AlphaMode::Premultiplied,
-            acquire: Acquire::Ready,
-            present_at: None,
         }
     }
 
@@ -120,33 +80,10 @@ impl Frame {
         self.alpha = alpha;
         self
     }
-
-    pub fn after(mut self, fence: Fence) -> Self {
-        self.acquire = Acquire::Fence(fence);
-        self
-    }
-
-    pub fn present_at(mut self, at: Instant) -> Self {
-        self.present_at = Some(at);
-        self
-    }
-
-    pub fn buffer(&self) -> BufferRef {
-        self.buffer
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceConfig {
-    pub seq: u64,
-    pub width: u32,
-    pub height: u32,
-    pub scale: f32,
-    pub visible: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Placement {
     pub width: u32,
     pub height: u32,
     pub scale: f32,
@@ -157,25 +94,18 @@ pub struct Placement {
 pub enum SurfaceError {
     #[error("this platform cannot share {0} with the compositor")]
     Unsupported(&'static str),
+    #[error("the surface has not been attached to a compositor")]
+    NotAttached,
     #[error("the producer renders on a different GPU from the compositor")]
     AdapterMismatch,
     #[error("surface buffers must be BGRA8 or RGBA8 without sRGB encoding, not {0:?}")]
     Format(TextureFormat),
+    #[error("failed to allocate a {width}x{height} shared buffer")]
+    Allocation { width: u32, height: u32 },
     #[error("failed to share a buffer with the compositor: {0}")]
     Import(String),
     #[error("{0}")]
     Producer(String),
-}
-
-#[cfg(target_os = "macos")]
-impl From<InteropError> for SurfaceError {
-    fn from(error: InteropError) -> Self {
-        match error {
-            InteropError::Unsupported(what) => SurfaceError::Unsupported(what),
-            InteropError::Format { format, .. } => SurfaceError::Format(format),
-            other => SurfaceError::Import(other.to_string()),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -186,29 +116,18 @@ pub enum SurfaceStatus {
     Failed(SurfaceError),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SurfaceEvent {
-    Attached(Box<SurfaceCx>),
+    Attached,
     Configure(SurfaceConfig),
     FrameRequest { target: Instant },
-    Released(BufferRef),
-    Presented { frame: FrameId, at: Instant },
-    Discarded(FrameId),
     Detached,
 }
 
-impl Debug for SurfaceEvent {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            SurfaceEvent::Attached(cx) => write!(f, "Attached({})", cx.adapter.name),
-            SurfaceEvent::Configure(config) => write!(f, "Configure({config:?})"),
-            SurfaceEvent::FrameRequest { target } => write!(f, "FrameRequest({target:?})"),
-            SurfaceEvent::Released(buffer) => write!(f, "Released({buffer:?})"),
-            SurfaceEvent::Presented { frame, at } => write!(f, "Presented({frame:?}, {at:?})"),
-            SurfaceEvent::Discarded(frame) => write!(f, "Discarded({frame:?})"),
-            SurfaceEvent::Detached => write!(f, "Detached"),
-        }
-    }
+enum Notice {
+    Attached(Box<SurfaceCx>),
+    Event(SurfaceEvent),
+    Released(BufferRef),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -255,15 +174,10 @@ impl BufferDesc {
 }
 
 #[derive(Clone, Debug)]
-pub enum NativeBuffer {
-    #[cfg(target_os = "macos")]
-    IoSurface(IoSurface),
-}
-
-#[derive(Clone, Debug)]
 pub struct SharedBuffer {
     texture: Texture,
-    native: Option<NativeBuffer>,
+    #[cfg(target_os = "macos")]
+    io_surface: Option<IoSurface>,
 }
 
 impl SharedBuffer {
@@ -271,16 +185,9 @@ impl SharedBuffer {
         &self.texture
     }
 
-    pub fn native(&self) -> Option<&NativeBuffer> {
-        self.native.as_ref()
-    }
-
     #[cfg(target_os = "macos")]
     pub fn io_surface(&self) -> Option<&IoSurface> {
-        match &self.native {
-            Some(NativeBuffer::IoSurface(surface)) => Some(surface),
-            None => None,
-        }
+        self.io_surface.as_ref()
     }
 }
 
@@ -305,41 +212,24 @@ impl SurfaceCx {
         &self.adapter
     }
 
-    pub fn allocate(&self, desc: &BufferDesc) -> Result<Vec<SharedBuffer>, SurfaceError> {
+    fn allocate(&self, desc: &BufferDesc) -> Result<Vec<SharedBuffer>, SurfaceError> {
         check_format(desc.format)?;
         (0..desc.count.max(1))
             .map(|_| match desc.sharing {
                 Sharing::Device => Ok(SharedBuffer {
-                    texture: self.device_texture(desc),
-                    native: None,
+                    texture: create_texture(
+                        &self.device,
+                        "rouge surface buffer",
+                        (desc.width.max(1), desc.height.max(1)),
+                        desc.format,
+                        buffer_usage(),
+                    ),
+                    #[cfg(target_os = "macos")]
+                    io_surface: None,
                 }),
                 Sharing::Native => native_buffer(self, desc),
             })
             .collect()
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn import_io_surface(&self, surface: IoSurface) -> Result<SharedBuffer, SurfaceError> {
-        let texture = import_io_surface(
-            &self.device,
-            &surface,
-            TextureFormat::Bgra8Unorm,
-            buffer_usage(),
-        )?;
-        Ok(SharedBuffer {
-            texture,
-            native: Some(NativeBuffer::IoSurface(surface)),
-        })
-    }
-
-    fn device_texture(&self, desc: &BufferDesc) -> Texture {
-        create_texture(
-            &self.device,
-            "rouge surface buffer",
-            (desc.width.max(1), desc.height.max(1)),
-            desc.format,
-            buffer_usage(),
-        )
     }
 }
 
@@ -348,7 +238,12 @@ fn native_buffer(cx: &SurfaceCx, desc: &BufferDesc) -> Result<SharedBuffer, Surf
     if desc.format != TextureFormat::Bgra8Unorm {
         return Err(SurfaceError::Format(desc.format));
     }
-    cx.import_io_surface(IoSurface::new(desc.width, desc.height)?)
+    let surface = IoSurface::new(desc.width, desc.height)?;
+    let texture = import_io_surface(&cx.device, &surface, desc.format, buffer_usage())?;
+    Ok(SharedBuffer {
+        texture,
+        io_surface: Some(surface),
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -371,27 +266,33 @@ fn check_format(format: TextureFormat) -> Result<(), SurfaceError> {
 }
 
 enum Message {
-    Register(BufferSetId, Vec<Texture>),
-    Unregister(BufferSetId),
-    Submit(FrameId, Frame),
+    Register(u64, Vec<Texture>),
+    Unregister(u64),
+    Submit(Frame),
     RequestFrame,
     Fail(SurfaceError),
+}
+
+struct Pool {
+    desc: BufferDesc,
+    set: u64,
+    buffers: Vec<SharedBuffer>,
+    free: VecDeque<u32>,
 }
 
 pub struct SurfaceProducer {
     id: SurfaceId,
     messages: UnboundedSender<Message>,
-    events: UnboundedReceiver<SurfaceEvent>,
-    waker: Option<Waker>,
-    next_set: u64,
-    next_frame: u64,
+    notices: UnboundedReceiver<Notice>,
+    cx: Option<SurfaceCx>,
+    pool: Option<Pool>,
+    sets: u64,
 }
 
 pub struct SurfaceSource {
     id: SurfaceId,
-    queue: QueueMode,
     messages: UnboundedReceiver<Message>,
-    events: UnboundedSender<SurfaceEvent>,
+    notices: UnboundedSender<Notice>,
 }
 
 impl SurfaceSource {
@@ -400,23 +301,22 @@ impl SurfaceSource {
     }
 }
 
-pub fn surface_channel(queue: QueueMode) -> (SurfaceProducer, SurfaceSource) {
+pub fn surface_channel() -> (SurfaceProducer, SurfaceSource) {
     let id = SurfaceId(NEXT_SURFACE.fetch_add(1, Ordering::Relaxed));
     let (messages, inbox) = unbounded_channel();
-    let (events, outbox) = unbounded_channel();
+    let (notices, outbox) = unbounded_channel();
     let producer = SurfaceProducer {
         id,
         messages,
-        events: outbox,
-        waker: None,
-        next_set: 0,
-        next_frame: 0,
+        notices: outbox,
+        cx: None,
+        pool: None,
+        sets: 0,
     };
     let source = SurfaceSource {
         id,
-        queue,
         messages: inbox,
-        events,
+        notices,
     };
     (producer, source)
 }
@@ -426,26 +326,54 @@ impl SurfaceProducer {
         self.id
     }
 
-    pub fn register(&mut self, buffers: &[SharedBuffer]) -> BufferSetId {
-        self.next_set += 1;
-        let set = BufferSetId(self.next_set);
+    pub fn cx(&self) -> Option<&SurfaceCx> {
+        self.cx.as_ref()
+    }
+
+    pub fn configure(&mut self, desc: BufferDesc) -> Result<(), SurfaceError> {
+        if self.pool.as_ref().is_some_and(|pool| pool.desc == desc) {
+            return Ok(());
+        }
+        let cx = self.cx.as_ref().ok_or(SurfaceError::NotAttached)?;
+        let buffers = cx.allocate(&desc)?;
+        self.sets += 1;
         let textures = buffers
             .iter()
             .map(|buffer| buffer.texture.clone())
             .collect();
-        self.send(Message::Register(set, textures));
-        set
+        self.send(Message::Register(self.sets, textures));
+        if let Some(old) = self.pool.take() {
+            self.send(Message::Unregister(old.set));
+        }
+        self.pool = Some(Pool {
+            desc,
+            set: self.sets,
+            free: (0..buffers.len() as u32).collect(),
+            buffers,
+        });
+        Ok(())
     }
 
-    pub fn unregister(&mut self, set: BufferSetId) {
-        self.send(Message::Unregister(set));
+    pub fn acquire(&mut self) -> Option<(BufferRef, &SharedBuffer)> {
+        let pool = self.pool.as_mut()?;
+        let index = pool.free.pop_front()?;
+        let buffer = BufferRef {
+            set: pool.set,
+            index,
+        };
+        Some((buffer, &pool.buffers[index as usize]))
     }
 
-    pub fn submit(&mut self, frame: Frame) -> FrameId {
-        self.next_frame += 1;
-        let id = FrameId(self.next_frame);
-        self.send(Message::Submit(id, frame));
-        id
+    pub fn buffers(&self) -> &[SharedBuffer] {
+        self.pool.as_ref().map_or(&[], |pool| &pool.buffers)
+    }
+
+    pub fn free_buffers(&self) -> usize {
+        self.pool.as_ref().map_or(0, |pool| pool.free.len())
+    }
+
+    pub fn submit(&mut self, frame: Frame) {
+        self.send(Message::Submit(frame));
     }
 
     pub fn request_frame(&self) {
@@ -456,41 +384,56 @@ impl SurfaceProducer {
         self.send(Message::Fail(error));
     }
 
-    pub fn fence(&self) -> (FenceSignal, Fence) {
-        let (sender, receiver) = oneshot::channel();
-        let signal = FenceSignal {
-            sender,
-            waker: self.waker.clone(),
-        };
-        (signal, Fence(receiver))
-    }
-
     pub fn try_recv(&mut self) -> Option<SurfaceEvent> {
-        let event = self.events.try_recv().ok()?;
-        Some(self.observe(event))
+        while let Ok(notice) = self.notices.try_recv() {
+            if let Some(event) = self.observe(notice) {
+                return Some(event);
+            }
+        }
+        None
     }
 
     pub async fn recv(&mut self) -> Option<SurfaceEvent> {
-        let event = self.events.recv().await?;
-        Some(self.observe(event))
+        loop {
+            let notice = self.notices.recv().await?;
+            if let Some(event) = self.observe(notice) {
+                return Some(event);
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn blocking_recv(&mut self) -> Option<SurfaceEvent> {
-        let event = self.events.blocking_recv()?;
-        Some(self.observe(event))
+        loop {
+            let notice = self.notices.blocking_recv()?;
+            if let Some(event) = self.observe(notice) {
+                return Some(event);
+            }
+        }
     }
 
-    fn observe(&mut self, event: SurfaceEvent) -> SurfaceEvent {
-        if let SurfaceEvent::Attached(cx) = &event {
-            self.waker.clone_from(&cx.waker);
+    fn observe(&mut self, notice: Notice) -> Option<SurfaceEvent> {
+        match notice {
+            Notice::Attached(cx) => {
+                self.cx = Some(*cx);
+                Some(SurfaceEvent::Attached)
+            }
+            Notice::Event(event) => Some(event),
+            Notice::Released(buffer) => {
+                if let Some(pool) = &mut self.pool
+                    && pool.set == buffer.set
+                    && !pool.free.contains(&buffer.index)
+                {
+                    pool.free.push_back(buffer.index);
+                }
+                None
+            }
         }
-        event
     }
 
     fn send(&self, message: Message) {
         if self.messages.send(message).is_ok()
-            && let Some(waker) = &self.waker
+            && let Some(waker) = self.cx.as_ref().and_then(|cx| cx.waker.as_ref())
         {
             waker();
         }
@@ -508,7 +451,6 @@ pub struct SurfaceStats {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Latched {
-    pub frame: FrameId,
     pub buffer: BufferRef,
     pub texture: Texture,
     pub region: Rect,
@@ -516,23 +458,16 @@ pub(crate) struct Latched {
     pub alpha: AlphaMode,
 }
 
-struct Pending {
-    id: FrameId,
-    frame: Frame,
-    ready: bool,
-}
-
 struct Entry {
-    queue: QueueMode,
     messages: UnboundedReceiver<Message>,
-    events: UnboundedSender<SurfaceEvent>,
+    notices: UnboundedSender<Notice>,
     status: StatusSink,
-    sets: HashMap<BufferSetId, Vec<Texture>>,
-    pending: VecDeque<Pending>,
+    sets: Vec<(u64, Vec<Texture>)>,
+    pending: Option<Frame>,
     current: Option<Latched>,
-    unreported: Vec<FrameId>,
-    placement: Option<Placement>,
-    seq: u64,
+    latched: u64,
+    config: Option<SurfaceConfig>,
+    binds: usize,
     wants_frame: bool,
     detached: bool,
     failed: bool,
@@ -540,33 +475,33 @@ struct Entry {
 
 impl Entry {
     fn visible(&self) -> bool {
-        !self.detached && self.placement.is_some_and(|placement| placement.visible)
+        !self.detached && self.config.is_some_and(|config| config.visible)
     }
 
     fn emit(&self, event: SurfaceEvent) {
-        let _ = self.events.send(event);
+        let _ = self.notices.send(Notice::Event(event));
     }
 
-    fn discard(&self, pending: Pending, stats: &mut SurfaceStats) {
-        self.emit(SurfaceEvent::Released(pending.frame.buffer));
-        self.emit(SurfaceEvent::Discarded(pending.id));
+    fn texture(&self, buffer: BufferRef) -> Option<&Texture> {
+        let (_, textures) = self.sets.iter().find(|(set, _)| *set == buffer.set)?;
+        textures.get(buffer.index as usize)
+    }
+
+    fn discard(&self, frame: Frame, stats: &mut SurfaceStats) {
+        let _ = self.notices.send(Notice::Released(frame.buffer));
         stats.frames_discarded += 1;
     }
 
     fn fail(&mut self, error: SurfaceError, stats: &mut SurfaceStats) {
         self.failed = true;
-        for pending in take(&mut self.pending) {
-            self.discard(pending, stats);
+        if let Some(frame) = self.pending.take() {
+            self.discard(frame, stats);
         }
         (self.status)(SurfaceStatus::Failed(error));
     }
 
     fn receive(&mut self, stats: &mut SurfaceStats) {
-        loop {
-            let message = match self.messages.try_recv() {
-                Ok(message) => message,
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return,
-            };
+        while let Ok(message) = self.messages.try_recv() {
             match message {
                 Message::Register(set, textures) => {
                     let invalid = textures
@@ -575,29 +510,16 @@ impl Entry {
                         .find(|format| check_format(*format).is_err());
                     match invalid {
                         Some(format) => self.fail(SurfaceError::Format(format), stats),
-                        None => {
-                            self.sets.insert(set, textures);
-                        }
+                        None => self.sets.push((set, textures)),
                     }
                 }
-                Message::Unregister(set) => {
-                    self.sets.remove(&set);
-                }
-                Message::Submit(id, frame) => {
+                Message::Unregister(set) => self.sets.retain(|(id, _)| *id != set),
+                Message::Submit(frame) => {
                     stats.frames_submitted += 1;
-                    let known = self
-                        .sets
-                        .get(&frame.buffer.set)
-                        .is_some_and(|set| (frame.buffer.index as usize) < set.len());
-                    let pending = Pending {
-                        id,
-                        ready: matches!(frame.acquire, Acquire::Ready),
-                        frame,
-                    };
-                    if self.detached || self.failed || !known {
-                        self.discard(pending, stats);
-                    } else {
-                        self.pending.push_back(pending);
+                    if self.detached || self.failed || self.texture(frame.buffer).is_none() {
+                        self.discard(frame, stats);
+                    } else if let Some(skipped) = self.pending.replace(frame) {
+                        self.discard(skipped, stats);
                     }
                 }
                 Message::RequestFrame => self.wants_frame = true,
@@ -606,96 +528,45 @@ impl Entry {
         }
     }
 
-    fn poll_fences(&mut self, stats: &mut SurfaceStats) {
-        let mut abandoned = Vec::new();
-        for (index, pending) in self.pending.iter_mut().enumerate() {
-            if let Acquire::Fence(fence) = &mut pending.frame.acquire {
-                match fence.0.try_recv() {
-                    Ok(()) => pending.ready = true,
-                    Err(FenceError::Empty) => {}
-                    Err(FenceError::Closed) => abandoned.push(index),
-                }
-            }
-        }
-        for index in abandoned.into_iter().rev() {
-            if let Some(pending) = self.pending.remove(index) {
-                self.discard(pending, stats);
-            }
-        }
-    }
-
-    fn choose(&self, target: Instant) -> Option<usize> {
-        let due = |pending: &Pending| match self.queue {
-            QueueMode::Mailbox => true,
-            QueueMode::Timed => pending.frame.present_at.is_none_or(|at| at <= target),
-        };
-        self.pending
-            .iter()
-            .rposition(|pending| pending.ready && due(pending))
-    }
-
-    fn latch(
-        &mut self,
-        target: Instant,
-        retired: &mut Vec<Retired>,
-        stats: &mut SurfaceStats,
-    ) -> bool {
+    fn latch(&mut self, retired: &mut Vec<Retired>, stats: &mut SurfaceStats) -> bool {
         self.receive(stats);
-        self.poll_fences(stats);
-        let Some(chosen) = self.choose(target) else {
+        let Some(frame) = self.pending.take() else {
             return false;
         };
-        let skipped: Vec<_> = self.pending.drain(..chosen).collect();
-        for pending in skipped {
-            self.discard(pending, stats);
-        }
-        let Some(pending) = self.pending.pop_front() else {
+        let Some(texture) = self.texture(frame.buffer).cloned() else {
+            self.discard(frame, stats);
             return false;
         };
-        let buffer = pending.frame.buffer;
-        let Some(texture) = self
-            .sets
-            .get(&buffer.set)
-            .and_then(|set| set.get(buffer.index as usize))
-            .cloned()
-        else {
-            self.discard(pending, stats);
-            return false;
-        };
-        let Pending { id, frame, .. } = pending;
         let full = Rect::new(0.0, 0.0, texture.width() as f32, texture.height() as f32);
-        let region = frame.region.map_or(full, |region| region.intersect(&full));
         let latched = Latched {
-            frame: id,
             buffer: frame.buffer,
             texture,
-            region,
+            region: frame.region.map_or(full, |region| region.intersect(&full)),
             origin: frame.origin,
             alpha: frame.alpha,
         };
         if let Some(previous) = self.current.replace(latched) {
             retired.push(Retired {
-                events: self.events.clone(),
+                notices: self.notices.clone(),
                 buffer: previous.buffer,
             });
         } else {
             (self.status)(SurfaceStatus::Live);
         }
-        self.unreported.push(id);
+        self.latched += 1;
         stats.frames_latched += 1;
         true
     }
 }
 
 struct Retired {
-    events: UnboundedSender<SurfaceEvent>,
+    notices: UnboundedSender<Notice>,
     buffer: BufferRef,
 }
 
-#[cfg(target_arch = "wasm32")]
-fn release(retired: Vec<Retired>) {
-    for Retired { events, buffer } in retired {
-        let _ = events.send(SurfaceEvent::Released(buffer));
+impl Retired {
+    fn release(self) {
+        let _ = self.notices.send(Notice::Released(self.buffer));
     }
 }
 
@@ -704,8 +575,7 @@ pub struct Surfaces {
     queue: Queue,
     adapter: AdapterInfo,
     waker: Option<Waker>,
-    entries: HashMap<SurfaceId, Entry>,
-    binds: HashMap<SurfaceId, usize>,
+    entries: FxHashMap<SurfaceId, Entry>,
     retired: Vec<Retired>,
     outstanding: Arc<AtomicUsize>,
     stats: SurfaceStats,
@@ -718,8 +588,7 @@ impl Surfaces {
             queue: gpu.queue.clone(),
             adapter: gpu.adapter.get_info(),
             waker: None,
-            entries: HashMap::new(),
-            binds: HashMap::new(),
+            entries: FxHashMap::default(),
             retired: Vec::new(),
             outstanding: Arc::new(AtomicUsize::new(0)),
             stats: SurfaceStats::default(),
@@ -738,10 +607,10 @@ impl Surfaces {
         }
     }
 
-    pub fn latch(&mut self, target: Instant) -> bool {
+    pub fn latch(&mut self) -> bool {
         let mut changed = false;
         for entry in self.entries.values_mut() {
-            changed |= entry.latch(target, &mut self.retired, &mut self.stats);
+            changed |= entry.latch(&mut self.retired, &mut self.stats);
         }
         self.collect();
         changed
@@ -754,23 +623,11 @@ impl Surfaces {
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
-        let releasing =
-            (self.outstanding.load(Ordering::Acquire) > 0).then(|| Instant::now() + RELEASE_POLL);
-        let timed = self.entries.values().flat_map(|entry| {
-            entry
-                .pending
-                .iter()
-                .filter(|pending| pending.ready)
-                .filter_map(|pending| pending.frame.present_at)
-        });
-        releasing.into_iter().chain(timed).min()
+        (self.outstanding.load(Ordering::Acquire) > 0).then(|| Instant::now() + RELEASE_POLL)
     }
 
     pub fn presented(&mut self, at: Instant, interval: Duration) {
         for entry in self.entries.values_mut() {
-            for frame in take(&mut entry.unreported) {
-                entry.emit(SurfaceEvent::Presented { frame, at });
-            }
             if entry.wants_frame && entry.visible() {
                 entry.wants_frame = false;
                 entry.emit(SurfaceEvent::FrameRequest {
@@ -781,13 +638,12 @@ impl Surfaces {
     }
 
     pub fn maintain(&mut self) {
-        let retired = take(&mut self.retired);
-        if !retired.is_empty() {
-            self.stats.buffers_released += retired.len() as u64;
+        if !self.retired.is_empty() {
+            self.stats.buffers_released += self.retired.len() as u64;
             #[cfg(not(target_arch = "wasm32"))]
-            self.release_after_gpu(retired);
+            self.release_after_gpu();
             #[cfg(target_arch = "wasm32")]
-            release(retired);
+            self.retired.drain(..).for_each(Retired::release);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.outstanding.load(Ordering::Acquire) > 0 {
@@ -796,24 +652,28 @@ impl Surfaces {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn release_after_gpu(&self, retired: Vec<Retired>) {
+    fn release_after_gpu(&mut self) {
+        let retired = take(&mut self.retired);
         self.outstanding.fetch_add(1, Ordering::AcqRel);
         let outstanding = self.outstanding.clone();
         self.queue.on_submitted_work_done(move || {
-            for Retired { events, buffer } in retired {
-                let _ = events.send(SurfaceEvent::Released(buffer));
-            }
+            retired.into_iter().for_each(Retired::release);
             outstanding.fetch_sub(1, Ordering::AcqRel);
         });
+    }
+
+    pub fn frame(&self, id: SurfaceId) -> Option<u64> {
+        let entry = self.entries.get(&id)?;
+        entry.current.as_ref().map(|_| entry.latched)
     }
 
     pub(crate) fn latched(&self, id: SurfaceId) -> Option<&Latched> {
         self.entries.get(&id)?.current.as_ref()
     }
 
-    pub(crate) fn holds(&self, id: SurfaceId, set: BufferSetId) -> bool {
+    pub(crate) fn holds(&self, id: SurfaceId, set: u64) -> bool {
         self.entries.get(&id).is_some_and(|entry| {
-            entry.sets.contains_key(&set)
+            entry.sets.iter().any(|(held, _)| *held == set)
                 || entry
                     .current
                     .as_ref()
@@ -821,20 +681,13 @@ impl Surfaces {
         })
     }
 
-    pub fn place(&mut self, id: SurfaceId, placement: Placement) {
+    pub fn place(&mut self, id: SurfaceId, config: SurfaceConfig) {
         if let Some(entry) = self.entries.get_mut(&id)
-            && entry.placement != Some(placement)
+            && entry.config != Some(config)
             && !entry.detached
         {
-            entry.placement = Some(placement);
-            entry.seq += 1;
-            entry.emit(SurfaceEvent::Configure(SurfaceConfig {
-                seq: entry.seq,
-                width: placement.width,
-                height: placement.height,
-                scale: placement.scale,
-                visible: placement.visible,
-            }));
+            entry.config = Some(config);
+            entry.emit(SurfaceEvent::Configure(config));
         }
     }
 
@@ -844,29 +697,30 @@ impl Surfaces {
         {
             entry.detached = true;
             entry.wants_frame = false;
-            for pending in take(&mut entry.pending) {
-                entry.discard(pending, &mut self.stats);
+            if let Some(frame) = entry.pending.take() {
+                entry.discard(frame, &mut self.stats);
             }
             entry.emit(SurfaceEvent::Detached);
         }
     }
 
     pub fn bind(&mut self, id: SurfaceId) {
-        *self.binds.entry(id).or_default() += 1;
+        if let Some(entry) = self.entries.get_mut(&id) {
+            entry.binds += 1;
+        }
     }
 
     pub fn unbind(&mut self, id: SurfaceId) {
-        if let Some(count) = self.binds.get_mut(&id) {
-            *count = count.saturating_sub(1);
+        if let Some(entry) = self.entries.get_mut(&id) {
+            entry.binds = entry.binds.saturating_sub(1);
         }
     }
 
     pub fn attach(&mut self, source: SurfaceSource, status: impl Fn(SurfaceStatus) + 'static) {
         let SurfaceSource {
             id,
-            queue,
             messages,
-            events,
+            notices,
         } = source;
         let cx = SurfaceCx {
             device: self.device.clone(),
@@ -874,21 +728,20 @@ impl Surfaces {
             adapter: self.adapter.clone(),
             waker: self.waker.clone(),
         };
-        let _ = events.send(SurfaceEvent::Attached(Box::new(cx)));
+        let _ = notices.send(Notice::Attached(Box::new(cx)));
         status(SurfaceStatus::Waiting);
         self.entries.insert(
             id,
             Entry {
-                queue,
                 messages,
-                events,
+                notices,
                 status: Box::new(status),
-                sets: HashMap::new(),
-                pending: VecDeque::new(),
+                sets: Vec::new(),
+                pending: None,
                 current: None,
-                unreported: Vec::new(),
-                placement: None,
-                seq: 0,
+                latched: 0,
+                config: None,
+                binds: 0,
                 wants_frame: false,
                 detached: false,
                 failed: false,
@@ -897,23 +750,16 @@ impl Surfaces {
     }
 
     fn collect(&mut self) {
-        let binds = &self.binds;
-        let gone: Vec<_> = self
-            .entries
-            .iter()
-            .filter(|(id, entry)| entry.detached && binds.get(id).is_none_or(|count| *count == 0))
-            .map(|(id, _)| *id)
-            .collect();
-        for id in gone {
-            if let Some(entry) = self.entries.remove(&id)
-                && let Some(current) = entry.current
-            {
-                self.retired.push(Retired {
-                    events: entry.events,
+        let retired = &mut self.retired;
+        self.entries.retain(|_, entry| {
+            let keep = !entry.detached || entry.binds > 0;
+            if !keep && let Some(current) = entry.current.take() {
+                retired.push(Retired {
+                    notices: entry.notices.clone(),
                     buffer: current.buffer,
                 });
             }
-        }
-        self.binds.retain(|_, count| *count > 0);
+            keep
+        });
     }
 }

@@ -1,5 +1,5 @@
 use crate::gpu::create_texture;
-use crate::{Atlas, Color, Gpu, GpuError, Item, RenderStats, Renderer, Surfaces, Viewport};
+use crate::{Atlas, Color, Gpu, GpuError, RenderStats, Renderer, Scene, Surfaces, Viewport};
 use image::ExtendedColorType::Rgba8;
 use image::codecs::png::PngEncoder;
 use image::{ImageEncoder, ImageError};
@@ -100,12 +100,12 @@ impl Headless {
         &mut self.surfaces
     }
 
-    pub fn render(&mut self, clear: Color, items: &[Item<'_>], atlas: &mut Atlas) -> RenderStats {
+    pub fn render(&mut self, clear: Color, scene: Scene<'_>, atlas: &mut Atlas) -> RenderStats {
         self.renderer.render(
             &self.view,
             self.viewport,
             clear,
-            items,
+            scene,
             atlas,
             &self.surfaces,
         );

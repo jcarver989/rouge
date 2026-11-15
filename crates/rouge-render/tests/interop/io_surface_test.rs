@@ -1,7 +1,8 @@
 #![cfg(target_os = "macos")]
 
 use pollster::block_on;
-use rouge_render::interop::{InteropError, IoSurface, import_io_surface};
+use rouge_render::SurfaceError;
+use rouge_render::interop::{IoSurface, import_io_surface};
 use std::error::Error;
 use wgpu::{
     Device, DeviceDescriptor, Instance, InstanceDescriptor, RequestAdapterOptions, TextureFormat,
@@ -23,7 +24,7 @@ fn an_io_surface_has_its_size_and_keeps_what_is_written() -> Result<(), Box<dyn 
 fn empty_io_surfaces_are_refused() {
     assert_eq!(
         IoSurface::new(0, 4).err(),
-        Some(InteropError::Allocation {
+        Some(SurfaceError::Allocation {
             width: 0,
             height: 4
         })
@@ -57,10 +58,7 @@ fn only_bgra_io_surfaces_can_be_imported() -> Result<(), Box<dyn Error>> {
     );
     assert!(matches!(
         imported,
-        Err(InteropError::Format {
-            format: TextureFormat::Rgba8Unorm,
-            ..
-        })
+        Err(SurfaceError::Format(TextureFormat::Rgba8Unorm))
     ));
     Ok(())
 }

@@ -1,6 +1,6 @@
 use crate::effect::{EffectDraw, PASSTHROUGH_WGSL, Passthrough, SurfaceSample};
 use crate::gpu::{PipelineDesc, begin_pass, create_pipeline, create_texture};
-use crate::scene::{DrawList, Instance};
+use crate::scene::{DrawList, DrawLists, Instance, ListKey};
 use crate::surface::{AlphaMode, BufferRef, Origin, SurfaceId, Surfaces};
 use crate::{Affine, Atlas, Color, Corners, ImageData, ImageFormat, Inputs, Point, Rect};
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
@@ -34,6 +34,7 @@ const UNBOUNDED_MARGIN: f32 = 1.0e9;
 const PAGE_BYTES: usize = 16 << 10;
 const ROW_BYTES: usize = 16;
 const IDLE_FRAMES: u64 = 600;
+const MAINTENANCE_FRAMES: u64 = 60;
 const IMAGE_BUDGET_BYTES: u64 = 256 << 20;
 const INSTANCE_MIN_BYTES: u64 = 64 << 10;
 
@@ -54,9 +55,9 @@ impl Viewport {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct LayerDraw<'a> {
-    pub list: &'a DrawList,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerDraw {
+    pub list: Option<ListKey>,
     pub transform: Affine,
     pub opacity: f32,
     pub fill: [f32; 4],
@@ -65,10 +66,10 @@ pub struct LayerDraw<'a> {
     pub scissor: Option<Rect>,
 }
 
-impl<'a> LayerDraw<'a> {
-    pub fn new(list: &'a DrawList) -> Self {
+impl Default for LayerDraw {
+    fn default() -> Self {
         LayerDraw {
-            list,
+            list: None,
             transform: Affine::IDENTITY,
             opacity: 1.0,
             fill: [0.0; 4],
@@ -79,20 +80,38 @@ impl<'a> LayerDraw<'a> {
     }
 }
 
-pub struct Group<'a> {
+impl LayerDraw {
+    pub fn new(list: ListKey) -> Self {
+        LayerDraw {
+            list: Some(list),
+            ..LayerDraw::default()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Group {
     pub key: u64,
     pub signature: u64,
     pub bounds: Rect,
+    pub offset: (i32, i32),
     pub opacity: f32,
     pub scissor: Option<Rect>,
     pub transform: Affine,
     pub effect: Option<EffectDraw>,
-    pub items: Vec<Item<'a>>,
+    pub len: u32,
+}
+
+impl Group {
+    fn shift(&self) -> Point {
+        Point::new(self.offset.0 as f32, self.offset.1 as f32)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceDraw {
     pub id: SurfaceId,
+    pub frame: Option<u64>,
     pub bounds: Rect,
     pub transform: Affine,
     pub opacity: f32,
@@ -104,6 +123,7 @@ impl SurfaceDraw {
     pub fn new(id: SurfaceId, bounds: Rect) -> Self {
         SurfaceDraw {
             id,
+            frame: None,
             bounds,
             transform: Affine::IDENTITY,
             opacity: 1.0,
@@ -113,25 +133,55 @@ impl SurfaceDraw {
     }
 }
 
-pub enum Item<'a> {
-    Layer(LayerDraw<'a>),
-    Group(Group<'a>),
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Command {
+    Draw(LayerDraw),
+    Group(Group),
     Surface(SurfaceDraw),
 }
 
-impl<'a> From<LayerDraw<'a>> for Item<'a> {
-    fn from(draw: LayerDraw<'a>) -> Self {
-        Item::Layer(draw)
-    }
+#[derive(Clone, Copy)]
+pub struct Scene<'a> {
+    pub commands: &'a [Command],
+    pub lists: &'a DrawLists,
 }
 
-impl Item<'_> {
-    pub fn extent(&self, scale: f32) -> Option<Rect> {
-        let (reach, scissor) = match self {
-            Item::Layer(draw) => {
+impl<'a> Scene<'a> {
+    pub fn new(commands: &'a [Command], lists: &'a DrawLists) -> Self {
+        Scene { commands, lists }
+    }
+
+    pub fn summarize<T: Hasher>(
+        &self,
+        range: Range<usize>,
+        scale: f32,
+        hasher: &mut T,
+    ) -> Option<Rect> {
+        let mut bounds: Option<Rect> = None;
+        let mut index = range.start;
+        while index < range.end {
+            self.fingerprint(index, hasher);
+            if let Some(extent) = self.extent(index, scale) {
+                bounds = Some(bounds.map_or(extent, |bounds| bounds.union(&extent)));
+            }
+            index = self.next(index);
+        }
+        bounds
+    }
+
+    fn next(&self, index: usize) -> usize {
+        match &self.commands[index] {
+            Command::Group(group) => index + 1 + group.len as usize,
+            Command::Draw(_) | Command::Surface(_) => index + 1,
+        }
+    }
+
+    fn extent(&self, index: usize, scale: f32) -> Option<Rect> {
+        let (reach, scissor) = match &self.commands[index] {
+            Command::Draw(draw) => {
                 let list = draw
                     .list
-                    .extent()
+                    .and_then(|key| self.lists.get(key)?.extent())
                     .map(|extent| device_rect(&draw.transform, &extent, scale).inflate(1.0));
                 let backdrop = draw.backdrop.map(|backdrop| {
                     device_rect(
@@ -146,23 +196,26 @@ impl Item<'_> {
                 };
                 (reach?, draw.scissor)
             }
-            Item::Surface(draw) => (
+            Command::Surface(draw) => (
                 device_rect(&draw.transform, &draw.bounds, scale).inflate(1.0),
                 draw.scissor,
             ),
-            Item::Group(group) => {
+            Command::Group(group) => {
                 let spread = group.effect.map_or(0.0, |effect| {
                     let blur = Kernel::new(effect.effect.content_blur() * scale);
-                    effect.effect.margin() * scale + Kernel::reach(blur)
+                    effect.effect.margin() * scale + blur.reach()
                 });
-                (group.bounds.inflate(spread), group.scissor)
+                (
+                    group.bounds.translate(group.shift()).inflate(spread),
+                    group.scissor,
+                )
             }
         };
         let reach = scissor.map_or(reach, |scissor| scissor.intersect(&reach));
         (!reach.is_empty()).then_some(reach)
     }
 
-    pub fn fingerprint<T: Hasher>(&self, hasher: &mut T) {
+    fn fingerprint<T: Hasher>(&self, index: usize, hasher: &mut T) {
         let rect = |rect: Option<Rect>, hasher: &mut T| {
             rect.map(|rect| rect.to_array().map(f32::to_bits))
                 .hash(hasher);
@@ -186,9 +239,10 @@ impl Item<'_> {
                 rect(Some(effect.bounds), hasher);
             }
         };
-        match self {
-            Item::Layer(draw) => {
-                (0u8, draw.list.id(), draw.list.revision()).hash(hasher);
+        match &self.commands[index] {
+            Command::Draw(draw) => {
+                let list = draw.list.and_then(|key| self.lists.get(key));
+                (0u8, list.map(|list| (list.id(), list.revision()))).hash(hasher);
                 affine(&draw.transform, hasher);
                 draw.opacity.to_bits().hash(hasher);
                 draw.fill.map(f32::to_bits).hash(hasher);
@@ -196,15 +250,16 @@ impl Item<'_> {
                 rect(draw.scissor, hasher);
                 effect(&draw.backdrop, hasher);
             }
-            Item::Surface(draw) => {
-                (2u8, draw.id, draw.opacity.to_bits()).hash(hasher);
+            Command::Surface(draw) => {
+                (2u8, draw.id, draw.frame, draw.opacity.to_bits()).hash(hasher);
                 rect(Some(draw.bounds), hasher);
                 affine(&draw.transform, hasher);
                 draw.radii.to_array().map(f32::to_bits).hash(hasher);
                 rect(draw.scissor, hasher);
             }
-            Item::Group(group) => {
-                (1u8, group.key, group.signature, group.opacity.to_bits()).hash(hasher);
+            Command::Group(group) => {
+                (1u8, group.key, group.signature, group.offset).hash(hasher);
+                group.opacity.to_bits().hash(hasher);
                 rect(Some(group.bounds), hasher);
                 rect(group.scissor, hasher);
                 affine(&group.transform, hasher);
@@ -235,7 +290,7 @@ type SurfaceKey = (SurfaceId, BufferRef);
 
 #[derive(Clone, Copy, PartialEq)]
 struct Area {
-    origin: (u32, u32),
+    origin: (i32, i32),
     size: (u32, u32),
 }
 
@@ -246,11 +301,18 @@ impl Area {
         };
         let Area { origin, size } = self.within(&rect, f32::round, f32::round)?;
         Some([
-            origin.0 - self.origin.0,
-            origin.1 - self.origin.1,
+            (origin.0 - self.origin.0) as u32,
+            (origin.1 - self.origin.1) as u32,
             size.0,
             size.1,
         ])
+    }
+
+    fn shifted(&self, (x, y): (i32, i32)) -> Area {
+        Area {
+            origin: (self.origin.0 - x, self.origin.1 - y),
+            size: self.size,
+        }
     }
 
     fn cover(&self, rect: &Rect) -> Option<Area> {
@@ -259,10 +321,11 @@ impl Area {
 
     fn within(&self, rect: &Rect, low: fn(f32) -> f32, high: fn(f32) -> f32) -> Option<Area> {
         let max = rect.max();
-        let span = |min: f32, max: f32, origin: u32, size: u32| {
-            let lo = low(min).clamp(origin as f32, (origin + size) as f32) as u32;
-            let hi = high(max).clamp(origin as f32, (origin + size) as f32) as u32;
-            (lo, hi.saturating_sub(lo))
+        let span = |min: f32, max: f32, origin: i32, size: u32| {
+            let (start, end) = (origin as f32, origin as f32 + size as f32);
+            let lo = low(min).clamp(start, end) as i32;
+            let hi = high(max).clamp(start, end) as i32;
+            (lo, hi.saturating_sub(lo).max(0) as u32)
         };
         let (x, width) = span(rect.origin.x, max.x, self.origin.0, self.size.0);
         let (y, height) = span(rect.origin.y, max.y, self.origin.1, self.size.1);
@@ -282,91 +345,74 @@ impl Area {
     }
 
     fn surface(&self) -> [f32; 4] {
-        [self.size.0, self.size.1, self.origin.0, self.origin.1].map(|v| v as f32)
+        [
+            self.size.0 as f32,
+            self.size.1 as f32,
+            self.origin.0 as f32,
+            self.origin.1 as f32,
+        ]
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct Kernel {
     levels: u32,
     spread: f32,
 }
 
 impl Kernel {
-    fn new(radius: f32) -> Option<Kernel> {
+    fn new(radius: f32) -> Kernel {
         if radius < 0.05 {
-            return None;
+            return Kernel::default();
         }
         let levels = (radius.log2().ceil().max(1.0) as u32).min(MAX_BLUR_LEVELS);
-        Some(Kernel {
+        Kernel {
             levels,
             spread: (radius / (1u32 << levels) as f32).min(1.0),
-        })
+        }
     }
 
-    fn reach(kernel: Option<Kernel>) -> f32 {
-        kernel.map_or(0.0, |kernel| (3u32 << kernel.levels) as f32)
+    fn reach(self) -> f32 {
+        if self.levels == 0 {
+            0.0
+        } else {
+            (3u32 << self.levels) as f32
+        }
     }
 
     fn result_level(self) -> u32 {
         u32::from(self.levels >= 4)
     }
 
-    fn state(kernel: Option<Kernel>) -> (u32, u32) {
-        kernel.map_or((0, 0), |kernel| (kernel.levels, kernel.spread.to_bits()))
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Window {
-    origin: (f32, f32),
-    size: (f32, f32),
-    dims: (u32, u32),
-}
-
-impl Window {
-    fn new(region: Rect, dims: (u32, u32)) -> Window {
-        Window {
-            origin: (region.origin.x, region.origin.y),
-            size: (region.size.width, region.size.height),
-            dims,
+    fn shift(self) -> u32 {
+        if self.levels == 0 {
+            0
+        } else {
+            self.result_level() + 1
         }
     }
 
-    fn texels((width, height): (u32, u32), dims: (u32, u32)) -> Window {
-        Window {
-            origin: (0.0, 0.0),
-            size: (width as f32, height as f32),
-            dims,
-        }
+    fn state(self) -> (u32, u32) {
+        (self.levels, self.spread.to_bits())
     }
+}
 
-    fn scaled(&self, low: (f32, f32), high: (f32, f32)) -> [f32; 4] {
-        let (width, height) = (self.dims.0 as f32, self.dims.1 as f32);
-        [
-            low.0 / width,
-            low.1 / height,
-            high.0 / width,
-            high.1 / height,
-        ]
-    }
+fn texels(origin: (f32, f32), size: (f32, f32), dims: (u32, u32)) -> [f32; 4] {
+    let (width, height) = (dims.0 as f32, dims.1 as f32);
+    [
+        origin.0 / width,
+        origin.1 / height,
+        size.0 / width,
+        size.1 / height,
+    ]
+}
 
-    fn rect(&self) -> [f32; 4] {
-        self.scaled(self.origin, self.size)
-    }
-
-    fn bounds(&self) -> [f32; 4] {
-        let (x, y) = self.origin;
-        self.scaled((x, y), (x + self.size.0, y + self.size.1))
-    }
-
-    fn inset(&self) -> [f32; 4] {
-        let (x, y) = self.origin;
-        self.scaled(
-            (x + 0.5, y + 0.5),
-            (x + self.size.0 - 0.5, y + self.size.1 - 0.5),
-        )
-    }
+fn texel_bounds(origin: (f32, f32), size: (f32, f32), dims: (u32, u32), inset: f32) -> [f32; 4] {
+    texels(
+        (origin.0 + inset, origin.1 + inset),
+        (origin.0 + size.0 - inset, origin.1 + size.1 - inset),
+        dims,
+    )
 }
 
 #[repr(C)]
@@ -377,16 +423,16 @@ struct Mapping {
 }
 
 impl Mapping {
-    fn new(origin: (f32, f32), size: (u32, u32), texels: Window) -> Mapping {
-        let scale = |used: f32, size: u32, dims: u32| used / (size as f32 * dims as f32);
+    fn new(origin: (f32, f32), size: (u32, u32), used: (u32, u32), dims: (u32, u32)) -> Mapping {
+        let scale = |used: u32, size: u32, dims: u32| used as f32 / (size as f32 * dims as f32);
         Mapping {
             map: [
                 origin.0,
                 origin.1,
-                scale(texels.size.0, size.0, texels.dims.0),
-                scale(texels.size.1, size.1, texels.dims.1),
+                scale(used.0, size.0, dims.0),
+                scale(used.1, size.1, dims.1),
             ],
-            bounds: texels.bounds(),
+            bounds: texel_bounds((0.0, 0.0), (used.0 as f32, used.1 as f32), dims, 0.0),
         }
     }
 }
@@ -488,10 +534,9 @@ struct BlurGeometry {
 }
 
 impl BlurGeometry {
-    fn new(source: &Source, area: Rect, kernel: Option<Kernel>) -> Option<BlurGeometry> {
-        let levels = kernel.map_or(0, |kernel| kernel.levels);
-        let step = (1u32 << levels) as f32;
-        let area = area.intersect(&source.valid.inflate(Kernel::reach(kernel)));
+    fn new(source: &Source, area: Rect, kernel: Kernel) -> Option<BlurGeometry> {
+        let step = (1u32 << kernel.levels) as f32;
+        let area = area.intersect(&source.valid.inflate(kernel.reach()));
         if area.is_empty() {
             return None;
         }
@@ -504,7 +549,7 @@ impl BlurGeometry {
             (((max.x - origin.0) / step).ceil() * step) as u32,
             (((max.y - origin.1) / step).ceil() * step) as u32,
         );
-        let shift = kernel.map_or(0, |kernel| kernel.result_level() + 1);
+        let shift = kernel.shift();
         let used = ((size.0 >> shift).max(1), (size.1 >> shift).max(1));
         let dims = (
             used.0.next_multiple_of(BLUR_TEXTURE_STEP),
@@ -514,72 +559,97 @@ impl BlurGeometry {
             origin,
             size,
             dims,
-            mapping: Mapping::new(origin, size, Window::texels(used, dims)),
+            mapping: Mapping::new(origin, size, used, dims),
         })
     }
 
-    fn passes(&self, source: &Source, kernel: Option<Kernel>, plan: &mut Plan) -> Range<u32> {
-        let start = plan.blur_passes.len() as u32;
-        let window = Window {
-            origin: (
-                self.origin.0 - source.origin.0,
-                self.origin.1 - source.origin.1,
-            ),
-            size: (self.size.0 as f32, self.size.1 as f32),
-            dims: source.dims,
-        };
-        let valid = Window::new(
-            source
-                .valid
-                .translate(Point::new(-source.origin.0, -source.origin.1)),
-            source.dims,
+    fn passes(
+        &self,
+        source: &Source,
+        kernel: Kernel,
+        (from, to): (Attachment, Attachment),
+        records: &mut Records,
+        scratch: (u32, u32),
+        out: &mut Vec<BlurPass>,
+    ) -> Range<u32> {
+        let start = out.len() as u32;
+        let offset = (
+            self.origin.0 - source.origin.0,
+            self.origin.1 - source.origin.1,
         );
+        let valid = source
+            .valid
+            .translate(Point::new(-source.origin.0, -source.origin.1));
         let mut region = RegionRecord {
-            rect: window.rect(),
-            bounds: valid.inset(),
+            rect: texels(
+                offset,
+                (self.size.0 as f32, self.size.1 as f32),
+                source.dims,
+            ),
+            bounds: texel_bounds(
+                (valid.origin.x, valid.origin.y),
+                (valid.size.width, valid.size.height),
+                source.dims,
+                0.5,
+            ),
             options: [
-                kernel.map_or(0.0, |kernel| kernel.spread),
+                kernel.spread,
                 f32::from(u8::from(source.zero_outside)),
                 0.0,
                 0.0,
             ],
         };
-        let Some(kernel) = kernel else {
-            let record = plan.records.push(&region);
-            plan.blur_passes.push(BlurPass {
+        if kernel.levels == 0 {
+            out.push(BlurPass {
                 kind: BlurKind::Copy,
-                record,
-                level: None,
+                record: records.push(&region),
                 size: self.size,
+                source: from,
+                destination: to,
             });
             return start..start + 1;
-        };
+        }
         let down = (0..kernel.levels).map(|level| (BlurKind::Down, level));
         let up = (kernel.result_level()..kernel.levels - 1)
             .rev()
             .map(|level| (BlurKind::Up, level));
         let count = kernel.levels + (kernel.levels - 1 - kernel.result_level());
+        let mut source = from;
         for (index, (kind, level)) in (0..).zip(down.chain(up)) {
             let size = (
                 (self.size.0 >> (level + 1)).max(1),
                 (self.size.1 >> (level + 1)).max(1),
             );
-            let record = plan.records.push(&region);
-            plan.blur_passes.push(BlurPass {
+            let destination = if index + 1 < count {
+                Attachment::Scratch(level)
+            } else {
+                to
+            };
+            out.push(BlurPass {
                 kind,
-                record,
-                level: (index + 1 < count).then_some(level),
+                record: records.push(&region),
                 size,
+                source,
+                destination,
             });
-            let scratch = Window::texels(size, plan.scratch_dims(level));
+            source = destination;
+            let used = (size.0 as f32, size.1 as f32);
+            let dims = scratch_dims(scratch, level);
             region = RegionRecord {
-                rect: scratch.rect(),
-                bounds: scratch.inset(),
+                rect: texels((0.0, 0.0), used, dims),
+                bounds: texel_bounds((0.0, 0.0), used, dims, 0.5),
                 options: [kernel.spread, 0.0, 0.0, 0.0],
             };
         }
-        start..plan.blur_passes.len() as u32
+        start..out.len() as u32
     }
+}
+
+fn scratch_dims(scratch: (u32, u32), level: u32) -> (u32, u32) {
+    (
+        (scratch.0 >> (level + 1)).max(1),
+        (scratch.1 >> (level + 1)).max(1),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -589,22 +659,21 @@ enum BlurKind {
     Up,
 }
 
+#[derive(Clone, Copy)]
+enum Attachment {
+    Scene,
+    Backdrop(usize),
+    Group(u64),
+    GroupBlur(u64),
+    Scratch(u32),
+}
+
 struct BlurPass {
     kind: BlurKind,
     record: Record,
-    level: Option<u32>,
     size: (u32, u32),
-}
-
-#[derive(Clone, Copy)]
-enum BlurTarget {
-    Backdrop(usize),
-    Group(u64),
-}
-
-struct Blur {
-    target: BlurTarget,
-    passes: Range<u32>,
+    source: Attachment,
+    destination: Attachment,
 }
 
 #[derive(Clone, Copy)]
@@ -637,7 +706,7 @@ enum Step {
 
 enum Pass {
     Raster { key: u64, steps: Range<u32> },
-    Blur(Blur),
+    Blur(Range<u32>),
 }
 
 #[derive(Default)]
@@ -646,17 +715,13 @@ struct Plan {
     pending: Vec<Step>,
     steps: Vec<Step>,
     passes: Vec<Pass>,
-    snapshots: Vec<Blur>,
-    blur_passes: Vec<BlurPass>,
+    snapshots: Vec<BlurPass>,
+    blurs: Vec<BlurPass>,
     batches: Vec<DrawBatch>,
     since: Vec<Rect>,
-    frames: Vec<(u64, usize)>,
-    cursor: usize,
     scale: f32,
     viewport: Rect,
     scratch: (u32, u32),
-    snapshot: bool,
-    blurs: bool,
 }
 
 impl Plan {
@@ -666,25 +731,25 @@ impl Plan {
         self.steps.clear();
         self.passes.clear();
         self.snapshots.clear();
-        self.blur_passes.clear();
+        self.blurs.clear();
         self.batches.clear();
         self.since.clear();
-        self.frames.clear();
-        self.cursor = 0;
         self.scale = scale;
         self.viewport = area.rect();
         let pad = |extent: u32| (extent + SCRATCH_PADDING).next_multiple_of(GROUP_TEXTURE_STEP);
         self.scratch = (pad(area.size.0), pad(area.size.1));
-        self.snapshot = false;
-        self.blurs = false;
     }
 
-    fn scratch_dims(&self, level: u32) -> (u32, u32) {
-        (
-            (self.scratch.0 >> (level + 1)).max(1),
-            (self.scratch.1 >> (level + 1)).max(1),
-        )
+    fn blurs(&self) -> bool {
+        let blurred = |pass: &BlurPass| !matches!(pass.kind, BlurKind::Copy);
+        self.snapshots.iter().any(blurred) || self.blurs.iter().any(blurred)
     }
+}
+
+struct Children<'a> {
+    scene: Scene<'a>,
+    range: Range<usize>,
+    surfaces: &'a Surfaces,
 }
 
 struct Behind {
@@ -693,45 +758,28 @@ struct Behind {
     backdrops: usize,
 }
 
-#[derive(Clone, Copy)]
-struct GroupContent {
-    key: u64,
-    cover: Rect,
-    blurred: bool,
-    mapping: Mapping,
-    reach: f32,
-}
-
-#[derive(Clone, Copy)]
-enum Sampled {
-    Nothing,
-    Group(GroupContent),
-    Surface { key: SurfaceKey, mapping: Mapping },
-}
-
 struct Placed<'a> {
     draw: &'a EffectDraw,
     transform: Affine,
     opacity: f32,
     scissor: Scissor,
-    content: Sampled,
-}
-
-struct Blurred {
-    target: Target,
-    state: (u32, u32),
+    content: Content,
+    quad: Rect,
+    mapping: Mapping,
+    margin: f32,
 }
 
 struct GroupTarget {
-    target: Target,
+    target: Option<Target>,
+    blurred: Option<Target>,
+    blur: (u32, u32),
     area: Area,
     signature: u64,
-    blurred: Option<Blurred>,
     used: u64,
 }
 
 struct BackdropTarget {
-    target: Target,
+    target: Option<Target>,
     signature: u64,
 }
 
@@ -754,15 +802,14 @@ impl Target {
 }
 
 struct Textures {
-    device: Device,
     layout: BindGroupLayout,
     sampler: Sampler,
     format: TextureFormat,
 }
 
 impl Textures {
-    fn bind(&self, label: &str, view: &TextureView) -> BindGroup {
-        self.device.create_bind_group(&BindGroupDescriptor {
+    fn bind(&self, device: &Device, label: &str, view: &TextureView) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
             label: Some(label),
             layout: &self.layout,
             entries: &[
@@ -780,15 +827,16 @@ impl Textures {
 
     fn target(
         &self,
+        device: &Device,
         label: &str,
         size: (u32, u32),
         format: TextureFormat,
         usage: TextureUsages,
     ) -> Target {
         let usage = usage | TextureUsages::TEXTURE_BINDING;
-        let texture = create_texture(&self.device, label, size, format, usage);
+        let texture = create_texture(device, label, size, format, usage);
         let view = texture.create_view(&TextureViewDescriptor::default());
-        let bind_group = self.bind(label, &view);
+        let bind_group = self.bind(device, label, &view);
         Target {
             texture,
             view,
@@ -796,8 +844,28 @@ impl Textures {
         }
     }
 
-    fn offscreen(&self, label: &str, size: (u32, u32)) -> Target {
-        self.target(label, size, self.format, TextureUsages::RENDER_ATTACHMENT)
+    fn offscreen(&self, device: &Device, label: &str, size: (u32, u32)) -> Target {
+        self.target(
+            device,
+            label,
+            size,
+            self.format,
+            TextureUsages::RENDER_ATTACHMENT,
+        )
+    }
+
+    fn ensure(
+        &self,
+        device: &Device,
+        slot: &mut Option<Target>,
+        label: &str,
+        size: (u32, u32),
+    ) -> bool {
+        if slot.as_ref().is_some_and(|target| target.dims() == size) {
+            return false;
+        }
+        *slot = Some(self.offscreen(device, label, size));
+        true
     }
 }
 
@@ -975,13 +1043,12 @@ pub struct Renderer {
     primitive: RenderPipeline,
     fullscreen: [RenderPipeline; 3],
     effect_layout: PipelineLayout,
-    effect_index: FxHashMap<&'static str, u32>,
-    effects: Vec<RenderPipeline>,
+    effects: Vec<(&'static str, RenderPipeline)>,
     instances: Instances,
     groups: FxHashMap<u64, GroupTarget>,
     backdrops: Vec<BackdropTarget>,
     scene: Option<Target>,
-    scratch: Vec<Target>,
+    scratch: [Option<Target>; MAX_BLUR_LEVELS as usize],
     blank: Target,
     atlas: Option<Target>,
     images: Images,
@@ -1075,12 +1142,11 @@ impl Renderer {
             )
         };
         let textures = Textures {
-            device: device.clone(),
             layout,
             sampler,
             format,
         };
-        let blank = textures.offscreen("rouge blank", (1, 1));
+        let blank = textures.offscreen(device, "rouge blank", (1, 1));
 
         Renderer {
             device: device.clone(),
@@ -1091,13 +1157,12 @@ impl Renderer {
             primitive,
             fullscreen: ["fs_blit", "fs_down", "fs_up"].map(fullscreen),
             effect_layout,
-            effect_index: FxHashMap::default(),
             effects: Vec::new(),
             instances: Instances::new(device),
             groups: FxHashMap::default(),
             backdrops: Vec::new(),
             scene: None,
-            scratch: Vec::new(),
+            scratch: Default::default(),
             blank,
             atlas: None,
             images: Images::default(),
@@ -1123,9 +1188,13 @@ impl Renderer {
             ImageFormat::Alpha8 => TextureFormat::R8Unorm,
         };
         let size = (image.width(), image.height());
-        let target = self
-            .textures
-            .target("rouge image", size, format, TextureUsages::COPY_DST);
+        let target = self.textures.target(
+            &self.device,
+            "rouge image",
+            size,
+            format,
+            TextureUsages::COPY_DST,
+        );
         let bytes_per_row = size.0 * image.format().bytes_per_pixel();
         write_rows(
             &self.queue,
@@ -1155,9 +1224,13 @@ impl Renderer {
             .is_none_or(|target| target.texture.height() != size.1)
         {
             let usage = TextureUsages::COPY_DST;
-            let target =
-                self.textures
-                    .target("rouge glyph atlas", size, TextureFormat::R8Unorm, usage);
+            let target = self.textures.target(
+                &self.device,
+                "rouge glyph atlas",
+                size,
+                TextureFormat::R8Unorm,
+                usage,
+            );
             self.atlas = Some(target);
             rows = Some((0, size.1));
         }
@@ -1180,17 +1253,11 @@ impl Renderer {
         start
     }
 
-    fn sync_scratch(&mut self, plan: &Plan) {
-        let stale = self
-            .scratch
-            .first()
-            .is_none_or(|level| level.dims() != plan.scratch_dims(0));
-        if stale {
-            let levels = (0..MAX_BLUR_LEVELS).map(|level| {
-                self.textures
-                    .offscreen("rouge blur scratch", plan.scratch_dims(level))
-            });
-            self.scratch = levels.collect();
+    fn sync_scratch(&mut self, scratch: (u32, u32)) {
+        for (level, slot) in (0..).zip(&mut self.scratch) {
+            let dims = scratch_dims(scratch, level);
+            self.textures
+                .ensure(&self.device, slot, "rouge blur scratch", dims);
         }
     }
 
@@ -1207,8 +1274,8 @@ impl Renderer {
     }
 
     fn effect_pipeline(&mut self, wgsl: &'static str) -> u32 {
-        if let Some(index) = self.effect_index.get(wgsl) {
-            return *index;
+        if let Some(index) = self.effects.iter().position(|(key, _)| ptr::eq(*key, wgsl)) {
+            return index as u32;
         }
         let source = format!("{EFFECT_WGSL}\n{wgsl}");
         let module = shader_module(&self.device, "rouge effect", &source);
@@ -1224,49 +1291,45 @@ impl Renderer {
             },
         );
         let index = self.effects.len() as u32;
-        self.effects.push(pipeline);
-        self.effect_index.insert(wgsl, index);
+        self.effects.push((wgsl, pipeline));
         index
     }
 
     fn plan_items(
         &mut self,
-        items: &[Item<'_>],
+        scene: Scene<'_>,
+        range: Range<usize>,
         area: Area,
         mut behind: Option<&mut Behind>,
         plan: &mut Plan,
         surfaces: &Surfaces,
     ) -> Range<u32> {
         let mark = plan.pending.len();
-        for item in items {
-            let group = plan.cursor;
-            let shown = match item {
-                Item::Layer(draw) => self.plan_layer(draw, area, behind.as_deref_mut(), plan),
-                Item::Surface(draw) => {
+        let mut index = range.start;
+        while index < range.end {
+            let next = scene.next(index);
+            let shown = match &scene.commands[index] {
+                Command::Draw(draw) => {
+                    self.plan_layer(scene.lists, draw, area, behind.as_deref_mut(), plan)
+                }
+                Command::Surface(draw) => {
                     self.plan_surface(draw, area, plan, surfaces);
                     true
                 }
-                Item::Group(child) => {
-                    let (frames, span) = plan.frames[group];
-                    plan.cursor += 1;
-                    let shown =
-                        self.plan_group(child, area, behind.as_deref_mut(), plan, surfaces, frames);
-                    plan.cursor = group + span;
-                    shown
+                Command::Group(group) => {
+                    let children = Children {
+                        scene,
+                        range: index + 1..next,
+                        surfaces,
+                    };
+                    self.plan_group(group, children, area, behind.as_deref_mut(), plan)
                 }
             };
             if let Some(behind) = behind.as_deref_mut().filter(|_| shown) {
-                item.fingerprint(&mut behind.hasher);
-                match item {
-                    Item::Surface(draw) => surfaces
-                        .latched(draw.id)
-                        .map(|latched| latched.frame)
-                        .hash(&mut behind.hasher),
-                    Item::Group(_) => plan.frames[group].0.hash(&mut behind.hasher),
-                    Item::Layer(_) => {}
-                }
-                plan.since.extend(item.extent(plan.scale));
+                scene.fingerprint(index, &mut behind.hasher);
+                plan.since.extend(scene.extent(index, plan.scale));
             }
+            index = next;
         }
         let start = plan.steps.len() as u32;
         let Plan { pending, steps, .. } = plan;
@@ -1276,7 +1339,8 @@ impl Renderer {
 
     fn plan_layer(
         &mut self,
-        draw: &LayerDraw<'_>,
+        lists: &DrawLists,
+        draw: &LayerDraw,
         area: Area,
         behind: Option<&mut Behind>,
         plan: &mut Plan,
@@ -1284,30 +1348,41 @@ impl Renderer {
         let Some(scissor) = area.scissor(draw.scissor).filter(|_| draw.opacity > 0.0) else {
             return false;
         };
-        let start = (!draw.list.is_empty()).then(|| self.sync_list(draw.list));
-        for batch in draw.list.batches() {
+        let list = draw.list.and_then(|key| lists.get(key));
+        let start = list
+            .filter(|list| !list.is_empty())
+            .map(|list| self.sync_list(list));
+        for batch in list.map_or(&[][..], DrawList::batches) {
             if let Some(image) = &batch.image {
                 self.sync_image(image);
             }
         }
         if let Some(backdrop) = &draw.backdrop {
+            let margin = backdrop.effect.margin();
             let placed = Placed {
                 draw: backdrop,
                 transform: draw.transform,
                 opacity: draw.opacity,
                 scissor,
-                content: Sampled::Nothing,
+                content: Content::None,
+                quad: device_rect(
+                    &draw.transform,
+                    &backdrop.bounds.inflate(margin),
+                    plan.scale,
+                ),
+                mapping: Mapping::default(),
+                margin,
             };
             self.plan_effect(placed, area, behind, plan);
         }
-        if let Some(start) = start {
+        if let (Some(start), Some(list)) = (start, list) {
             let record = plan.records.push(&DrawRecord {
                 layer: Layer::new(&draw.transform, draw.opacity, area, plan.scale, draw.radii),
                 fill: draw.fill,
             });
             let first = plan.batches.len() as u32;
             plan.batches
-                .extend(draw.list.batches().iter().map(|batch| DrawBatch {
+                .extend(list.batches().iter().map(|batch| DrawBatch {
                     image: batch.image.as_ref().map(ImageData::id),
                     instances: start + batch.instances.start..start + batch.instances.end,
                 }));
@@ -1338,46 +1413,52 @@ impl Renderer {
             let view = latched
                 .texture
                 .create_view(&TextureViewDescriptor::default());
-            entry.insert(self.textures.bind("rouge surface", &view));
+            entry.insert(self.textures.bind(&self.device, "rouge surface", &view));
         }
         let dims = (latched.texture.width(), latched.texture.height());
-        let window = Window::new(latched.region, dims);
-        let [x, y, width, height] = window.rect();
+        let region = latched.region;
+        let origin = (region.origin.x, region.origin.y);
+        let size = (region.size.width, region.size.height);
+        let [x, y, width, height] = texels(origin, size, dims);
         let map = match latched.origin {
             Origin::TopLeft => [x, y, width, height],
-            Origin::BottomLeft => [x, window.bounds()[3], width, -height],
+            Origin::BottomLeft => [x, y + height, width, -height],
         };
-        let opaque = latched.alpha == AlphaMode::Opaque;
         let sample = EffectDraw {
             corner_radii: draw.radii,
-            ..EffectDraw::new(&SurfaceSample { opaque }, draw.bounds)
+            ..EffectDraw::new(
+                &SurfaceSample {
+                    opaque: latched.alpha == AlphaMode::Opaque,
+                },
+                draw.bounds,
+            )
         };
         let placed = Placed {
             draw: &sample,
             transform: draw.transform,
             opacity: draw.opacity,
             scissor,
-            content: Sampled::Surface {
-                key,
-                mapping: Mapping {
-                    map,
-                    bounds: window.inset(),
-                },
+            content: Content::Surface(key),
+            quad: device_rect(&draw.transform, &draw.bounds, plan.scale).inflate(1.0),
+            mapping: Mapping {
+                map,
+                bounds: texel_bounds(origin, size, dims, 0.5),
             },
+            margin: sample.effect.margin(),
         };
         self.plan_effect(placed, area, None, plan);
     }
 
     fn plan_group(
         &mut self,
-        group: &Group<'_>,
+        group: &Group,
+        children: Children<'_>,
         area: Area,
         behind: Option<&mut Behind>,
         plan: &mut Plan,
-        surfaces: &Surfaces,
-        frames: u64,
     ) -> bool {
-        let Some(cover) = area.cover(&group.bounds).filter(|_| group.opacity > 0.0) else {
+        let local = area.shifted(group.offset);
+        let Some(cover) = local.cover(&group.bounds).filter(|_| group.opacity > 0.0) else {
             return false;
         };
         let Some(scissor) = area.scissor(group.scissor) else {
@@ -1387,41 +1468,18 @@ impl Renderer {
             cover.size.0.next_multiple_of(GROUP_TEXTURE_STEP),
             cover.size.1.next_multiple_of(GROUP_TEXTURE_STEP),
         );
-        let mut hasher = FxHasher::default();
-        (group.signature, frames).hash(&mut hasher);
-        let signature = hasher.finish();
-        let fresh = self.groups.get(&group.key).is_some_and(|existing| {
-            existing.target.dims() == needed
-                && existing.signature == signature
-                && existing.area == cover
+        let signature = group.signature;
+        let (textures, device) = (&self.textures, &self.device);
+        let entry = self.groups.entry(group.key).or_insert_with(|| GroupTarget {
+            target: None,
+            blurred: None,
+            blur: (0, 0),
+            area: cover,
+            signature,
+            used: 0,
         });
-        if !fresh {
-            let inner = Area {
-                origin: cover.origin,
-                size: needed,
-            };
-            let steps = self.plan_items(&group.items, inner, None, plan, surfaces);
-            plan.passes.push(Pass::Raster {
-                key: group.key,
-                steps,
-            });
-        }
-
-        let textures = &self.textures;
-        let entry = match self.groups.entry(group.key) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => entry.insert(GroupTarget {
-                target: textures.offscreen("rouge group", needed),
-                area: cover,
-                signature,
-                blurred: None,
-                used: 0,
-            }),
-        };
-        if entry.target.dims() != needed {
-            entry.target = textures.offscreen("rouge group", needed);
-            entry.blurred = None;
-        }
+        let resized = textures.ensure(device, &mut entry.target, "rouge group", needed);
+        let fresh = !resized && entry.signature == signature && entry.area == cover;
         entry.area = cover;
         entry.signature = signature;
         entry.used = self.frame;
@@ -1434,59 +1492,80 @@ impl Renderer {
                 (effect, group.transform)
             });
         let kernel = Kernel::new(draw.effect.content_blur() * plan.scale);
-        let reach = Kernel::reach(kernel);
         let source = Source {
             origin: (cover.origin.0 as f32, cover.origin.1 as f32),
             dims: needed,
             valid: cover.rect(),
             zero_outside: true,
         };
-        let geometry =
-            kernel.and_then(|_| BlurGeometry::new(&source, cover.rect().inflate(reach), kernel));
-        let mut content = GroupContent {
-            key: group.key,
-            cover: cover.rect(),
-            blurred: geometry.is_some(),
-            mapping: Mapping::new(
-                source.origin,
-                cover.size,
-                Window::texels(cover.size, needed),
-            ),
-            reach: 0.0,
-        };
-        if let Some(geometry) = geometry {
-            let state = Kernel::state(kernel);
-            let keep = fresh
-                && entry.blurred.as_ref().is_some_and(|blurred| {
-                    blurred.target.dims() == geometry.dims && blurred.state == state
-                });
-            match &mut entry.blurred {
-                Some(blurred) if blurred.target.dims() == geometry.dims => blurred.state = state,
-                blurred => {
-                    *blurred = Some(Blurred {
-                        target: textures.offscreen("rouge group blur", geometry.dims),
-                        state,
-                    });
-                }
-            }
-            if !keep {
-                let passes = geometry.passes(&source, kernel, plan);
-                plan.passes.push(Pass::Blur(Blur {
-                    target: BlurTarget::Group(group.key),
-                    passes,
-                }));
-                plan.blurs = true;
-            }
-            (content.mapping, content.reach) = (geometry.mapping, reach);
+        let geometry = (kernel.levels > 0)
+            .then(|| BlurGeometry::new(&source, cover.rect().inflate(kernel.reach()), kernel))
+            .flatten();
+        let mut mapping = Mapping::new(source.origin, cover.size, cover.size, needed);
+        let mut reach = 0.0;
+        let mut reblur = false;
+        if let Some(geometry) = &geometry {
+            let created = textures.ensure(
+                device,
+                &mut entry.blurred,
+                "rouge group blur",
+                geometry.dims,
+            );
+            reblur = !fresh || created || entry.blur != kernel.state();
+            entry.blur = kernel.state();
+            (mapping, reach) = (geometry.mapping, kernel.reach());
         } else {
             entry.blurred = None;
         }
+        if !fresh {
+            let inner = Area {
+                origin: cover.origin,
+                size: needed,
+            };
+            let Children {
+                scene,
+                range,
+                surfaces,
+            } = children;
+            let steps = self.plan_items(scene, range, inner, None, plan, surfaces);
+            plan.passes.push(Pass::Raster {
+                key: group.key,
+                steps,
+            });
+        }
+        if let Some(geometry) = geometry.as_ref().filter(|_| reblur) {
+            let Plan {
+                records,
+                blurs,
+                scratch,
+                passes,
+                ..
+            } = plan;
+            let slots = (
+                Attachment::Group(group.key),
+                Attachment::GroupBlur(group.key),
+            );
+            let range = geometry.passes(&source, kernel, slots, records, *scratch, blurs);
+            passes.push(Pass::Blur(range));
+        }
+        let shift = group.shift();
+        mapping.map[0] += shift.x;
+        mapping.map[1] += shift.y;
         let placed = Placed {
             draw,
             transform,
             opacity: group.opacity,
             scissor,
-            content: Sampled::Group(content),
+            content: Content::Group {
+                key: group.key,
+                blurred: geometry.is_some(),
+            },
+            quad: cover
+                .rect()
+                .translate(shift)
+                .inflate(draw.effect.margin() * plan.scale + reach),
+            mapping,
+            margin: UNBOUNDED_MARGIN,
         };
         self.plan_effect(placed, area, behind, plan);
         true
@@ -1505,6 +1584,9 @@ impl Renderer {
             opacity,
             scissor,
             content,
+            quad,
+            mapping,
+            margin,
         } = placed;
         let effect = draw.effect;
         let (mut wgsl, mut inputs) = (effect.wgsl(), effect.inputs());
@@ -1517,31 +1599,7 @@ impl Renderer {
         let Some(inverse) = transform.inverse() else {
             return;
         };
-        let (scale, margin) = (plan.scale, effect.margin());
-        let (quad, content_map, source, bounded) = match content {
-            Sampled::Group(group) => (
-                group.cover.inflate(margin * scale + group.reach),
-                group.mapping,
-                Content::Group {
-                    key: group.key,
-                    blurred: group.blurred,
-                },
-                UNBOUNDED_MARGIN,
-            ),
-            Sampled::Surface { key, mapping } => (
-                device_rect(&transform, &draw.bounds, scale).inflate(1.0),
-                mapping,
-                Content::Surface(key),
-                margin,
-            ),
-            Sampled::Nothing => (
-                device_rect(&transform, &draw.bounds.inflate(margin), scale),
-                Mapping::default(),
-                Content::None,
-                margin,
-            ),
-        };
-
+        let scale = plan.scale;
         let mut backdrop = None;
         let mut backdrop_map = Mapping::default();
         if let Some(behind) = behind.filter(|_| inputs.backdrop()) {
@@ -1555,9 +1613,7 @@ impl Renderer {
                 valid: plan.viewport,
                 zero_outside: false,
             };
-            let region = quad
-                .inflate(Kernel::reach(kernel))
-                .intersect(&plan.viewport);
+            let region = quad.inflate(kernel.reach()).intersect(&plan.viewport);
             let Some(geometry) = BlurGeometry::new(&viewport, region, kernel) else {
                 return;
             };
@@ -1566,56 +1622,51 @@ impl Renderer {
                 geometry.origin.0.to_bits(),
                 geometry.origin.1.to_bits(),
                 geometry.size,
-                Kernel::state(kernel),
+                kernel.state(),
             )
                 .hash(&mut hasher);
             let signature = hasher.finish();
             let index = behind.backdrops;
             behind.backdrops += 1;
-            let cached = match self.backdrops.get_mut(index) {
-                Some(existing) if existing.target.dims() == geometry.dims => {
-                    let cached = existing.signature == signature;
-                    existing.signature = signature;
-                    cached
-                }
-                Some(existing) => {
-                    existing.target = self.textures.offscreen("rouge backdrop", geometry.dims);
-                    existing.signature = signature;
-                    false
-                }
-                None => {
-                    self.backdrops.push(BackdropTarget {
-                        target: self.textures.offscreen("rouge backdrop", geometry.dims),
-                        signature,
-                    });
-                    false
-                }
-            };
+            if self.backdrops.len() <= index {
+                self.backdrops.push(BackdropTarget {
+                    target: None,
+                    signature,
+                });
+            }
+            let existing = &mut self.backdrops[index];
+            let created = self.textures.ensure(
+                &self.device,
+                &mut existing.target,
+                "rouge backdrop",
+                geometry.dims,
+            );
+            let cached = !created && existing.signature == signature;
+            existing.signature = signature;
             if cached {
                 self.stats.backdrops_reused += 1;
             } else {
-                let passes = geometry.passes(&viewport, kernel, plan);
-                plan.snapshots.push(Blur {
-                    target: BlurTarget::Backdrop(index),
-                    passes,
-                });
-                let end = plan.snapshots.len() as u32;
-                let clear = !plan
-                    .since
+                let Plan {
+                    records,
+                    snapshots,
+                    scratch,
+                    pending,
+                    since,
+                    ..
+                } = plan;
+                let slots = (Attachment::Scene, Attachment::Backdrop(index));
+                let range = geometry.passes(&viewport, kernel, slots, records, *scratch, snapshots);
+                let clear = !since
                     .iter()
                     .any(|drawn| !drawn.intersect(&region).is_empty());
                 let open = behind.open.filter(|_| clear);
-                if let Some(Step::Snapshot(blurs)) =
-                    open.and_then(|open| plan.pending.get_mut(open))
-                {
-                    blurs.end = end;
+                if let Some(Step::Snapshot(passes)) = open.and_then(|open| pending.get_mut(open)) {
+                    passes.end = range.end;
                 } else {
-                    behind.open = Some(plan.pending.len());
-                    plan.since.clear();
-                    plan.pending.push(Step::Snapshot(end - 1..end));
+                    behind.open = Some(pending.len());
+                    since.clear();
+                    pending.push(Step::Snapshot(range));
                 }
-                plan.snapshot = true;
-                plan.blurs |= kernel.is_some();
             }
             backdrop = Some(index);
             backdrop_map = geometry.mapping;
@@ -1626,56 +1677,45 @@ impl Renderer {
             rect: quad.to_array(),
             inverse: matrix(&inverse),
             bounds: draw.bounds.to_array(),
-            content: content_map,
+            content: mapping,
             backdrop: backdrop_map,
-            margin: [bounded, 0.0, 0.0, 0.0],
+            margin: [margin, 0.0, 0.0, 0.0],
             params: effect.uniforms(),
         });
         let pipeline = self.effect_pipeline(wgsl);
         plan.pending.push(Step::Effect {
             pipeline,
             record,
-            content: source,
+            content,
             backdrop,
             scissor,
         });
     }
 
-    fn encode_blur(
+    fn attachment<'a>(&'a self, slot: Attachment, scene: Option<&'a Target>) -> Option<&'a Target> {
+        match slot {
+            Attachment::Scene => scene,
+            Attachment::Backdrop(index) => self.backdrops.get(index)?.target.as_ref(),
+            Attachment::Group(key) => self.groups.get(&key)?.target.as_ref(),
+            Attachment::GroupBlur(key) => self.groups.get(&key)?.blurred.as_ref(),
+            Attachment::Scratch(level) => self.scratch.get(level as usize)?.as_ref(),
+        }
+    }
+
+    fn encode_blurs(
         &self,
         encoder: &mut CommandEncoder,
-        blur: &Blur,
+        passes: &[BlurPass],
         scene: Option<&Target>,
-        plan: &Plan,
         stats: &mut RenderStats,
     ) {
-        let (source, target) = match blur.target {
-            BlurTarget::Backdrop(index) => {
-                stats.backdrop_blurs += 1;
-                (
-                    scene,
-                    self.backdrops.get(index).map(|backdrop| &backdrop.target),
-                )
-            }
-            BlurTarget::Group(key) => {
-                stats.content_blurs += 1;
-                let group = self.groups.get(&key);
-                (
-                    group.map(|group| &group.target),
-                    group
-                        .and_then(|group| group.blurred.as_ref())
-                        .map(|blurred| &blurred.target),
-                )
-            }
-        };
-        let (Some(mut source), Some(target)) = (source, target) else {
-            return;
-        };
-        let passes = &plan.blur_passes[blur.passes.start as usize..blur.passes.end as usize];
         for pass in passes {
-            let destination = match pass.level {
-                Some(level) => &self.scratch[level as usize],
-                None => target,
+            stats.backdrop_blurs += u32::from(matches!(pass.source, Attachment::Scene));
+            stats.content_blurs += u32::from(matches!(pass.source, Attachment::Group(_)));
+            let source = self.attachment(pass.source, scene);
+            let destination = self.attachment(pass.destination, scene);
+            let (Some(source), Some(destination)) = (source, destination) else {
+                continue;
             };
             let mut render = begin_pass(
                 encoder,
@@ -1687,7 +1727,6 @@ impl Renderer {
             render.set_bind_group(0, &source.bind_group, &[]);
             render.set_bind_group(1, &self.records_group, &[pass.record.page]);
             render.draw(pass.record.vertices(), 0..1);
-            source = destination;
         }
     }
 
@@ -1708,11 +1747,10 @@ impl Renderer {
         let mut bound = Bound::default();
         for step in &plan.steps[steps.start as usize..steps.end as usize] {
             match step {
-                Step::Snapshot(blurs) => {
+                Step::Snapshot(passes) => {
                     drop(pass);
-                    for blur in &plan.snapshots[blurs.start as usize..blurs.end as usize] {
-                        self.encode_blur(encoder, blur, scene, plan, stats);
-                    }
+                    let passes = &plan.snapshots[passes.start as usize..passes.end as usize];
+                    self.encode_blurs(encoder, passes, scene, stats);
                     pass = begin_pass(encoder, view, LoadOp::Load);
                     bound = Bound::default();
                     stats.backdrop_passes += 1;
@@ -1753,23 +1791,25 @@ impl Renderer {
                 } => {
                     let texture = match content {
                         Content::None => blank,
-                        Content::Group { key, blurred } => match self.groups.get(key) {
-                            Some(group) => match (&group.blurred, blurred) {
-                                (Some(blurred), true) => &blurred.target.bind_group,
-                                _ => &group.target.bind_group,
-                            },
-                            None => blank,
-                        },
+                        Content::Group { key, blurred } => {
+                            let slot = if *blurred {
+                                Attachment::GroupBlur(*key)
+                            } else {
+                                Attachment::Group(*key)
+                            };
+                            self.attachment(slot, None)
+                                .map_or(blank, |target| &target.bind_group)
+                        }
                         Content::Surface(key) => match self.surface_binds.get(key) {
                             Some(texture) => texture,
                             None => continue,
                         },
                     };
                     let backdrop = backdrop
-                        .and_then(|index| self.backdrops.get(index))
-                        .map_or(blank, |backdrop| &backdrop.target.bind_group);
+                        .and_then(|index| self.attachment(Attachment::Backdrop(index), None))
+                        .map_or(blank, |target| &target.bind_group);
                     bound.scissor(&mut pass, *scissor);
-                    bound.pipeline(&mut pass, &self.effects[*pipeline as usize]);
+                    bound.pipeline(&mut pass, &self.effects[*pipeline as usize].1);
                     bound.group(&mut pass, 0, texture);
                     bound.page(&mut pass, &self.records_group, record.page);
                     bound.group(&mut pass, 2, backdrop);
@@ -1787,7 +1827,7 @@ impl Renderer {
         target: &TextureView,
         viewport: Viewport,
         clear: Color,
-        items: &[Item<'_>],
+        scene: Scene<'_>,
         atlas: &mut Atlas,
         surfaces: &Surfaces,
     ) {
@@ -1801,7 +1841,6 @@ impl Renderer {
         };
         let mut plan = take(&mut self.plan);
         plan.begin(viewport.scale, area);
-        hash_frames(items, surfaces, &mut plan.frames);
         let mut behind = Behind {
             hasher: FxHasher::default(),
             open: None,
@@ -1813,11 +1852,22 @@ impl Renderer {
             clear.to_array().map(f32::to_bits),
         )
             .hash(&mut behind.hasher);
-        let main = self.plan_items(items, area, Some(&mut behind), &mut plan, surfaces);
+        let main = self.plan_items(
+            scene,
+            0..scene.commands.len(),
+            area,
+            Some(&mut behind),
+            &mut plan,
+            surfaces,
+        );
         let frame = self.frame;
-        self.groups.retain(|_, group| group.used == frame);
-        self.surface_binds
-            .retain(|(id, buffer), _| surfaces.holds(*id, buffer.set));
+        let maintain = frame.is_multiple_of(MAINTENANCE_FRAMES);
+        if maintain {
+            self.groups
+                .retain(|_, group| frame - group.used < IDLE_FRAMES);
+            self.surface_binds
+                .retain(|(id, buffer), _| surfaces.holds(*id, buffer.set));
+        }
         self.backdrops.truncate(behind.backdrops);
         let blit = plan.records.push(&RegionRecord {
             rect: [0.0, 0.0, 1.0, 1.0],
@@ -1825,18 +1875,15 @@ impl Renderer {
             options: [0.0; 4],
         });
         self.sync_records(&plan.records);
-        if plan.blurs {
-            self.sync_scratch(&plan);
+        if plan.blurs() {
+            self.sync_scratch(plan.scratch);
         }
-        if plan.snapshot
-            && self
-                .scene
-                .as_ref()
-                .is_none_or(|scene| scene.dims() != area.size)
-        {
-            self.scene = Some(self.textures.offscreen("rouge scene", area.size));
+        let snapshot = !plan.snapshots.is_empty();
+        if snapshot {
+            self.textures
+                .ensure(&self.device, &mut self.scene, "rouge scene", area.size);
         }
-        let scene = self.scene.as_ref().filter(|_| plan.snapshot);
+        let scene = self.scene.as_ref().filter(|_| snapshot);
 
         let descriptor = CommandEncoderDescriptor {
             label: Some("rouge frame"),
@@ -1846,18 +1893,21 @@ impl Renderer {
         for pass in &plan.passes {
             match pass {
                 Pass::Raster { key, steps } => {
-                    let Some(group) = self.groups.get(key) else {
+                    let Some(target) = self.attachment(Attachment::Group(*key), None) else {
                         continue;
                     };
                     let destination = Destination {
-                        view: &group.target.view,
+                        view: &target.view,
                         load: LoadOp::Clear(ClearColor::TRANSPARENT),
                         scene: None,
                     };
                     self.encode(&mut encoder, destination, steps.clone(), &plan, &mut stats);
                     stats.group_passes += 1;
                 }
-                Pass::Blur(blur) => self.encode_blur(&mut encoder, blur, None, &plan, &mut stats),
+                Pass::Blur(passes) => {
+                    let passes = &plan.blurs[passes.start as usize..passes.end as usize];
+                    self.encode_blurs(&mut encoder, passes, None, &mut stats);
+                }
             }
         }
         let clear = [clear.r, clear.g, clear.b, 1.0].map(|c| f64::from(c * clear.a));
@@ -1882,31 +1932,12 @@ impl Renderer {
         }
         self.queue.submit([encoder.finish()]);
         self.stats = stats;
-        self.images.evict(frame);
-        self.instances.maintain(frame);
+        if maintain {
+            self.images.evict(frame);
+            self.instances.maintain(frame);
+        }
         self.plan = plan;
     }
-}
-
-fn hash_frames(items: &[Item<'_>], surfaces: &Surfaces, frames: &mut Vec<(u64, usize)>) -> u64 {
-    let mut hasher = FxHasher::default();
-    for item in items {
-        match item {
-            Item::Surface(draw) => surfaces
-                .latched(draw.id)
-                .map(|latched| latched.frame)
-                .hash(&mut hasher),
-            Item::Group(group) => {
-                let index = frames.len();
-                frames.push((0, 0));
-                let hash = hash_frames(&group.items, surfaces, frames);
-                frames[index] = (hash, frames.len() - index);
-                hash.hash(&mut hasher);
-            }
-            Item::Layer(_) => {}
-        }
-    }
-    hasher.finish()
 }
 
 pub fn device_rect(transform: &Affine, rect: &Rect, scale: f32) -> Rect {

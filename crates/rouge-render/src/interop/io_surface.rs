@@ -1,4 +1,4 @@
-use super::InteropError;
+use crate::SurfaceError;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString};
@@ -29,8 +29,8 @@ unsafe impl Send for IoSurface {}
 unsafe impl Sync for IoSurface {}
 
 impl IoSurface {
-    pub fn new(width: u32, height: u32) -> Result<IoSurface, InteropError> {
-        let failed = InteropError::Allocation { width, height };
+    pub fn new(width: u32, height: u32) -> Result<IoSurface, SurfaceError> {
+        let failed = SurfaceError::Allocation { width, height };
         let (Ok(w), Ok(h)) = (i32::try_from(width), i32::try_from(height)) else {
             return Err(failed);
         };
@@ -68,10 +68,12 @@ impl IoSurface {
         &self.0
     }
 
-    pub fn write<T>(&self, f: impl FnOnce(&mut [u8], usize) -> T) -> Result<T, InteropError> {
+    pub fn write<T>(&self, f: impl FnOnce(&mut [u8], usize) -> T) -> Result<T, SurfaceError> {
         let options = IOSurfaceLockOptions::empty();
         if unsafe { self.0.lock(options, null_mut()) } != 0 {
-            return Err(InteropError::Import("the IOSurface could not be locked"));
+            return Err(SurfaceError::Import(
+                "the IOSurface could not be locked".into(),
+            ));
         }
         let stride = self.0.bytes_per_row();
         let len = stride * self.0.height();
@@ -87,15 +89,12 @@ pub fn import_io_surface(
     surface: &IoSurface,
     format: TextureFormat,
     usage: TextureUsages,
-) -> Result<Texture, InteropError> {
+) -> Result<Texture, SurfaceError> {
     if format != TextureFormat::Bgra8Unorm {
-        return Err(InteropError::Format {
-            format,
-            what: "a BGRA IOSurface",
-        });
+        return Err(SurfaceError::Format(format));
     }
     let (width, height) = (surface.width(), surface.height());
-    let hal = unsafe { device.as_hal::<Metal>() }.ok_or(InteropError::Unsupported(
+    let hal = unsafe { device.as_hal::<Metal>() }.ok_or(SurfaceError::Unsupported(
         "IOSurfaces outside the Metal backend",
     ))?;
     let raw = create_metal_texture(&hal, surface, usage)?;
@@ -131,7 +130,7 @@ fn create_metal_texture(
     hal: &metal::Device,
     surface: &IoSurface,
     usage: TextureUsages,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, InteropError> {
+) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, SurfaceError> {
     let descriptor = unsafe {
         MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
             MTLPixelFormat::BGRA8Unorm,
@@ -151,7 +150,7 @@ fn create_metal_texture(
     descriptor.setStorageMode(MTLStorageMode::Shared);
     hal.raw_device()
         .newTextureWithDescriptor_iosurface_plane(&descriptor, surface.as_raw(), 0)
-        .ok_or(InteropError::Import(
-            "Metal refused to create a texture over the IOSurface",
-        ))
+        .ok_or_else(|| {
+            SurfaceError::Import("Metal refused to create a texture over the IOSurface".into())
+        })
 }
