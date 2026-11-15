@@ -5,8 +5,8 @@ use rouge_core::testing::{
 };
 use rouge_core::{
     Color, DragEvent, DragPhase, Menu, MenuItem, Modifiers, Point, PointerButton, Rect,
-    ScrollState, Scrollable, Size, Styled, TouchPhase, Ui, UiPalette, canvas, div, dynamic, pct,
-    scroll, show, text, window_size, zoom,
+    ScrollState, Scrollable, Size, Styled, TouchPhase, Ui, UiPalette, canvas, div, dynamic,
+    modifiers, pct, scroll, show, text, window_size, zoom,
 };
 use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
 use std::time::Duration;
@@ -327,6 +327,22 @@ fn window_size_tracks_resizes() {
     assert_eq!(seen.get_untracked(), Size::new(200.0, 100.0));
     ui.set_size(Size::new(400.0, 300.0));
     assert_eq!(seen.get_untracked(), Size::new(400.0, 300.0));
+}
+
+#[test]
+fn modifiers_track_the_held_keys() {
+    let _rt = Runtime::new().enter();
+    let seen = signal(Modifiers::META);
+    let mut ui = TestUi::new(move || {
+        let held = modifiers();
+        effect(move || seen.set(held.get()));
+        div()
+    });
+    assert_eq!(seen.get_untracked(), Modifiers::NONE);
+    ui.set_modifiers(Modifiers::COMMAND);
+    assert_eq!(seen.get_untracked(), Modifiers::COMMAND);
+    ui.set_modifiers(Modifiers::NONE);
+    assert_eq!(seen.get_untracked(), Modifiers::NONE);
 }
 
 #[test]
