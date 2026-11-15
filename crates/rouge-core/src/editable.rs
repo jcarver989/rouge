@@ -1,5 +1,5 @@
 use crate::clipboard::ClipboardMedia;
-use crate::event::{Cursor, ImeEvent, Key, KeyEvent, PointerButton};
+use crate::event::{Cursor, FocusEvent, ImeEvent, Key, KeyEvent, PointerButton};
 use crate::focus::FocusHandle;
 use crate::prop::IntoProp;
 use crate::theme::Fill;
@@ -121,6 +121,11 @@ impl Editable {
 
     pub fn on_key_down(mut self, f: impl Fn(&KeyEvent) + 'static) -> Self {
         self.text.0 = self.text.0.on_key_down(f);
+        self
+    }
+
+    pub fn on_blur(mut self, f: impl Fn(&FocusEvent) + 'static) -> Self {
+        self.text.0 = self.text.0.on_blur(f);
         self
     }
 
