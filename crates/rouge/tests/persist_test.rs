@@ -1,49 +1,50 @@
 #![cfg(all(feature = "persist", not(target_arch = "wasm32")))]
 
-use rouge::persist::{Store, read, write};
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::fs;
-use tokio::runtime::Builder;
+use rouge::core::testing::{TestResult, TestUi, TestUiBuilder};
+use rouge::persist::{FileStorage, MemoryStorage, Storage};
+use rouge::prelude::*;
+use std::fs::read_to_string;
+use std::rc::Rc;
 
 #[test]
-fn written_values_read_back() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let file = dir.path().join("nested/state.json");
-    let value = BTreeMap::from([("theme".to_owned(), "nord".to_owned())]);
-
-    write(&file, &value)?;
-
-    assert_eq!(read(&file), Some(value));
-    Ok(())
+fn a_persisted_signal_is_saved_when_its_window_closes_and_restored_on_the_next() {
+    let _entered = Runtime::new().enter();
+    let storage = MemoryStorage::default();
+    let (ui, count) = window(storage.clone(), 1);
+    count.set(7);
+    drop(ui);
+    assert_eq!(storage.get("count").as_deref(), Some("7"));
+    let (_ui, restored) = window(storage, 0);
+    assert_eq!(restored.get_untracked(), 7);
 }
 
 #[test]
-fn a_missing_or_unreadable_file_reads_as_nothing() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let file = dir.path().join("state.json");
-    assert_eq!(read::<BTreeMap<String, String>>(&file), None);
-
-    fs::write(&file, "not json")?;
-
-    assert_eq!(read::<BTreeMap<String, String>>(&file), None);
-    Ok(())
+fn unreadable_saved_state_is_ignored() {
+    let _entered = Runtime::new().enter();
+    let storage = MemoryStorage::default();
+    storage.insert("count", "not json");
+    let (_ui, count) = window(storage, 3);
+    assert_eq!(count.get_untracked(), 3);
 }
 
 #[test]
-fn closing_the_store_flushes_the_latest_value() -> Result<(), Box<dyn Error>> {
+fn file_storage_keeps_each_key_in_its_own_file() -> TestResult {
+    let _entered = Runtime::new().enter();
     let dir = tempfile::tempdir()?;
-    let file = dir.path().join("preferences.json");
-    let runtime = Builder::new_multi_thread().enable_all().build()?;
-    let (store, flush) = Store::<u32>::load(Some(file.clone()), runtime.handle());
-    for number in [1, 2, 3] {
-        store.update(|value| {
-            *value = number;
-            true
-        });
-    }
-    drop(store);
-    runtime.block_on(flush)??;
-    assert_eq!(read(&file), Some(3_u32));
+    let storage = FileStorage::new(dir.path().join("nested"));
+    drop(storage.write("count", "7".to_owned()));
+    drop(storage);
+    assert_eq!(read_to_string(dir.path().join("nested/count.json"))?, "7");
+    let (mut ui, restored) = window(FileStorage::new(dir.path().join("nested")), 0);
+    assert!(ui.wait_until(|_| restored.get_untracked() == 7));
     Ok(())
+}
+
+fn window(storage: impl Storage + 'static, initial: u32) -> (TestUi, Signal<u32>) {
+    let (mut ui, count) = TestUiBuilder::default().build_with(move || {
+        provide_storage(Rc::new(storage));
+        (div(), persisted("count", signal(initial)))
+    });
+    ui.advance(0.0);
+    (ui, count)
 }

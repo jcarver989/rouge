@@ -10,7 +10,7 @@ rust-version.workspace = true
 markdown = ["syntax", "rouge-widgets/markdown", "dep:rouge-markdown"]
 open-url = ["dep:open"]
 syntax = ["rouge-widgets/syntax", "dep:rouge-syntax"]
-persist = ["tokio-rt", "dep:serde", "dep:serde_json"]
+persist = ["dep:serde", "dep:serde_json"]
 tokio-rt = ["rouge-reactive/tokio-rt", "tokio/macros", "tokio/rt", "tokio/time"]
 
 [dependencies]
@@ -47,7 +47,7 @@ web-sys = { version = "0.3", features = [
     "HtmlElement", "HtmlTextAreaElement", "InputEvent", "KeyboardEvent", "Location", "MediaQueryList",
     "MediaQueryListEvent", "Navigator", "Performance", "PointerEvent", "ResizeObserver",
     "ResizeObserverBoxOptions", "ResizeObserverEntry", "ResizeObserverOptions", "ResizeObserverSize",
-    "UrlSearchParams", "WheelEvent", "Window", "console",
+    "Storage", "UrlSearchParams", "WheelEvent", "Window", "console",
 ] }
 
 [lints]
@@ -63,6 +63,7 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 winit.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+rouge = { path = ".", features = ["persist"] }
 gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = ["ClipboardEventInit", "DataTransfer", "MouseEventInit", "PointerEventInit"] }
