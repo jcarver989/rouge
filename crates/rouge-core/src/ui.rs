@@ -17,7 +17,7 @@ use crate::window::{Appearance, Menu, MenuItem, Sent, WindowCommand, WindowHandl
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, expect_context, poll_tasks, provide_context, signal, stats,
 };
-use rouge_render::{Atlas, Color, Point, Rect, Scene, Size, Surfaces};
+use rouge_render::{Atlas, Color, Edges, Point, Rect, Scene, Size, Surfaces};
 use rouge_theme::UiPalette;
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
@@ -36,6 +36,13 @@ struct WindowSize(ReadSignal<Size>);
 
 pub fn window_size() -> ReadSignal<Size> {
     expect_context::<WindowSize>().0
+}
+
+#[derive(Clone, Copy)]
+struct SafeArea(ReadSignal<Edges>);
+
+pub fn safe_area() -> ReadSignal<Edges> {
+    expect_context::<SafeArea>().0
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +121,8 @@ pub struct Ui {
     tree: Tree,
     size: Signal<Size>,
     viewport: Size,
+    safe_area: Signal<Edges>,
+    insets: Edges,
     device_scale: f32,
     zoom: Signal<f32>,
     zoomed: f32,
@@ -176,7 +185,7 @@ impl Ui {
         }
         let scope = Scope::root();
         let viewport = size;
-        let (size, zoom, modifiers, window_handle) = scope.run(|| {
+        let (size, safe_area, zoom, modifiers, window_handle) = scope.run(|| {
             let window_handle = WindowHandle {
                 queue: signal(queue.clone()),
                 title: signal(String::new()),
@@ -187,6 +196,8 @@ impl Ui {
             provide_context(window_handle);
             let size = signal(size);
             provide_context(WindowSize(size.read_only()));
+            let safe_area = signal(Edges::ZERO);
+            provide_context(SafeArea(safe_area.read_only()));
             let zoom = signal(1.0);
             provide_context(Zoom(zoom));
             let modifiers = signal(Modifiers::NONE);
@@ -205,13 +216,15 @@ impl Ui {
                 theme: Some((theme, None)),
             };
             root().build(&mut cx);
-            (size, zoom, modifiers, window_handle)
+            (size, safe_area, zoom, modifiers, window_handle)
         });
         Ui {
             window_handle,
             tree,
             size,
             viewport,
+            safe_area,
+            insets: Edges::ZERO,
             device_scale: 1.0,
             zoom,
             zoomed: 1.0,
@@ -386,6 +399,11 @@ impl Ui {
         self.rescale();
     }
 
+    pub fn set_safe_area(&mut self, insets: Edges) {
+        self.insets = insets;
+        self.rescale();
+    }
+
     pub fn set_device_scale(&mut self, scale: f32) {
         self.device_scale = scale;
         self.rescale();
@@ -421,6 +439,12 @@ impl Ui {
         );
         self.size.set_if_changed(size);
         self.tree.set_size(size);
+        self.safe_area.set_if_changed(Edges {
+            top: self.insets.top / self.zoomed,
+            right: self.insets.right / self.zoomed,
+            bottom: self.insets.bottom / self.zoomed,
+            left: self.insets.left / self.zoomed,
+        });
     }
 
     pub fn clear_color(&self) -> Color {

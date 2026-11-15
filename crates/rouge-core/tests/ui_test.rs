@@ -4,9 +4,9 @@ use rouge_core::testing::{
     BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
 };
 use rouge_core::{
-    Color, DragEvent, DragPhase, Menu, MenuItem, Modifiers, Point, PointerButton, Rect,
+    Color, DragEvent, DragPhase, Edges, Menu, MenuItem, Modifiers, Point, PointerButton, Rect,
     ScrollState, Scrollable, Size, Styled, TouchPhase, Ui, UiPalette, canvas, div, dynamic,
-    modifiers, pct, scroll, show, text, window_size, zoom,
+    modifiers, pct, safe_area, scroll, show, text, window_size, zoom,
 };
 use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
 use std::time::Duration;
@@ -327,6 +327,37 @@ fn window_size_tracks_resizes() {
     assert_eq!(seen.get_untracked(), Size::new(200.0, 100.0));
     ui.set_size(Size::new(400.0, 300.0));
     assert_eq!(seen.get_untracked(), Size::new(400.0, 300.0));
+}
+
+#[test]
+fn safe_area_starts_empty_and_tracks_the_insets_in_zoomed_points() {
+    let _rt = Runtime::new().enter();
+    let seen = signal(Edges::all(-1.0));
+    let (mut ui, zoom) = TestUiBuilder::default().build_with(move || {
+        let insets = safe_area();
+        effect(move || seen.set(insets.get()));
+        (div(), zoom())
+    });
+    assert_eq!(seen.get_untracked(), Edges::ZERO);
+    let notch = Edges {
+        top: 48.0,
+        right: 0.0,
+        bottom: 34.0,
+        left: 0.0,
+    };
+    ui.set_safe_area(notch);
+    assert_eq!(seen.get_untracked(), notch);
+    zoom.set(2.0);
+    ui.advance(0.0);
+    assert_eq!(
+        seen.get_untracked(),
+        Edges {
+            top: 24.0,
+            right: 0.0,
+            bottom: 17.0,
+            left: 0.0,
+        }
+    );
 }
 
 #[test]
