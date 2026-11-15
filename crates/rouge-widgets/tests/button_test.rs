@@ -1,5 +1,5 @@
 use rouge_core::testing::{TestResult, counter};
-use rouge_core::{Cursor, Styled, div, dynamic, view};
+use rouge_core::{Cursor, Styled, div, view};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::button;
 use rouge_widgets::testing::component_test;
@@ -12,7 +12,7 @@ fn a_button_fires_on_click_and_on_enter_or_space_when_focused() -> TestResult {
         div()
             .p(10.0)
             .flex()
-            .child(view! { <button id="save" label="Save" keyboard_focusable on_click=click/> })
+            .child(view! { <button test_id="save" label="Save" on_click=click/> })
     });
     let center = ui.center_of("save")?;
     ui.pointer_moved(center);
@@ -32,11 +32,14 @@ fn a_disabled_button_ignores_input_and_cannot_be_focused() -> TestResult {
     let disabled = signal(true);
     let (clicks, click) = counter();
     let mut ui = component_test().build(move || {
-        div().p(10.0).flex().child(dynamic(move || {
-            let click = click.clone();
-            view! { <button id="save" label="Save" disabled={disabled.get()} keyboard_focusable on_click=click/> }
-        }))
+        div().p(10.0).flex().child(
+            button("Save")
+                .test_id("save")
+                .disabled(disabled)
+                .on_click(click),
+        )
     });
+    let created = ui.stats().elements_created;
     ui.click_on("save")?;
     ui.press("tab");
     assert!(!ui.has_focus());
@@ -46,6 +49,12 @@ fn a_disabled_button_ignores_input_and_cannot_be_focused() -> TestResult {
     ui.advance(0.0);
     ui.press("tab");
     ui.press("enter");
-    assert_eq!(clicks.get(), 1);
+    ui.click_on("save")?;
+    assert_eq!(clicks.get(), 2);
+    assert_eq!(
+        ui.stats().elements_created,
+        created,
+        "enabling does not remount"
+    );
     Ok(())
 }

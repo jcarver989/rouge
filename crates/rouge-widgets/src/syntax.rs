@@ -10,7 +10,7 @@ pub fn syntax_spans(
     theme: &SyntaxTheme,
 ) -> Vec<(Range<usize>, SpanStyle)> {
     let mut styled = Vec::with_capacity(spans.len());
-    for span in spans {
+    for span in spans.iter() {
         let Some(style) = theme.highlight(span.highlight) else {
             continue;
         };

@@ -3,52 +3,72 @@ use crate::syntax::{CODE_WRAP, syntax_spans};
 use crate::tokens::{RADIUS_CONTROL, RADIUS_INNER};
 use crate::typography::{CODE, READING, preset};
 use crate::{IconName, UiStyles, icon_button};
+use rouge_core::Role;
 use rouge_core::{
-    Color, Corners, Cursor, Div, SpanStyle, Styled, Text, TextAlign, Theme, Typography, Underline,
-    View, component, div, each, rich_text, show, text, view,
+    BuildCx, Color, Corners, Cursor, Div, IntoProp, SpanStyle, StyleDelta, Styled, Text, TextAlign,
+    Theme, Typography, Underline, View, component, div, each, rich_text, styled, text, view,
+    window_handle,
 };
 use rouge_markdown::{
-    MarkdownBlock, MarkdownBlockKind as Block, MarkdownCodeBlock, MarkdownInline,
+    MarkdownBlock, MarkdownBlockKind as Block, MarkdownCodeBlock, MarkdownDocument,
     MarkdownLinkRange, MarkdownListItem, MarkdownMarks as Marks, MarkdownStream,
     MarkdownStreamIdentity, MarkdownTable, MarkdownTableAlignment, MarkdownTargetId, MarkdownText,
 };
-use rouge_reactive::{Callback, Memo, ReadSignal, memo, signal};
+use rouge_reactive::{Callback, Memo, ReadSignal, Signal, effect, memo, signal};
 use rouge_syntax::SyntaxTheme;
 use rouge_theme::{MarkdownPalette, Rgba};
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MarkdownAction {
-    OpenLink(String),
-    CopyCode(String),
-}
-
 #[derive(Clone, Copy)]
 pub struct MarkdownPaint {
     palette: Memo<MarkdownPalette>,
     syntax: Memo<SyntaxTheme>,
-    clipboard: Memo<bool>,
-    on_action: Callback<(MarkdownAction,)>,
+    on_link: Callback<(String,)>,
 }
 
 impl MarkdownPaint {
-    pub fn new(
-        palette: Memo<MarkdownPalette>,
-        syntax: Memo<SyntaxTheme>,
-        on_action: impl Fn(MarkdownAction) + 'static,
-    ) -> Self {
+    #[must_use]
+    pub fn current() -> Self {
+        let theme = Theme::current();
+        let rgba = |color: Color| {
+            let [r, g, b, a] = color.to_rgba8();
+            Rgba::new(r, g, b, a)
+        };
         Self {
-            palette,
-            syntax,
-            clipboard: memo(|| true),
-            on_action: on_action.into(),
+            palette: memo(move || {
+                theme.with(|ui| MarkdownPalette {
+                    heading: rgba(ui.text),
+                    link: rgba(ui.accent),
+                    quote: rgba(ui.border),
+                    inline_code: rgba(ui.text),
+                    inline_code_background: rgba(ui.surface),
+                    code: rgba(ui.text),
+                    code_background: rgba(ui.surface),
+                })
+            }),
+            syntax: memo(SyntaxTheme::default),
+            on_link: Callback::default(),
         }
     }
 
     #[must_use]
-    pub fn clipboard(mut self, clipboard: Memo<bool>) -> Self {
-        self.clipboard = clipboard;
+    pub fn palette<U>(mut self, palette: impl IntoProp<MarkdownPalette, U>) -> Self {
+        let palette = palette.into_prop();
+        self.palette = memo(move || palette.get());
+        self
+    }
+
+    #[must_use]
+    pub fn syntax<U>(mut self, syntax: impl IntoProp<SyntaxTheme, U>) -> Self {
+        let syntax = syntax.into_prop();
+        self.syntax = memo(move || syntax.get());
+        self
+    }
+
+    #[must_use]
+    pub fn on_link(mut self, on_link: impl Into<Callback<(String,)>>) -> Self {
+        self.on_link = on_link.into();
         self
     }
 
@@ -58,16 +78,92 @@ impl MarkdownPaint {
     }
 }
 
+pub enum MarkdownSource {
+    Document(MarkdownDocument),
+    Stream(ReadSignal<MarkdownStream>),
+}
+
+impl From<MarkdownDocument> for MarkdownSource {
+    fn from(document: MarkdownDocument) -> Self {
+        MarkdownSource::Document(document)
+    }
+}
+
+impl From<ReadSignal<MarkdownStream>> for MarkdownSource {
+    fn from(stream: ReadSignal<MarkdownStream>) -> Self {
+        MarkdownSource::Stream(stream)
+    }
+}
+
+impl From<Signal<MarkdownStream>> for MarkdownSource {
+    fn from(stream: Signal<MarkdownStream>) -> Self {
+        MarkdownSource::Stream(stream.read_only())
+    }
+}
+
+pub struct Markdown {
+    source: MarkdownSource,
+    paint: MarkdownPaint,
+    style: StyleDelta,
+}
+
 #[component]
-pub fn markdown(rows: ReadSignal<MarkdownRows>, paint: MarkdownPaint) -> impl View {
-    let entries = move || rows.with(|rows| rows.entries.clone());
-    let row = move |entry: ReadSignal<Entry>| {
-        let Entry { row, .. } = entry.get_untracked();
-        view! {
-            <div pt=row.gap pl=row.indent() flex col>{row.block(&paint).bg(row.background(&paint))}</div>
-        }
-    };
-    view! { <div flex col min_w=0.0>{each(entries, |entry: &Entry| entry.key, row)}</div> }
+pub fn markdown(source: impl Into<MarkdownSource>) -> Markdown {
+    Markdown {
+        source: source.into(),
+        paint: MarkdownPaint::current(),
+        style: StyleDelta::default(),
+    }
+}
+
+impl Markdown {
+    pub fn on_link(mut self, on_link: impl Into<Callback<(String,)>>) -> Self {
+        self.paint = self.paint.on_link(on_link);
+        self
+    }
+
+    pub fn palette<U>(mut self, palette: impl IntoProp<MarkdownPalette, U>) -> Self {
+        self.paint = self.paint.palette(palette);
+        self
+    }
+
+    pub fn syntax<U>(mut self, syntax: impl IntoProp<SyntaxTheme, U>) -> Self {
+        self.paint = self.paint.syntax(syntax);
+        self
+    }
+}
+
+styled!(Markdown => style);
+
+impl View for Markdown {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let rows = match self.source {
+            MarkdownSource::Document(document) => {
+                signal(Rows(MarkdownRows::new(document.blocks()))).read_only()
+            }
+            MarkdownSource::Stream(stream) => {
+                let rows = signal(Rows(MarkdownRows::default()));
+                effect(move || stream.with(|stream| rows.update(|rows| rows.0.sync(stream))));
+                rows.read_only()
+            }
+        };
+        let paint = self.paint;
+        let row = move |entry: ReadSignal<Entry>| {
+            let Entry { row, .. } = entry.get_untracked();
+            view! { <div pt=row.gap pl=row.indent() flex col>{row.block(&paint)}</div> }
+        };
+        let root =
+            view! { <div flex col min_w=0.0>{each(rows, |entry: &Entry| entry.key, row)}</div> };
+        self.style.apply(root).build(cx);
+    }
+}
+
+struct Rows(MarkdownRows);
+
+impl AsRef<[Entry]> for Rows {
+    fn as_ref(&self) -> &[Entry] {
+        &self.0.entries
+    }
 }
 
 #[derive(Default)]
@@ -227,21 +323,7 @@ impl MarkdownRow {
         }
     }
 
-    pub fn background(&self, paint: &MarkdownPaint) -> Box<dyn Fn() -> Color> {
-        match &self.kind {
-            Kind::CodeHeader { .. } | Kind::CodeLine { .. } => {
-                Box::new(paint.markdown(|m| m.code_background))
-            }
-            Kind::TableRow { header: true, .. } => {
-                let surface = Theme::current().surface();
-                Box::new(move || surface.get())
-            }
-            _ => Box::new(|| Color::TRANSPARENT),
-        }
-    }
-
     pub fn block(&self, paint: &MarkdownPaint) -> Div {
-        let theme = Theme::current();
         match &self.kind {
             Kind::Heading { level, content } => prose()
                 .typography(heading(*level))
@@ -266,17 +348,24 @@ impl MarkdownRow {
                     </div>
                 </div>
             },
-            Kind::CodeHeader { code } => code_header(code, paint),
-            Kind::CodeLine { code, index } => code_line(code, *index, paint),
+            Kind::CodeHeader { code } => {
+                code_header(code).bg(paint.markdown(|m| m.code_background))
+            }
+            Kind::CodeLine { code, index } => {
+                code_line(code, *index, paint).bg(paint.markdown(|m| m.code_background))
+            }
             Kind::TableRow {
                 cells,
                 alignments,
                 header,
                 first,
                 last,
-            } => table_row(cells, alignments, *header, *first, *last, paint),
+            } => {
+                let row = table_row(cells, alignments, *header, *first, *last, paint);
+                if *header { row.bg(Role::Surface) } else { row }
+            }
             Kind::Rule => view! {
-                <div py=12.0><div h=1.0 w_full bg=theme.border()/></div>
+                <div py=12.0><div h=1.0 w_full bg=Role::Border/></div>
             },
             Kind::Html { content } => view! {
                 <prose muted>{inline_text(content, paint).code()}</prose>
@@ -306,14 +395,14 @@ fn line_height(typography: Typography) -> f32 {
 enum Kind {
     Heading {
         level: u8,
-        content: Rc<MarkdownText>,
+        content: Arc<MarkdownText>,
     },
     Paragraph {
-        content: Rc<MarkdownText>,
+        content: Arc<MarkdownText>,
     },
     ListItem {
         marker: String,
-        content: Rc<MarkdownText>,
+        content: Arc<MarkdownText>,
     },
     Quote {
         rows: Vec<MarkdownRow>,
@@ -326,7 +415,7 @@ enum Kind {
         index: usize,
     },
     TableRow {
-        cells: Vec<Rc<MarkdownText>>,
+        cells: Vec<Arc<MarkdownText>>,
         alignments: Rc<[MarkdownTableAlignment]>,
         header: bool,
         first: bool,
@@ -334,7 +423,7 @@ enum Kind {
     },
     Rule,
     Html {
-        content: Rc<MarkdownText>,
+        content: Arc<MarkdownText>,
     },
 }
 
@@ -361,28 +450,25 @@ fn corners(top: bool, bottom: bool) -> Corners {
     }
 }
 
-fn code_header(code: &Arc<MarkdownCodeBlock>, paint: &MarkdownPaint) -> Div {
+fn code_header(code: &Arc<MarkdownCodeBlock>) -> Div {
     let empty = code.lines().is_empty();
-    let clipboard = paint.clipboard;
-    let (code, on_action, theme) = (Arc::clone(code), paint.on_action, Theme::current());
+    let (code, window) = (Arc::clone(code), window_handle());
     let header = view! {
         <div h=CODE_HEADER_HEIGHT pl=16.0 pr=4.0 flex row items_center justify_between border_t=1.0
-             border_l=1.0 border_r=1.0 border_color=theme.border() rounded=corners(true, empty)>
+             border_l=1.0 border_r=1.0 border_color=Role::Border rounded=corners(true, empty)>
             <text caption muted>{code.language().unwrap_or("code").to_owned()}</text>
-            <show when={move || clipboard.get()}>
-                <icon_button id="markdown-copy-code" icon=IconName::Copy label="Copy code"
-                             on_click={
-                                 let code = Arc::clone(&code);
-                                 move || {
-                                     let text = if code.lines().is_empty() {
-                                         String::new()
-                                     } else {
-                                         format!("{}\n", code.text())
-                                     };
-                                     on_action.call(MarkdownAction::CopyCode(text));
-                                 }
-                             }/>
-            </show>
+            <icon_button test_id="markdown-copy-code" icon=IconName::Copy label="Copy code"
+                         on_click={
+                             let code = Arc::clone(&code);
+                             move || {
+                                 let text = if code.lines().is_empty() {
+                                     String::new()
+                                 } else {
+                                     format!("{}\n", code.text())
+                                 };
+                                 window.copy_text(text);
+                             }
+                         }/>
         </div>
     };
     if empty { header.border_b(1.0) } else { header }
@@ -401,7 +487,7 @@ fn code_line(code: &MarkdownCodeBlock, index: usize, paint: &MarkdownPaint) -> D
     };
     let line = view! {
         <div px=16.0 min_h=line_height(CODE) overflow_hidden border_l=1.0 border_r=1.0
-             border_color=Theme::current().border() rounded=corners(false, last)>
+             border_color=Role::Border rounded=corners(false, last)>
             <rich_text spans code wrap_indent=CODE_WRAP color=paint.markdown(|m| m.code)>{source}</rich_text>
         </div>
     };
@@ -413,14 +499,13 @@ fn code_line(code: &MarkdownCodeBlock, index: usize, paint: &MarkdownPaint) -> D
 }
 
 fn table_row(
-    cells: &[Rc<MarkdownText>],
+    cells: &[Arc<MarkdownText>],
     alignments: &[MarkdownTableAlignment],
     header: bool,
     first: bool,
     last: bool,
     paint: &MarkdownPaint,
 ) -> Div {
-    let theme = Theme::current();
     let cells = cells.iter().enumerate().map(|(column, cell)| {
         let align = match alignments.get(column) {
             Some(MarkdownTableAlignment::Center) => TextAlign::Center,
@@ -431,13 +516,13 @@ fn table_row(
             <div flex_1 min_w=0.0 px=12.0 py=6.0>{inline_text(cell, paint).align(align)}</div>
         };
         if column > 0 {
-            cell.border_l(1.0).border_color(theme.border())
+            cell.border_l(1.0).border_color(Role::Border)
         } else {
             cell
         }
     });
     let row = view! {
-        <div flex row border_l=1.0 border_r=1.0 border_b=1.0 border_color=theme.border()
+        <div flex row border_l=1.0 border_r=1.0 border_b=1.0 border_color=Role::Border
              rounded=corners(first, last) typography=TABLE>
             {..cells}
         </div>
@@ -472,13 +557,13 @@ fn mark_style(marks: Marks, markdown: &MarkdownPalette, muted: Color) -> SpanSty
     }
 }
 
-fn inline_text(content: &Rc<MarkdownText>, paint: &MarkdownPaint) -> Text {
+fn inline_text(content: &Arc<MarkdownText>, paint: &MarkdownPaint) -> Text {
     let source = content.text().to_owned();
     let text = if content.marks().is_empty() {
         text(source)
     } else {
-        let (palette, muted) = (paint.palette, Theme::current().text_muted());
-        let marked = Rc::clone(content);
+        let (palette, muted) = (paint.palette, Theme::current().color(Role::TextMuted));
+        let marked = Arc::clone(content);
         let spans = move || {
             let muted = muted.get();
             palette.with(|palette| {
@@ -494,15 +579,15 @@ fn inline_text(content: &Rc<MarkdownText>, paint: &MarkdownPaint) -> Text {
         return text;
     }
     let hovered = signal(false);
-    let on_action = paint.on_action;
-    let (hover, click) = (Rc::clone(content), Rc::clone(content));
+    let on_link = paint.on_link;
+    let (hover, click) = (Arc::clone(content), Arc::clone(content));
     text.cursor(move || hovered.get().then_some(Cursor::Pointer))
         .on_range_hover(move |index| {
             hovered.set_if_changed(openable_link(&hover, index).is_some());
         })
         .on_range_click(move |index| {
             if let Some(link) = openable_link(&click, index) {
-                on_action.call(MarkdownAction::OpenLink(link.destination.clone()));
+                on_link.call(link.destination.clone());
             }
         })
 }
@@ -515,16 +600,16 @@ fn push_block(block: &MarkdownBlock, depth: u16, rows: &mut Vec<MarkdownRow>) {
     let kind = match &block.kind {
         Block::Heading { level, content } => Kind::Heading {
             level: *level,
-            content: flatten(content),
+            content: Arc::clone(content),
         },
         Block::Paragraph { content } => Kind::Paragraph {
-            content: flatten(content),
+            content: Arc::clone(content),
         },
         Block::BlockQuote { blocks } => Kind::Quote {
             rows: nested_rows(blocks),
         },
         Block::HtmlFallback { content } => Kind::Html {
-            content: flatten(content),
+            content: Arc::clone(content),
         },
         Block::Rule => Kind::Rule,
         Block::List {
@@ -554,10 +639,6 @@ fn nested_rows(blocks: &[MarkdownBlock]) -> Vec<MarkdownRow> {
     rows
 }
 
-fn flatten(content: &[MarkdownInline]) -> Rc<MarkdownText> {
-    Rc::new(MarkdownText::new(content))
-}
-
 fn push_list(
     ordered: bool,
     start: Option<u64>,
@@ -578,7 +659,7 @@ fn push_list(
             gap: 0.0,
             kind: Kind::ListItem {
                 marker,
-                content: flatten(&item.content),
+                content: Arc::clone(&item.content),
             },
         });
         for block in &item.blocks {
@@ -596,15 +677,20 @@ fn push_code(code: &Arc<MarkdownCodeBlock>, depth: u16, rows: &mut Vec<MarkdownR
             code: Arc::clone(code),
         },
     });
-    rows.extend(code.lines().iter().map(|line| MarkdownRow {
-        target: line.target_id,
-        depth,
-        gap: 0.0,
-        kind: Kind::CodeLine {
-            code: Arc::clone(code),
-            index: line.index,
-        },
-    }));
+    rows.extend(
+        code.lines()
+            .iter()
+            .enumerate()
+            .map(|(index, line)| MarkdownRow {
+                target: line.target_id,
+                depth,
+                gap: 0.0,
+                kind: Kind::CodeLine {
+                    code: Arc::clone(code),
+                    index,
+                },
+            }),
+    );
 }
 
 fn push_table(table: &MarkdownTable, depth: u16, rows: &mut Vec<MarkdownRow>) {
@@ -619,7 +705,7 @@ fn push_table(table: &MarkdownTable, depth: u16, rows: &mut Vec<MarkdownRow>) {
                 cells: row
                     .cells
                     .iter()
-                    .map(|cell| flatten(&cell.content))
+                    .map(|cell| Arc::clone(&cell.content))
                     .collect(),
                 alignments: alignments.clone(),
                 header: row.header,

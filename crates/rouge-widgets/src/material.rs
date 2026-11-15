@@ -1,4 +1,5 @@
 use crate::tokens::{RADIUS_CONTROL, RADIUS_FLOATING};
+use rouge_core::Role;
 use rouge_core::{Apply, BoxShadow, Div, Glass, Styled, Theme};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -24,26 +25,26 @@ impl MaterialExt for Div {
             Material::Bare => return self,
             Material::Surface => {
                 return self
-                    .bg(theme.surface())
+                    .bg(Role::Surface)
                     .border(1.0)
-                    .border_color(theme.border_subtle())
+                    .border_color(Role::BorderSubtle)
                     .rounded(RADIUS_CONTROL);
             }
             Material::Floating => {
                 return self
-                    .bg(theme.elevated())
+                    .bg(Role::Elevated)
                     .border(1.0)
-                    .border_color(theme.border())
+                    .border_color(Role::Border)
                     .rounded(RADIUS_FLOATING)
                     .shadow(BoxShadow::md());
             }
-            Material::Glass => (theme.border(), Some(RADIUS_FLOATING), Some(BoxShadow::lg())),
+            Material::Glass => (Role::Border, Some(RADIUS_FLOATING), Some(BoxShadow::lg())),
             Material::GlassPanel => (
-                theme.border_subtle(),
+                Role::BorderSubtle,
                 Some(RADIUS_FLOATING),
                 Some(BoxShadow::md()),
             ),
-            Material::GlassControl => (theme.border_subtle(), None, None),
+            Material::GlassControl => (Role::BorderSubtle, None, None),
         };
         let (blur, opacity) = if material == Material::Glass {
             (20.0, 0.86)

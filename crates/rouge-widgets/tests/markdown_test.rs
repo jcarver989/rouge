@@ -1,13 +1,12 @@
 #![cfg(feature = "markdown")]
 
 use rouge_core::testing::{TestResult, TestUi, recorder};
-use rouge_core::{Cursor, FrameStats};
+use rouge_core::{Cursor, FrameStats, MemoryClipboard};
 use rouge_markdown::{MarkdownDocument, MarkdownStream};
-use rouge_reactive::{Runtime, Signal, memo, signal};
-use rouge_syntax::SyntaxTheme;
+use rouge_reactive::{Runtime, Signal, signal};
 use rouge_theme::{MarkdownPalette, Rgba};
+use rouge_widgets::markdown;
 use rouge_widgets::testing::component_test;
-use rouge_widgets::{MarkdownAction, MarkdownPaint, MarkdownRows, markdown};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -20,7 +19,7 @@ fn clicking_explicit_and_bare_links_opens_them() -> TestResult {
     ui.click_text("See")?;
     assert_eq!(
         *actions.borrow(),
-        [open("https://docs.rs"), open("https://example.com/a")],
+        ["https://docs.rs", "https://example.com/a"],
         "clicking plain text opens nothing"
     );
     Ok(())
@@ -42,12 +41,11 @@ fn links_show_a_pointer_only_while_hovered() -> TestResult {
 #[test]
 fn the_copy_button_copies_a_code_block() -> TestResult {
     let _entered = Runtime::new().enter();
-    let (mut ui, actions) = rendered("```rust\nfn main() {}\n```\n");
+    let (mut ui, _) = rendered("```rust\nfn main() {}\n```\n");
+    let clipboard = MemoryClipboard::new();
+    ui.set_clipboard(clipboard.clone());
     ui.click_on("markdown-copy-code")?;
-    assert_eq!(
-        *actions.borrow(),
-        [MarkdownAction::CopyCode("fn main() {}\n".to_owned())]
-    );
+    assert_eq!(clipboard.text().as_deref(), Some("fn main() {}\n"));
     Ok(())
 }
 
@@ -73,12 +71,12 @@ fn streaming_into_a_code_block_rebuilds_a_fixed_number_of_rows() -> TestResult {
     assert_eq!(rebuilt(3), rebuilt(30), "finished lines are not rebuilt");
     let mut streamed = Streamed::new("```rust\nfn a() {}\n");
     streamed.push("fn b() {}\n```\n");
+    let clipboard = MemoryClipboard::new();
+    streamed.ui.set_clipboard(clipboard.clone());
     streamed.ui.click_on("markdown-copy-code")?;
     assert_eq!(
-        *streamed.actions.borrow(),
-        [MarkdownAction::CopyCode(
-            "fn a() {}\nfn b() {}\n".to_owned()
-        )],
+        clipboard.text().as_deref(),
+        Some("fn a() {}\nfn b() {}\n"),
         "the copy button sees the latest text"
     );
     Ok(())
@@ -88,22 +86,20 @@ fn streaming_into_a_code_block_rebuilds_a_fixed_number_of_rows() -> TestResult {
 fn replacing_a_stream_rebuilds_every_row() -> TestResult {
     let _entered = Runtime::new().enter();
     let mut streamed = Streamed::new("Old text.\n\n");
-    streamed.stream.replace("New text.\n\n");
-    let replaced = streamed.sync();
+    let replaced = streamed.change(|stream| stream.replace("New text.\n\n"));
     assert!(streamed.ui.text_bounds("Old text.").is_none());
     assert!(streamed.ui.text_bounds("New text.").is_some());
     assert!(replaced.elements_removed > 0);
     Ok(())
 }
 
-fn rendered(source: &str) -> (TestUi, Rc<RefCell<Vec<MarkdownAction>>>) {
-    let (actions, act) = recorder();
-    let rows = MarkdownRows::new(MarkdownDocument::parse(source).blocks());
-    let ui = component_test().size(600.0, 200.0).build(move || {
-        let paint = MarkdownPaint::new(memo(palette), memo(SyntaxTheme::default), act);
-        markdown(signal(rows).read_only(), paint)
-    });
-    (ui, actions)
+fn rendered(source: &str) -> (TestUi, Rc<RefCell<Vec<String>>>) {
+    let (links, link) = recorder();
+    let document = MarkdownDocument::parse(source);
+    let ui = component_test()
+        .size(600.0, 200.0)
+        .build(move || markdown(document).palette(palette()).on_link(link));
+    (ui, links)
 }
 
 fn palette() -> MarkdownPalette {
@@ -119,46 +115,31 @@ fn palette() -> MarkdownPalette {
     }
 }
 
-fn open(url: &str) -> MarkdownAction {
-    MarkdownAction::OpenLink(url.to_owned())
-}
-
 struct Streamed {
     ui: TestUi,
-    stream: MarkdownStream,
-    rows: Signal<MarkdownRows>,
-    actions: Rc<RefCell<Vec<MarkdownAction>>>,
+    stream: Signal<MarkdownStream>,
 }
 
 impl Streamed {
     fn new(source: &str) -> Self {
-        let (actions, act) = recorder();
         let mut stream = MarkdownStream::new();
         stream.push(source);
-        let mut rows = MarkdownRows::default();
-        rows.sync(&stream);
-        let (ui, rows) = component_test().size(600.0, 800.0).build_with(move || {
-            let paint = MarkdownPaint::new(memo(palette), memo(SyntaxTheme::default), act);
-            let rows = signal(rows);
-            (markdown(rows.read_only(), paint), rows)
+        let (ui, stream) = component_test().size(600.0, 800.0).build_with(move || {
+            let stream = signal(stream);
+            (markdown(stream).palette(palette()), stream)
         });
-        Self {
-            ui,
-            stream,
-            rows,
-            actions,
-        }
+        Self { ui, stream }
     }
 
     fn push(&mut self, chunk: &str) -> FrameStats {
-        self.stream.push(chunk);
-        self.sync()
+        self.change(|stream| stream.push(chunk))
     }
 
-    fn sync(&mut self) -> FrameStats {
+    fn change<T>(&mut self, change: impl FnOnce(&mut MarkdownStream) -> T) -> FrameStats {
         let before = self.ui.stats();
-        let stream = &self.stream;
-        self.rows.update(|rows| rows.sync(stream));
+        self.stream.update(|stream| {
+            change(stream);
+        });
         self.ui.advance(0.0);
         self.ui.stats() - before
     }

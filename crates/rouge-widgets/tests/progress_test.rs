@@ -18,7 +18,7 @@ fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
             .col()
             .gap(10.0)
             .child(progress(done).w(200.0))
-            .child(separator(false))
+            .child(separator())
     });
     let palette = UiPalette::light().map(Color::from);
     let img = ui.render()?;
@@ -50,7 +50,7 @@ fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
 #[test]
 fn vertical_separators_span_the_height_of_a_row() -> TestResult {
     let _entered = Runtime::new().enter();
-    let mut ui = builder().build(|| div().size_full().flex().child(separator(true)));
+    let mut ui = builder().build(|| div().size_full().flex().child(separator().vertical()));
     assert_eq!(ui.bounds(0.5, 100.0)?, Rect::new(0.0, 0.0, 1.0, 200.0));
     Ok(())
 }

@@ -1,36 +1,18 @@
-use rouge_core::{Cursor, Div, Interactions, Key, KeyEvent, Styled, Theme};
-use rouge_reactive::Callback;
-use rouge_theme::InteractionState;
+use rouge_core::Role;
+use rouge_core::{Div, Prop, Styled};
+use std::rc::Rc;
 
-pub(crate) fn activates(event: &KeyEvent) -> bool {
-    matches!(event.key, Key::Enter | Key::Space)
-}
-
-pub(crate) fn interaction(state: Interactions, enabled: bool) -> InteractionState {
-    if !enabled {
-        InteractionState::Disabled
-    } else if state.hovered {
-        InteractionState::Hovered
-    } else {
-        InteractionState::Rest
-    }
+pub(crate) fn fade_when_disabled(root: Div, disabled: &Rc<Prop<bool>>) -> Div {
+    let disabled = disabled.clone();
+    root.opacity(move || {
+        if disabled.get() {
+            crate::tokens::DISABLED_OPACITY
+        } else {
+            1.0
+        }
+    })
 }
 
 pub(crate) fn focus_ring(root: Div) -> Div {
-    root.focus_visible(|style| style.border_color(Theme::current().accent()))
-}
-
-pub(crate) fn pressable(root: Div, keyboard: bool, enabled: bool, action: Callback) -> Div {
-    let root = root.enabled(enabled);
-    if !enabled || !action.is_set() {
-        return root;
-    }
-    if keyboard {
-        root.on_press(move || action.call())
-    } else {
-        root.cursor(Cursor::Pointer).on_click(move |event| {
-            event.stop_propagation();
-            action.call();
-        })
-    }
+    root.focus_visible(|style| style.border_color(Role::Accent))
 }

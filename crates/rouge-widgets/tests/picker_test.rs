@@ -1,7 +1,7 @@
 use rouge_core::testing::TestResult;
 use rouge_core::{Length, View, div, text, view};
+use rouge_picker::PickerEntry;
 use rouge_reactive::{Runtime, signal};
-use rouge_theme::PickerEntry;
 use rouge_widgets::testing::component_test;
 use rouge_widgets::*;
 
@@ -40,7 +40,7 @@ fn search_filters_details_and_skips_disabled_rows() -> TestResult {
                 .into_any()
         };
         (
-            view! { <search_picker id="picker" handle searchable="Find" preview/> },
+            view! { <search_picker handle test_id="picker" searchable="Find" preview=preview/> },
             events,
         )
     });
@@ -69,7 +69,7 @@ fn keyboard_highlight_reveals_the_entire_variable_height_row() -> TestResult {
             })
             .collect();
         let handle = SearchPickerHandle::new(items, |_| {});
-        view! { <search_picker id="picker" handle searchable="Find" max_list_height=Length::Px(104.0)/> }
+        view! { <search_picker handle test_id="picker" searchable="Find" max_list_height=Length::Px(104.0)/> }
     });
     ui.press("pagedown");
     ui.press("pagedown");
@@ -98,7 +98,7 @@ fn grouped_list_aligns_marker_prefix_label_and_check_columns() -> TestResult {
             PickerItem::new("middle", "Beta").group("Group B").prefix("1"),
             PickerItem::new("last", "Gamma").group("Group A").subtitle("Description"),
         ];
-        let picker = view! { <picker_list id="list" items on_choose={move |index: usize| selected.set(Some(index))}/> };
+        let picker = view! { <picker_list items test_id="list" on_choose={move |index: usize| selected.set(Some(index))}/> };
         (picker, selected)
     });
     let first = ui.center_of("first-marker")?;

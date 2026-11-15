@@ -28,38 +28,39 @@ pub mod typography;
 mod util;
 mod window_chrome;
 
-pub use choice::{radio, toggle};
+pub use choice::{Radio, Toggle, radio, toggle};
 pub use components::{
-    action_bar, backdrop, button, checkbox, disclosure, empty_state, icon_button, list_row, modal,
-    muted_text, notification, section_header, segment, segmented_control,
+    Backdrop, Button, CheckModel, CheckState, Checkbox, ControlSize, Disclosure, IconButton,
+    ListRow, Modal, SectionHeader, Segment, action_bar, backdrop, button, checkbox, disclosure,
+    empty_state, icon_button, list_row, modal, muted_text, notification, section_header, segment,
+    segmented_control,
 };
 pub use fonts::{CODE_FONT, UI_FONT, bundled_fonts};
 pub use icon::{Icon, IconName};
-pub use inline_edit::inline_edit;
-pub use input::text_input;
+pub use inline_edit::{InlineEdit, inline_edit};
+pub use input::{TextInput, text_input};
 pub use interface_size::{DEFAULT_INTERFACE_SIZE, InterfaceSize, SizeAction};
 #[cfg(feature = "markdown")]
-pub use markdown::{MarkdownAction, MarkdownPaint, MarkdownRow, MarkdownRows, markdown};
+pub use markdown::{Markdown, MarkdownPaint, MarkdownRow, MarkdownRows, MarkdownSource, markdown};
 pub use material::{Material, MaterialExt};
 pub use menu::{ContextMenu, MenuFocus, MenuItem, context_menu, select};
 pub use menu_bar::menu_bar;
 pub use picker::{
-    PickerItem, PickerMarker, Preview, SearchPickerEvent, SearchPickerHandle, picker_list,
-    search_picker,
+    PickerItem, PickerList, PickerMarker, Preview, SearchPicker, SearchPickerEvent,
+    SearchPickerHandle, picker_list, search_picker,
 };
 pub use popover::{Hint, Placement, Popover, Tooltip, popover, tooltip};
-pub use progress::{progress, separator, spinner};
+pub use progress::{Separator, progress, separator, spinner};
 pub use resizable_panel::{ResizablePanel, Side, panel_toggle, resizable_panel};
 pub use rouge_theme::{
-    ButtonVariant, CheckState, ControlSize, ControlState, InteractionState, ModalSize, NoticeTone,
-    SelectionState,
+    ButtonVariant, ControlState, InteractionState, ModalSize, NoticeTone, SelectionState,
 };
 pub use roving::RovingFocus;
 pub use scroll_view::{ScrollView, scroll_view, vertical_scrollbar};
-pub use slider::slider;
+pub use slider::{Slider, slider};
 #[cfg(feature = "syntax")]
 pub use syntax::{CODE_WRAP, syntax_spans};
 pub use tabs::{Tabs, tabs};
-pub use tree::{indent, tree_row};
+pub use tree::{TreeRow, indent, tree_row};
 pub use typography::UiStyles;
 pub use window_chrome::window_chrome;

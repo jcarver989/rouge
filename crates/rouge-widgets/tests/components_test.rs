@@ -11,15 +11,15 @@ fn full_width_buttons_rows_and_segments_activate_only_enabled_choices() -> TestR
         let calls = signal(Vec::new());
         let view = view! {
             <div flex col p=12.0 w=340.0 material=Material::Floating>
-                <button id="primary" label="Primary" variant=ButtonVariant::Primary full_width keyboard_focusable
+                <button test_id="primary" label="Primary" variant=ButtonVariant::Primary w_full
                         on_click={move || calls.update(|v| v.push(1))}/>
-                <list_row id="row" depth=2 state=SelectionState::Selected
+                <list_row test_id="row" depth=2 selection=SelectionState::Selected
                           on_click={move || calls.update(|v| v.push(2))}>
                     <text>"A row"</text>
                 </list_row>
-                <segmented_control id="segments">
-                    <segment id="enabled" label="Enabled" selected on_click={move || calls.update(|v| v.push(3))}/>
-                    <segment id="disabled" label="Disabled" icon=IconName::Check detail="Extra" disabled
+                <segmented_control test_id="segments">
+                    <segment test_id="enabled" label="Enabled" selected=true on_click={move || calls.update(|v| v.push(3))}/>
+                    <segment test_id="disabled" label="Disabled" icon=IconName::Check detail="Extra" disabled=true
                              on_click={move || calls.update(|v| v.push(4))}/>
                 </segmented_control>
             </div>
@@ -47,12 +47,12 @@ fn section_action_and_disclosure_do_not_trigger_each_other() -> TestResult {
         let counts = signal((0, 0));
         let badge = view! { <div test_id="badge"><text caption>"3"</text></div> };
         let action = view! {
-            <icon_button id="action" icon=IconName::Plus label="Add" on_click={move || counts.update(|v| v.0 += 1)}/>
+            <icon_button test_id="action" icon=IconName::Plus label="Add" on_click={move || counts.update(|v| v.0 += 1)}/>
         };
         let view = view! {
             <div>
-                <section_header id="section" title="Section" expanded=true detail="Details" badge=badge.into_any()
-                                action actions_always_visible on_toggle={move || counts.update(|v| v.1 += 1)}/>
+                <section_header test_id="section" title="Section" expanded=true detail="Details" badge=badge.into_any()
+                                action=action actions_always_visible on_toggle={move || counts.update(|v| v.1 += 1)}/>
                 <empty_state icon=IconName::File title="No files" detail="Nothing to review"/>
                 <action_bar><notification message="Not saved" tone=NoticeTone::Error/></action_bar>
             </div>
@@ -70,25 +70,36 @@ fn section_action_and_disclosure_do_not_trigger_each_other() -> TestResult {
 #[test]
 fn checkboxes_keep_their_size_and_toggle_without_activating_their_row() -> TestResult {
     let _entered = Runtime::new().enter();
-    let (mut ui, counts) = component_test().size(440.0, 320.0).build_with(|| {
-        let counts = signal((0, 0));
-        let view = view! {
-            <list_row id="row" on_click={move || counts.update(|v| v.1 += 1)}>
+    let (state, plain, disabled, rows) = (
+        signal(CheckState::Indeterminate),
+        signal(false),
+        signal(true),
+        signal(0),
+    );
+    let mut ui = component_test().size(440.0, 320.0).build(move || {
+        view! {
+            <list_row test_id="row" on_click={move || rows.update(|count| *count += 1)}>
                 <text>"file.rs"</text>
-                <checkbox id="check" state=CheckState::Indeterminate on_toggle={move || counts.update(|v| v.0 += 1)}/>
-                <checkbox id="disabled" state=CheckState::Checked disabled
-                          on_toggle={move || counts.update(|v| v.0 += 10)}/>
+                <checkbox test_id="check" checked=state/>
+                <checkbox test_id="disabled" checked=plain disabled=disabled/>
             </list_row>
-        };
-        (view, counts)
+        }
     });
     let bounds = ui.rect_of("check")?;
     assert_eq!((bounds.size.width, bounds.size.height), (12.0, 12.0));
     ui.click_on("check")?;
-    assert_eq!(counts.get(), (1, 0));
+    assert_eq!((state.get(), rows.get()), (CheckState::Checked, 0));
     ui.press("space");
-    assert_eq!(counts.get(), (2, 0));
+    assert_eq!(state.get(), CheckState::Unchecked);
     ui.click_on("disabled")?;
-    assert_eq!(counts.get(), (2, 1));
+    assert_eq!(
+        (plain.get(), rows.get()),
+        (false, 1),
+        "the click falls through to the row"
+    );
+    disabled.set(false);
+    ui.advance(0.0);
+    ui.click_on("disabled")?;
+    assert_eq!((plain.get(), rows.get()), (true, 1));
     Ok(())
 }

@@ -208,7 +208,7 @@ fn menu_flips_and_clamps_at_window_edges_and_activates_by_keyboard() -> TestResu
         ];
         let root = view! {
             <div size_full flex col items_end justify_end>
-                <context_menu items dropdown><button id="trigger" label="Menu"/></context_menu>
+                <context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu>
             </div>
         };
         (root, chosen)
@@ -248,7 +248,7 @@ fn menu_items_can_be_given_their_own_test_id() -> TestResult {
         let items =
             [MenuItem::callback("Archive inactive threads", move || chosen.set(true)).id("archive")];
         let root = view! {
-            <div size_full><context_menu items dropdown><button id="trigger" label="Menu"/></context_menu></div>
+            <div size_full><context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu></div>
         };
         (root, chosen)
     });

@@ -36,9 +36,9 @@ fn radios_share_one_signal() {
             .col()
             .items_start()
             .gap(10.0)
-            .child(radio(size, "s", Some("Small".to_owned())))
-            .child(radio(size, "m", Some("Medium".to_owned())))
-            .child(radio(size, "l", Some("Large".to_owned())))
+            .child(radio(size, "s").label("Small"))
+            .child(radio(size, "m").label("Medium"))
+            .child(radio(size, "l").label("Large"))
     });
     ui.click_at(18.0, 18.0);
     assert_eq!(size.get(), "s");

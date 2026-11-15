@@ -5,10 +5,11 @@ use crate::popover::{Placement, popup};
 use crate::roving::RovingFocus;
 use crate::tokens::{MENU_WIDTH, RADIUS_CONTROL, RADIUS_INNER};
 use crate::typography::UiStyles;
-use crate::util::{activates, focus_ring};
+use crate::util::focus_ring;
+use rouge_core::Role;
 use rouge_core::{
-    BuildCx, Div, Key, Menu, Point, PointerButton, Rect, Styled, Theme, View, component, div, pct,
-    styled, text, view,
+    BuildCx, Div, Key, Menu, Point, PointerButton, Rect, Styled, View, component, div, pct, styled,
+    text, view,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
@@ -42,7 +43,7 @@ fn trigger(
     parent_close: Option<Rc<dyn Fn()>>,
 ) -> (Div, Signal<bool>) {
     let (open, anchor) = (signal(false), signal(Rect::ZERO));
-    let hover = Theme::current().surface_hover();
+    let hover = Role::SurfaceHover;
     let close: Rc<dyn Fn()> = Rc::new(move || {
         open.set(false);
         if let Some(close) = &parent_close {
@@ -58,7 +59,7 @@ fn trigger(
         .hover(|style| style.bg(hover))
         .on_click(move |event| {
             event.stop_propagation();
-            open.update(|open| *open = !*open);
+            open.toggle();
         })
         .child(text(menu.title))
         .child(popup(open, Div::preserve_focus, move || {
@@ -76,7 +77,6 @@ fn render_items(
     focus: MenuFocus,
     close: Rc<dyn Fn()>,
 ) -> Div {
-    let theme = Theme::current();
     let actionable = items
         .iter()
         .filter(|item| !matches!(item, MenuItem::Separator));
@@ -84,7 +84,7 @@ fn render_items(
     let mut index = 0;
     let rows = items.iter().cloned().map(|item| {
         if matches!(item, MenuItem::Separator) {
-            return div().h(1.0).my(4.0).bg(theme.border());
+            return div().h(1.0).my(4.0).bg(Role::Border);
         }
         let current = index;
         index += 1;
@@ -109,9 +109,9 @@ fn render_items(
                 });
                 let clicked = activate.clone();
                 let fg = if destructive {
-                    theme.destructive()
+                    Role::Destructive
                 } else {
-                    theme.text()
+                    Role::Text
                 };
                 let id = id.clone().unwrap_or_else(|| format!("menu-item-{title}"));
                 let icon = icon.clone().map(|icon| Icon::new(icon, fg));
@@ -119,7 +119,7 @@ fn render_items(
                     .as_ref()
                     .map(|chord| view! { <text caption muted>{chord.display()}</text> });
                 let row = view! {
-                    <list_row id on_click={move || clicked()}>
+                    <list_row test_id=id on_click={move || clicked()}>
                         {icon}
                         <text label no_wrap color=fg flex_1>{title.clone()}</text>
                         {shortcut}
@@ -133,7 +133,7 @@ fn render_items(
             let handles = handles.clone();
             row = row
                 .track_focus(handles.handle(current))
-                .focus(|style| style.bg(theme.surface_hover()))
+                .focus(|style| style.bg(Role::SurfaceHover))
                 .on_key_down(move |event| {
                     match event.key {
                         Key::ArrowDown | Key::ArrowUp | Key::Home | Key::End => {
@@ -141,7 +141,7 @@ fn render_items(
                         }
                         Key::ArrowLeft => open.set(false),
                         Key::ArrowRight if submenu => activate(),
-                        _ if activates(event) => activate(),
+                        Key::Enter | Key::Space => activate(),
                         _ => return,
                     }
                     event.stop_propagation();
@@ -241,7 +241,6 @@ pub fn select<T: Clone + PartialEq + 'static>(
     value: Signal<T>,
     options: impl IntoIterator<Item = (T, String)>,
 ) -> ContextMenu {
-    let theme = Theme::current();
     let options: Rc<[(T, String)]> = options.into_iter().collect();
     let labels = options.clone();
     let current = move || {
@@ -260,7 +259,7 @@ pub fn select<T: Clone + PartialEq + 'static>(
     let label = view! {
         <div flex flex_1 items_center justify_between gap=8.0>
             <text body primary no_wrap>{current}</text>
-            {Icon::new(IconName::ChevronDown, theme.text_muted()).size(14.0)}
+            {Icon::new(IconName::ChevronDown, Role::TextMuted).size(14.0)}
         </div>
     };
     let mut menu = context_menu(label, items).dropdown();
@@ -271,9 +270,9 @@ pub fn select<T: Clone + PartialEq + 'static>(
         .py(6.0)
         .min_w(120.0)
         .border(1.0)
-        .border_color(theme.border())
+        .border_color(Role::Border)
         .rounded(RADIUS_CONTROL)
-        .bg(theme.elevated())
-        .hover(|style| style.bg(theme.surface_hover()));
+        .bg(Role::Elevated)
+        .hover(|style| style.bg(Role::SurfaceHover));
     menu
 }

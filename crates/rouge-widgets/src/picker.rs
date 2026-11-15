@@ -1,17 +1,19 @@
 use crate::{
-    components::{list_row, muted_text},
+    components::{ListRow, list_row, muted_text},
     icon::{Icon, IconName},
     material::{Material, MaterialExt},
     tokens,
     typography::UiStyles,
 };
+use rouge_core::Role;
 use rouge_core::{
-    AnyView, BuildCx, Color, Div, Key, Length, RowKey, ScrollState, Scrollable, Styled, Theme,
-    View, component, div, dynamic, editable, pct, px, scroll, show, text, view, virtual_list,
-    virtual_list_handle,
+    AnyView, BuildCx, Color, Div, IntoProp, Key, Length, Prop, RowKey, ScrollState, Scrollable,
+    StyleDelta, Styled, View, component, div, dynamic, editable, pct, px, scroll, show, styled,
+    text, view, virtual_list, virtual_list_handle,
 };
+use rouge_picker::{PickerEntry, PickerRow, PickerState};
 use rouge_reactive::{Callback, Memo, Signal, batch, effect, memo, signal};
-use rouge_theme::{PickerEntry, PickerRow, PickerState, SelectionState};
+use rouge_theme::SelectionState;
 use std::borrow::Cow;
 use std::mem;
 use std::rc::Rc;
@@ -29,7 +31,7 @@ impl View for PickerMarker {
         match self {
             PickerMarker::Dot(color) => view! { <div size=7.0 rounded=4.0 bg=color/> },
             PickerMarker::Pending => view! {
-                <div size=10.0 rounded=5.0 border=1.0 border_color=Theme::current().text_muted()/>
+                <div size=10.0 rounded=5.0 border=1.0 border_color=Role::TextMuted/>
             },
         }
         .build(cx);
@@ -151,42 +153,104 @@ impl PickerEntry for PickerItem {
     }
 }
 
-#[component]
-#[allow(clippy::needless_pass_by_value)]
-pub fn picker_list(
-    #[prop(into)] id: String,
+pub struct PickerList {
     items: Vec<PickerItem>,
-    highlighted: Option<usize>,
-    #[prop(into)] empty: Option<String>,
-    max_height: Option<Length>,
-    track_scroll: Option<Signal<ScrollState>>,
-    #[prop(default, into)] on_choose: Callback<(usize,)>,
-    #[prop(default, into)] on_hover: Callback<(usize,)>,
-) -> impl View {
-    let state = track_scroll.unwrap_or_else(|| signal(ScrollState::default()));
-    let columns = Columns::new(&items);
-    let picker = PickerState::new(items).unfiltered();
-    let list = if picker.options().is_empty() {
-        view! { <div><muted_text>{empty.unwrap_or_else(|| "No results".into())}</muted_text></div> }
-    } else {
-        let rows = picker.rows().into_iter().map(|row| {
-            let index = row.index();
-            entry(
-                row,
-                &picker.options()[index],
-                &columns,
-                move || highlighted == Some(index),
-                Callback::from(move || on_choose.call(index)),
-                Callback::from(move || on_hover.call(index)),
-            )
-        });
-        view! { <div flex col>{..rows}</div> }
-    };
-    view! {
-        <scroll test_id=id max_h={max_height.unwrap_or(px(tokens::PICKER_LIST_HEIGHT))}
-                scroll_state=state>
-            {list}
-        </scroll>
+    highlighted: Prop<Option<usize>>,
+    empty: Option<String>,
+    scroll: Option<Signal<ScrollState>>,
+    on_choose: Callback<(usize,)>,
+    on_hover: Callback<(usize,)>,
+    test_id: Option<String>,
+    style: StyleDelta,
+}
+
+#[component]
+pub fn picker_list(items: Vec<PickerItem>) -> PickerList {
+    PickerList {
+        items,
+        highlighted: Prop::Static(None),
+        empty: None,
+        scroll: None,
+        on_choose: Callback::default(),
+        on_hover: Callback::default(),
+        test_id: None,
+        style: StyleDelta::default(),
+    }
+}
+
+impl PickerList {
+    pub fn highlighted<U>(mut self, highlighted: impl IntoProp<Option<usize>, U>) -> Self {
+        self.highlighted = highlighted.into_prop();
+        self
+    }
+
+    pub fn empty(mut self, empty: impl Into<String>) -> Self {
+        self.empty = Some(empty.into());
+        self
+    }
+
+    pub fn track_scroll(mut self, state: Signal<ScrollState>) -> Self {
+        self.scroll = Some(state);
+        self
+    }
+
+    pub fn on_choose(mut self, on_choose: impl Into<Callback<(usize,)>>) -> Self {
+        self.on_choose = on_choose.into();
+        self
+    }
+
+    pub fn on_hover(mut self, on_hover: impl Into<Callback<(usize,)>>) -> Self {
+        self.on_hover = on_hover.into();
+        self
+    }
+
+    pub fn test_id(mut self, id: impl Into<String>) -> Self {
+        self.test_id = Some(id.into());
+        self
+    }
+}
+
+styled!(PickerList => style);
+
+impl View for PickerList {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let PickerList {
+            items,
+            highlighted,
+            empty,
+            scroll: state,
+            on_choose,
+            on_hover,
+            test_id,
+            style,
+        } = self;
+        let state = state.unwrap_or_else(|| signal(ScrollState::default()));
+        let columns = Columns::new(&items);
+        let picker = PickerState::new(items).unfiltered();
+        let highlighted = Rc::new(highlighted);
+        let list = if picker.options().is_empty() {
+            view! { <div><muted_text>{empty.unwrap_or_else(|| "No results".into())}</muted_text></div> }
+        } else {
+            let rows = picker.rows().into_iter().map(|row| {
+                let index = row.index();
+                let highlighted = highlighted.clone();
+                entry(
+                    row,
+                    &picker.options()[index],
+                    &columns,
+                    move || highlighted.get() == Some(index),
+                    Callback::from(move || on_choose.call(index)),
+                    Callback::from(move || on_hover.call(index)),
+                )
+            });
+            view! { <div flex col>{..rows}</div> }
+        };
+        let root = view! {
+            <scroll test_id?=test_id max_h=px(tokens::PICKER_LIST_HEIGHT) scroll_state=state>
+                {list}
+            </scroll>
+        };
+        style.apply(root).build(cx);
     }
 }
 
@@ -241,12 +305,13 @@ fn entry(
             SelectionState::None
         }
     });
-    item_row(item, columns, state, selection, choose)
+    div()
         .on_pointer_move(move |_| {
             if !disabled {
                 hover.call();
             }
         })
+        .child(item_row(item, columns, state, selection, choose))
         .into_any()
 }
 
@@ -256,8 +321,7 @@ fn item_row(
     state: SelectionState,
     selection: Memo<SelectionState>,
     on_click: Callback,
-) -> Div {
-    let theme = Theme::current();
+) -> ListRow {
     let slot =
         || view! { <div flex_none size=tokens::ICON_SIZE flex items_center justify_center/> };
     let marker = columns.marker.then(|| {
@@ -288,13 +352,14 @@ fn item_row(
     let check = columns.checked.then(|| {
         let icon = item
             .checked
-            .then(|| Icon::new(IconName::Check, theme.accent()).size(12.0));
+            .then(|| Icon::new(IconName::Check, Role::Accent).size(12.0));
         slot().test_id(format!("{}-check", item.id)).child(icon)
     });
     view! {
-        <list_row id={item.id.clone()} state selection on_click>
+        <list_row test_id={item.id.clone()} on_click=on_click
+                  selection={move || if state == SelectionState::Disabled { state } else { selection.get() }}>
             {marker}
-            {item.icon.map(|icon| Icon::new(icon, theme.text_secondary()))}
+            {item.icon.map(|icon| Icon::new(icon, Role::TextSecondary))}
             {prefix}
             <div flex col flex_1 min_w=0.0 overflow_hidden when:py=(subtitle.is_some(), 4.0)>
                 <div test_id={format!("{}-label", item.id)}><text body no_wrap>{item.label.clone()}</text></div>
@@ -408,20 +473,116 @@ impl SearchPickerHandle {
     }
 }
 
-#[component]
-pub fn search_picker(
-    #[prop(into)] id: String,
+pub struct SearchPicker {
     handle: SearchPickerHandle,
-    #[prop(into)] searchable: Option<String>,
-    #[prop(into)] title: Option<String>,
-    #[prop(into)] footer: Option<String>,
-    #[prop(into)] empty: Option<String>,
-    width: Option<Length>,
-    height: Option<Length>,
+    searchable: Option<String>,
+    title: Option<String>,
+    footer: Option<String>,
+    empty: Option<String>,
     max_list_height: Option<Length>,
-    #[prop(into)] preview: Option<Preview>,
+    preview: Option<Preview>,
     status: Option<Signal<Option<String>>>,
-    #[prop(default)] material: Material,
+    material: Material,
+    test_id: Option<String>,
+    style: StyleDelta,
+}
+
+#[component]
+pub fn search_picker(handle: SearchPickerHandle) -> SearchPicker {
+    SearchPicker {
+        handle,
+        searchable: None,
+        title: None,
+        footer: None,
+        empty: None,
+        max_list_height: None,
+        preview: None,
+        status: None,
+        material: Material::default(),
+        test_id: None,
+        style: StyleDelta::default(),
+    }
+}
+
+impl SearchPicker {
+    pub fn searchable(mut self, hint: impl Into<String>) -> Self {
+        self.searchable = Some(hint.into());
+        self
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn footer(mut self, footer: impl Into<String>) -> Self {
+        self.footer = Some(footer.into());
+        self
+    }
+
+    pub fn empty(mut self, empty: impl Into<String>) -> Self {
+        self.empty = Some(empty.into());
+        self
+    }
+
+    pub fn max_list_height(mut self, height: impl Into<Length>) -> Self {
+        self.max_list_height = Some(height.into());
+        self
+    }
+
+    pub fn preview(mut self, preview: impl Into<Preview>) -> Self {
+        self.preview = Some(preview.into());
+        self
+    }
+
+    pub fn status(mut self, status: Signal<Option<String>>) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    pub fn material(mut self, material: Material) -> Self {
+        self.material = material;
+        self
+    }
+
+    pub fn test_id(mut self, id: impl Into<String>) -> Self {
+        self.test_id = Some(id.into());
+        self
+    }
+}
+
+styled!(SearchPicker => style);
+
+impl View for SearchPicker {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let style = self.style;
+        let root = search_root(
+            self.test_id,
+            self.handle,
+            self.searchable,
+            self.title,
+            self.footer,
+            self.empty,
+            self.max_list_height,
+            self.preview,
+            self.status,
+        )
+        .material(self.material);
+        style.apply(root).build(cx);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_root(
+    id: Option<String>,
+    handle: SearchPickerHandle,
+    searchable: Option<String>,
+    title: Option<String>,
+    footer: Option<String>,
+    empty: Option<String>,
+    max_list_height: Option<Length>,
+    preview: Option<Preview>,
+    status: Option<Signal<Option<String>>>,
 ) -> Div {
     let (query, model) = (handle.query, handle.model);
     effect(move || {
@@ -440,13 +601,15 @@ pub fn search_picker(
     let status = status.unwrap_or_else(|| signal(None));
     let list = match preview {
         Some(preview) => {
-            view! { <with_preview id={&id} highlight preview>{list}</with_preview> }.into_any()
+            let preview_id = id.as_ref().map(|id| format!("{id}-preview"));
+            view! { <with_preview id?=preview_id highlight preview>{list}</with_preview> }
+                .into_any()
         }
         None => list.into_any(),
     };
-    let root = view! {
-        <div test_id=id flex col min_h=0.0 w={width.unwrap_or(px(tokens::PICKER_WIDTH))}
-             max_w=pct(100.0) gap=6.0 p=8.0 h?=height when:autofocus=focus_root
+    view! {
+        <div test_id?=id flex col min_h=0.0 w=px(tokens::PICKER_WIDTH)
+             max_w=pct(100.0) gap=6.0 p=8.0 when:autofocus=focus_root
              when:tab_index=(focus_root, -1)
              on_key_down={move |event| {
                  match event.key {
@@ -464,17 +627,16 @@ pub fn search_picker(
             {searchable.map(|hint| view! { <query_input hint handle/> })}
             {list}
             <show when={move || status.with(Option::is_some)}>
-                <text caption color=Theme::current().warning()>{move || status.get().unwrap_or_default()}</text>
+                <text caption color=Role::Warning>{move || status.get().unwrap_or_default()}</text>
             </show>
             {footer.map(|footer| view! { <muted_text>{footer}</muted_text> })}
         </div>
-    };
-    root.material(material)
+    }
 }
 
 #[component]
 fn with_preview(
-    id: &str,
+    id: Option<String>,
     children: impl View,
     highlight: Memo<Option<usize>>,
     preview: Preview,
@@ -482,10 +644,10 @@ fn with_preview(
     view! {
         <div flex row flex_1 min_h=0.0>
             <div flex_none w=tokens::PICKER_PREVIEW_LIST_WIDTH max_w=pct(50.0) min_h=0.0 pr=6.0 border_r=1.0
-                 border_color=Theme::current().border_subtle()>
+                 border_color=Role::BorderSubtle>
                 {children}
             </div>
-            <div test_id={format!("{id}-preview")} flex_1 min_w=0.0 min_h=0.0 flex col>
+            <div test_id?=id flex_1 min_w=0.0 min_h=0.0 flex col>
                 <dynamic>{highlight.get().map(|index| (preview.0)(index))}</dynamic>
             </div>
         </div>
@@ -497,8 +659,8 @@ fn query_input(hint: String, handle: SearchPickerHandle) -> impl View {
     let query = handle.query;
     view! {
         <div p=6.0 material=Material::Surface>
-            <editable value=query test_id="picker-query" autofocus body color=Theme::current().text() w_full
-                      placeholder=(hint, Theme::current().text_muted()) on_submit={move |_| handle.choose()}/>
+            <editable value=query test_id="picker-query" autofocus body color=Role::Text w_full
+                      placeholder=(hint, Role::TextMuted) on_submit={move |_| handle.choose()}/>
         </div>
     }
 }

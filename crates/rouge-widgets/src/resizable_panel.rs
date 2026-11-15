@@ -1,11 +1,11 @@
-use crate::components::icon_button;
+use crate::components::{IconButton, icon_button};
 use crate::icon::IconName;
+use rouge_core::Role;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, BuildCx, Color, Cursor, Div, DragPhase, IntoProp, Length, Prop, Styled, Theme, View,
-    div, styled, view,
+    BuildCx, Cursor, Div, DragPhase, Fill, IntoProp, Length, Prop, Styled, Theme, View, div, styled,
 };
-use rouge_reactive::{Callback, Memo, Signal, effect, memo, signal};
+use rouge_reactive::{Memo, Signal, effect, memo, signal};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -29,7 +29,7 @@ pub struct ResizablePanel {
     min: f32,
     max: f32,
     reset: f32,
-    divider_color: Option<Prop<Color>>,
+    divider_color: Option<Prop<Fill>>,
     on_reset: Option<Rc<dyn Fn()>>,
     on_resize: Option<Rc<dyn Fn(f32)>>,
 }
@@ -62,7 +62,7 @@ impl ResizablePanel {
         self.reset = size;
         self
     }
-    pub fn divider_color<T>(mut self, color: impl IntoProp<Color, T>) -> Self {
+    pub fn divider_color<T>(mut self, color: impl IntoProp<Fill, T>) -> Self {
         self.divider_color = Some(color.into_prop());
         self
     }
@@ -81,6 +81,11 @@ impl ResizablePanel {
 
     pub fn child(mut self, child: impl View) -> Self {
         self.root = self.root.child(child);
+        self
+    }
+
+    pub fn children<T: View>(mut self, children: impl IntoIterator<Item = T>) -> Self {
+        self.root = self.root.children(children);
         self
     }
 }
@@ -166,29 +171,23 @@ impl View for ResizablePanel {
 }
 
 #[component]
-pub fn panel_toggle(
-    side: Side,
-    #[prop(into)] id: String,
-    open: bool,
-    name: &str,
-    #[prop(default, into)] on_click: Callback,
-) -> AnyView {
+pub fn panel_toggle(side: Side, open: Signal<bool>, name: &str) -> IconButton {
     let icon = match side {
         Side::Left => IconName::PanelLeft,
         Side::Right => IconName::PanelRight,
         Side::Top | Side::Bottom => IconName::Rows2,
     };
-    let label = format!("{} {name}", if open { "Hide" } else { "Show" });
-    view! { <icon_button id icon label selected=open keyboard_focusable on_click/> }
+    icon_button(icon, format!("Toggle {name}"))
+        .selected(open)
+        .on_click(move || open.toggle())
 }
 
-fn divider(side: Side, color: Option<Prop<Color>>, engaged: Memo<bool>) -> Div {
+fn divider(side: Side, color: Option<Prop<Fill>>, engaged: Memo<bool>) -> Div {
     let theme = Theme::current();
-    let accent = theme.accent();
-    let resting = color.unwrap_or_else(|| theme.border().into_prop());
+    let resting = color.unwrap_or_else(|| Role::Border.into_prop());
     let line = pin_to_edge(div().absolute(), side).bg(move || {
         if engaged.get() {
-            accent.get().with_alpha(ACTIVE_DIVIDER_ALPHA)
+            Fill::Color(theme.get().accent.with_alpha(ACTIVE_DIVIDER_ALPHA))
         } else {
             resting.get()
         }

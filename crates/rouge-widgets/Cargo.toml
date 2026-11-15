@@ -16,6 +16,7 @@ rouge-markdown = { workspace = true, optional = true }
 rouge-reactive.workspace = true
 rouge-syntax = { workspace = true, optional = true }
 rouge-theme.workspace = true
+rouge-picker.workspace = true
 
 [dev-dependencies]
 rouge-render.workspace = true

@@ -1,9 +1,10 @@
 use crate::material::{Material, MaterialExt};
 use crate::typography::UiStyles;
+use rouge_core::Role;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, BuildCx, Div, Key, PointerEvent, Pose, Rect, Styled, Theme, Tween, View, div, overlay,
-    show, styled, text, window_size,
+    AnyView, BuildCx, Div, Key, PointerEvent, Pose, Rect, Styled, Tween, View, div, overlay, show,
+    styled, text, window_size,
 };
 use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -118,7 +119,7 @@ pub fn popover<T: View, U: View>(
 ) -> Popover {
     let (root, anchor) = anchored(trigger);
     Popover {
-        root,
+        root: root.on_activate(move || open.toggle()),
         open,
         anchor,
         content: Box::new(move || children().into_any()),
@@ -203,7 +204,6 @@ styled!(Tooltip => root);
 
 impl View for Tooltip {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let theme = Theme::current();
         let (label, delay, anchor) = (self.label, self.delay, self.anchor);
         let open = signal(false);
         let pending = Rc::new(Cell::new(None::<Task>));
@@ -217,16 +217,13 @@ impl View for Tooltip {
         });
         let bubble = overlay(move || {
             let tip = move || {
-                let caption = text(label.clone())
-                    .small()
-                    .color(theme.elevated())
-                    .no_wrap();
+                let caption = text(label.clone()).small().color(Role::Elevated).no_wrap();
                 let bubble = div()
                     .pass_through()
                     .px(8.0)
                     .py(4.0)
                     .rounded(6.0)
-                    .bg(theme.text())
+                    .bg(Role::Text)
                     .child(caption);
                 Placement::Below.place(bubble, anchor)
             };

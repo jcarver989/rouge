@@ -1,5 +1,5 @@
 use crate::tokens::ICON_SIZE;
-use rouge_core::{BuildCx, Color, IntoProp, Path, Prop, Styled, View, div, icon, view};
+use rouge_core::{BuildCx, Fill, IntoProp, Path, Prop, Styled, View, div, icon, view};
 use std::cell::OnceCell;
 
 macro_rules! icons {
@@ -109,11 +109,11 @@ impl From<IconName> for Path {
 pub struct Icon {
     path: Path,
     size: f32,
-    color: Prop<Color>,
+    color: Prop<Fill>,
 }
 
 impl Icon {
-    pub fn new<T>(icon: impl Into<Path>, color: impl IntoProp<Color, T>) -> Self {
+    pub fn new<T>(icon: impl Into<Path>, color: impl IntoProp<Fill, T>) -> Self {
         Self {
             path: icon.into(),
             size: ICON_SIZE,

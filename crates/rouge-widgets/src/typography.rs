@@ -1,5 +1,6 @@
 use crate::fonts::{CODE_FONT, UI_FONT};
-use rouge_core::{Styled, Theme, Typography};
+use rouge_core::Role;
+use rouge_core::{Styled, Typography};
 
 pub const CAPTION: Typography = preset(UI_FONT, 11.0, 16.0, 400.0);
 pub const SMALL: Typography = preset(UI_FONT, 12.0, 16.0, 400.0);
@@ -69,22 +70,22 @@ pub trait UiStyles: Styled {
 
     #[track_caller]
     fn primary(self) -> Self {
-        self.text_color(Theme::current().text())
+        self.text_color(Role::Text)
     }
 
     #[track_caller]
     fn secondary(self) -> Self {
-        self.text_color(Theme::current().text_secondary())
+        self.text_color(Role::TextSecondary)
     }
 
     #[track_caller]
     fn muted(self) -> Self {
-        self.text_color(Theme::current().text_muted())
+        self.text_color(Role::TextMuted)
     }
 
     #[track_caller]
     fn accent(self) -> Self {
-        self.text_color(Theme::current().accent())
+        self.text_color(Role::Accent)
     }
 }
 

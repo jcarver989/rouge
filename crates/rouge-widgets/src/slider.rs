@@ -1,6 +1,8 @@
 use crate::util::focus_ring;
+use rouge_core::Role;
 use rouge_core::{
-    Color, Cursor, Div, Key, PointerButton, Styled, Theme, component, div, pct, view,
+    BuildCx, Color, Cursor, Div, Key, PointerButton, StyleDelta, Styled, View, component, div, pct,
+    styled, view,
 };
 use rouge_reactive::Signal;
 use std::cell::Cell;
@@ -9,10 +11,47 @@ use std::rc::Rc;
 const THUMB: f32 = 16.0;
 const BORDER: f32 = 1.0;
 
+pub struct Slider {
+    value: Signal<f32>,
+    range: (f32, f32),
+    step: Option<f32>,
+    style: StyleDelta,
+}
+
 #[component]
-pub fn slider(value: Signal<f32>, range: Option<(f32, f32)>, step: Option<f32>) -> Div {
-    let theme = Theme::current();
-    let (min, max) = range.unwrap_or((0.0, 1.0));
+pub fn slider(value: Signal<f32>) -> Slider {
+    Slider {
+        value,
+        range: (0.0, 1.0),
+        step: None,
+        style: StyleDelta::default(),
+    }
+}
+
+impl Slider {
+    pub fn range(mut self, (min, max): (f32, f32)) -> Self {
+        self.range = (min, max);
+        self
+    }
+
+    pub fn step(mut self, step: f32) -> Self {
+        self.step = Some(step);
+        self
+    }
+}
+
+styled!(Slider => style);
+
+impl View for Slider {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let style = self.style;
+        style
+            .apply(slider_root(self.value, self.range, self.step))
+            .build(cx);
+    }
+}
+
+fn slider_root(value: Signal<f32>, (min, max): (f32, f32), step: Option<f32>) -> Div {
     let max = max.max(min + f32::EPSILON);
     let step = step.filter(|step| *step > 0.0);
     let snap = move |raw: f32| {
@@ -34,11 +73,11 @@ pub fn slider(value: Signal<f32>, range: Option<(f32, f32)>, step: Option<f32>) 
         .right(0.0)
         .h(4.0)
         .rounded(2.0)
-        .bg(theme.border());
+        .bg(Role::Border);
     let fill = div()
         .h_full()
         .rounded(2.0)
-        .bg(theme.accent())
+        .bg(Role::Accent)
         .w(move || pct(fraction() * 100.0));
     let thumb = div()
         .absolute()
@@ -46,7 +85,7 @@ pub fn slider(value: Signal<f32>, range: Option<(f32, f32)>, step: Option<f32>) 
         .rounded(THUMB / 2.0)
         .bg(Color::WHITE)
         .border(1.0)
-        .border_color(theme.border())
+        .border_color(Role::Border)
         .left(move || pct(fraction() * 100.0));
     let rail = div()
         .absolute()

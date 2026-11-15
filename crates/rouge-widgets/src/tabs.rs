@@ -1,4 +1,5 @@
 use crate::typography::UiStyles;
+use rouge_core::Role;
 use rouge_core::{
     AnyView, BuildCx, Color, Cursor, Div, Key, Styled, Theme, View, component, div, dynamic,
     styled, text, view,
@@ -63,7 +64,7 @@ impl View for Tabs {
                 </div>
             };
             header
-                .focus_visible(|style| style.bg(theme.surface_hover()))
+                .focus_visible(|style| style.bg(Role::SurfaceHover))
                 .border_color(move || {
                     if on() {
                         theme.get().accent
@@ -77,7 +78,7 @@ impl View for Tabs {
             None => div().into_any(),
         });
         self.root
-            .child(view! { <div flex flex_none border_b=1.0 border_color=theme.border()>{..headers}</div> })
+            .child(view! { <div flex flex_none border_b=1.0 border_color=Role::Border>{..headers}</div> })
             .child(view! { <div flex_1 min_h=0.0>{body}</div> })
             .build(cx);
     }

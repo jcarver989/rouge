@@ -1,26 +1,50 @@
 use crate::icon::{Icon, IconName};
-use rouge_core::{Div, Ease, IntoProp, Keyframes, Styled, Theme, auto, component, div, pct, view};
+use rouge_core::Role;
+use rouge_core::{
+    BuildCx, Div, Ease, IntoProp, Keyframes, StyleDelta, Styled, View, auto, component, div, pct,
+    styled, view,
+};
+
+pub struct Separator {
+    vertical: bool,
+    style: StyleDelta,
+}
 
 #[component]
-pub fn separator(#[prop(default)] vertical: bool) -> Div {
-    let line = div()
-        .flex_none()
-        .self_stretch()
-        .bg(Theme::current().border());
-    if vertical {
-        line.h(auto()).w(1.0)
-    } else {
-        line.h(1.0)
+pub fn separator() -> Separator {
+    Separator {
+        vertical: false,
+        style: StyleDelta::default(),
+    }
+}
+
+impl Separator {
+    pub fn vertical(mut self) -> Self {
+        self.vertical = true;
+        self
+    }
+}
+
+styled!(Separator => style);
+
+impl View for Separator {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let line = div().flex_none().self_stretch().bg(Role::Border);
+        let line = if self.vertical {
+            line.h(auto()).w(1.0)
+        } else {
+            line.h(1.0)
+        };
+        self.style.apply(line).build(cx);
     }
 }
 
 #[component]
 pub fn progress<U>(value: impl IntoProp<f32, U>) -> Div {
-    let theme = Theme::current();
     let value = value.into_prop();
     view! {
-        <div h=6.0 min_w=40.0 rounded=3.0 bg=theme.border() overflow_hidden>
-            <div h_full bg=theme.accent() w={move || pct(value.get().clamp(0.0, 1.0) * 100.0)}/>
+        <div h=6.0 min_w=40.0 rounded=3.0 bg=Role::Border overflow_hidden>
+            <div h_full bg=Role::Accent w={move || pct(value.get().clamp(0.0, 1.0) * 100.0)}/>
         </div>
     }
 }
@@ -35,7 +59,7 @@ pub fn spinner() -> Div {
         .repeat();
     view! {
         <div flex_none size=20.0 animate=spin>
-            {Icon::new(IconName::LoaderCircle, Theme::current().accent()).size(20.0)}
+            {Icon::new(IconName::LoaderCircle, Role::Accent).size(20.0)}
         </div>
     }
 }

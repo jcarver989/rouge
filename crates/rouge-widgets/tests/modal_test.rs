@@ -14,10 +14,10 @@ fn modal_covers_the_window_traps_focus_and_dismisses() -> TestResult {
         let dialog = move || {
             let confirm = confirm.clone();
             view! {
-                <modal id="dialog" title="Confirm" on_dismiss={move || open.set(false)}>
+                <modal test_id="dialog" title="Confirm" on_dismiss={move || open.set(false)}>
                     <div flex gap=8.0>
-                        <button id="cancel" label="Cancel" keyboard_focusable on_click={move || open.set(false)}/>
-                        <button id="ok" label="OK" keyboard_focusable on_click=confirm/>
+                        <button test_id="cancel" label="Cancel" on_click={move || open.set(false)}/>
+                        <button test_id="ok" label="OK" on_click=confirm/>
                     </div>
                 </modal>
             }

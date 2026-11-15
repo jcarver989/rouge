@@ -1,7 +1,8 @@
+use rouge_core::Role;
 use rouge_core::component;
 use rouge_core::{
-    Div, IntoProp, PointerButton, PointerEvent, ResizeEdge, Styled, Theme, View, WindowHandle, div,
-    text, window_handle,
+    Div, IntoProp, PointerButton, PointerEvent, ResizeEdge, Styled, View, WindowHandle, div, text,
+    window_handle,
 };
 
 #[component]
@@ -10,7 +11,6 @@ where
     T: View,
 {
     let window = window_handle();
-    let theme = Theme::current();
     let button = move |id, label, click: fn(WindowHandle)| {
         div()
             .test_id(id)
@@ -19,7 +19,7 @@ where
             .flex()
             .items_center()
             .justify_center()
-            .hover(|style| style.bg(theme.surface_hover()))
+            .hover(|style| style.bg(Role::SurfaceHover))
             .on_pointer_down(PointerEvent::stop_propagation)
             .on_click(move |_| click(window))
             .child(text(label))
@@ -31,8 +31,8 @@ where
         .flex_none()
         .flex()
         .items_center()
-        .bg(theme.elevated())
-        .text_color(theme.text())
+        .bg(Role::Elevated)
+        .text_color(Role::Text)
         .on_pointer_down(move |event| match (event.button, event.click_count) {
             (PointerButton::Primary, 2) => window.zoom(),
             (PointerButton::Primary, _) => window.start_drag(),

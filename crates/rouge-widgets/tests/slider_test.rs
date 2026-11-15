@@ -13,7 +13,7 @@ fn slider_follows_the_pointer_snaps_to_steps_and_takes_arrow_keys() {
     let mut ui = builder().build(move || {
         div()
             .p(10.0)
-            .child(slider(value, Some((0.0, 100.0)), Some(10.0)).w(216.0))
+            .child(slider(value).range((0.0, 100.0)).step(10.0).w(216.0))
     });
     ui.click_at(118.0, 18.0);
     assert_eq!(value.get(), 50.0, "the middle of the track");
@@ -46,7 +46,7 @@ fn the_thumb_is_placed_by_layout_alone_on_the_first_frame() -> TestResult {
     let mut ui = builder().build(move || {
         div()
             .p(10.0)
-            .child(slider(value, Some((0.0, 100.0)), None).w(216.0))
+            .child(slider(value).range((0.0, 100.0)).w(216.0))
     });
     assert_eq!(ui.bounds(119.0, 18.0)?, Rect::new(111.0, 10.0, 16.0, 16.0));
     assert_eq!((ui.stats().layouts, ui.stats().relayouts), (1, 0));

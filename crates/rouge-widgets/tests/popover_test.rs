@@ -15,10 +15,7 @@ fn popover_opens_below_its_trigger_and_closes_on_outside_click_or_escape() -> Te
     let (inside, hit_inside) = counter();
     let (behind, hit_behind) = counter();
     let mut ui = builder().build(move || {
-        let trigger = div()
-            .w(60.0)
-            .h(24.0)
-            .on_press(move || open.update(|open| *open = !*open));
+        let trigger = div().w(60.0).h(24.0);
         let content = move || {
             let hit_inside = hit_inside.clone();
             div().size(80.0).on_click(move |_| hit_inside())
