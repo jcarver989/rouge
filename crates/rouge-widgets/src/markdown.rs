@@ -1,7 +1,7 @@
 use crate::fonts::{CODE_FONT, UI_FONT};
 use crate::syntax::{CODE_WRAP, syntax_spans};
 use crate::tokens::Radius;
-use crate::typography::{CODE, READING, preset};
+use crate::typography::{CODE, READING, TITLE, preset};
 use crate::{IconName, UiStyles, icon_button};
 use rouge_core::Role;
 use rouge_core::{
@@ -25,6 +25,7 @@ pub struct MarkdownPaint {
     palette: Memo<MarkdownPalette>,
     syntax: Memo<SyntaxTheme>,
     on_link: Callback<(String,)>,
+    compact: bool,
 }
 
 impl MarkdownPaint {
@@ -49,6 +50,7 @@ impl MarkdownPaint {
             }),
             syntax: memo(SyntaxTheme::default),
             on_link: Callback::default(),
+            compact: false,
         }
     }
 
@@ -70,6 +72,20 @@ impl MarkdownPaint {
     pub fn on_link(mut self, on_link: impl Into<Callback<(String,)>>) -> Self {
         self.on_link = on_link.into();
         self
+    }
+
+    #[must_use]
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
+        self
+    }
+
+    fn prose(&self) -> Div {
+        if self.compact {
+            prose().px(0.0).body()
+        } else {
+            prose()
+        }
     }
 
     fn markdown(&self, pick: fn(&MarkdownPalette) -> Rgba) -> impl Fn() -> Color + 'static {
@@ -129,6 +145,11 @@ impl Markdown {
 
     pub fn syntax<U>(mut self, syntax: impl IntoProp<SyntaxTheme, U>) -> Self {
         self.paint = self.paint.syntax(syntax);
+        self
+    }
+
+    pub fn compact(mut self) -> Self {
+        self.paint = self.paint.compact();
         self
     }
 }
@@ -325,19 +346,30 @@ impl MarkdownRow {
 
     pub fn block(&self, paint: &MarkdownPaint) -> Div {
         match &self.kind {
-            Kind::Heading { level, content } => prose()
-                .typography(heading(*level))
+            Kind::Heading { level, content } => paint
+                .prose()
+                .typography(if paint.compact {
+                    TITLE
+                } else {
+                    heading(*level)
+                })
                 .text_color(paint.markdown(|m| m.heading))
                 .child(inline_text(content, paint)),
-            Kind::Paragraph { content } => view! { <prose>{inline_text(content, paint)}</prose> },
-            Kind::ListItem { marker, content } => view! {
-                <prose py=0.0 flex row gap=8.0>
+            Kind::Paragraph { content } => paint.prose().child(inline_text(content, paint)),
+            Kind::ListItem { marker, content } => paint
+                .prose()
+                .py(0.0)
+                .flex()
+                .row()
+                .gap(8.0)
+                .child(view! {
                     <div min_w=16.0 flex_none muted>
                         <text>{marker.clone()}</text>
                     </div>
+                })
+                .child(view! {
                     <div flex_1 min_w=0.0>{inline_text(content, paint)}</div>
-                </prose>
-            },
+                }),
             Kind::Quote { rows } => view! {
                 <div px=8.0>
                     <div pl=8.0 border_l=2.0 border_color=paint.markdown(|m| m.quote)
@@ -348,6 +380,9 @@ impl MarkdownRow {
                     </div>
                 </div>
             },
+            Kind::CodeHeader { code } if paint.compact => {
+                code_cap(code).bg(paint.markdown(|m| m.code_background))
+            }
             Kind::CodeHeader { code } => {
                 code_header(code).bg(paint.markdown(|m| m.code_background))
             }
@@ -367,9 +402,10 @@ impl MarkdownRow {
             Kind::Rule => view! {
                 <div py=12.0><div h=1.0 w_full bg=Role::Border/></div>
             },
-            Kind::Html { content } => view! {
-                <prose muted>{inline_text(content, paint).code()}</prose>
-            },
+            Kind::Html { content } => paint
+                .prose()
+                .muted()
+                .child(inline_text(content, paint).code()),
         }
     }
 }
@@ -450,6 +486,15 @@ fn corners(top: bool, bottom: bool) -> Corners {
         bottom_right: bottom,
         bottom_left: bottom,
     }
+}
+
+fn code_cap(code: &MarkdownCodeBlock) -> Div {
+    let empty = code.lines().is_empty();
+    let cap = view! {
+        <div h=8.0 border_t=1.0 border_l=1.0 border_r=1.0 border_color=Role::Border
+             rounded=corners(true, empty)/>
+    };
+    if empty { cap.border_b(1.0) } else { cap }
 }
 
 fn code_header(code: &Arc<MarkdownCodeBlock>) -> Div {

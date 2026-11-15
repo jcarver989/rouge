@@ -50,6 +50,18 @@ fn the_copy_button_copies_a_code_block() -> TestResult {
 }
 
 #[test]
+fn compact_code_blocks_are_highlighted_without_the_copy_header() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let document = MarkdownDocument::parse("Docs\n\n```rust\nfn main() {}\n```\n");
+    let ui = component_test()
+        .size(600.0, 200.0)
+        .build(move || markdown(document).palette(palette()).compact());
+    assert!(ui.text_bounds("fn main() {}").is_some(), "the code renders");
+    assert_eq!(ui.bounds_of("markdown-copy-code"), None);
+    Ok(())
+}
+
+#[test]
 fn appending_a_block_to_a_stream_builds_only_that_block() -> TestResult {
     let _entered = Runtime::new().enter();
     let mut streamed = Streamed::new("# Title\n\nFirst paragraph.\n\n");
