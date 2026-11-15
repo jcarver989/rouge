@@ -307,6 +307,15 @@ impl TestUi {
         Ok(())
     }
 
+    pub fn double_click_on(&mut self, name: &str) -> Result<(), TestError> {
+        let point = self.center_of(name)?;
+        self.press_pointer(point, PointerButton::Primary);
+        self.ui.pointer_down(PointerButton::Primary);
+        self.ui.pointer_up(PointerButton::Primary);
+        self.advance(0.0);
+        Ok(())
+    }
+
     pub fn right_click_on(&mut self, name: &str) -> Result<(), TestError> {
         let point = self.center_of(name)?;
         self.press_pointer(point, PointerButton::Secondary);
