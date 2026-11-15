@@ -9,12 +9,12 @@ mod theme;
 
 pub use error::SyntaxError;
 pub use highlight::{
-    DocumentHighlights, HighlightLine, HighlightSpans, MAX_SOURCE_BYTES, SourceSyntax,
-    SyntaxStream, SyntaxStreamUpdate, analyze, thread_work,
+    DocumentHighlights, HighlightLine, MAX_SOURCE_BYTES, SourceSyntax, SyntaxStream,
+    SyntaxStreamUpdate, analyze,
 };
 pub use incremental::SyntaxWorkStats;
-pub use language::{LanguageHint, resolve_language};
+pub use language::resolve_language;
 pub use symbols::{
     LineSpan, SymbolDefinition, SymbolKind, SymbolReference, SymbolTags, has_symbols,
 };
-pub use theme::{FontStyle, HighlightId, HighlightSpan, SyntaxStyle, SyntaxTheme};
+pub use theme::{FontStyle, HighlightId, HighlightSpan, SyntaxStyle, SyntaxTheme, capture_style};

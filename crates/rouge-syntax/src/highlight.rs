@@ -1,40 +1,83 @@
 use crate::{HighlightId, HighlightSpan};
 use crate::{
     SyntaxError,
-    incremental::{AppendContext, IncrementalDocument, SyntaxWorkStats},
-    language::{LanguageHint, resolve_hint, shebang_id},
-    spans::flatten,
+    incremental::{AppendContext, IncrementalDocument, SyntaxWorkStats, grammar},
+    language::{LanguageId, resolve_hint, shebang_id},
+    spans::Flattener,
     symbols::SymbolTags,
 };
 use std::{
-    cell::Cell,
-    fmt, iter,
+    fmt,
     ops::Range,
-    slice,
     sync::{Arc, OnceLock},
 };
+use tree_sitter::Tree;
 
 pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INJECTION_DEPTH: usize = 3;
 const CHUNK_LINES: usize = 256;
 
-thread_local! {
-    static THREAD_WORK: Cell<SyntaxWorkStats> = Cell::default();
-}
-
-#[must_use]
-pub fn thread_work() -> SyntaxWorkStats {
-    THREAD_WORK.get()
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct SourceSyntax {
     pub highlights: Arc<DocumentHighlights>,
-    pub symbols: Arc<SymbolTags>,
+    symbols: Arc<Symbols>,
+    work: SyntaxWorkStats,
+}
+
+impl SourceSyntax {
+    #[must_use]
+    pub fn new(highlights: Arc<DocumentHighlights>) -> Self {
+        Self {
+            highlights,
+            symbols: Arc::default(),
+            work: SyntaxWorkStats::default(),
+        }
+    }
+
+    #[must_use]
+    pub const fn work_stats(&self) -> SyntaxWorkStats {
+        self.work
+    }
+
+    #[must_use]
+    pub fn symbols(&self) -> &Arc<SymbolTags> {
+        self.symbols.tags.get_or_init(|| {
+            Arc::new(
+                self.symbols
+                    .source
+                    .as_ref()
+                    .and_then(|source| {
+                        let grammar = grammar(source.language)?;
+                        Some(grammar.tags()?.extract(&source.tree, &source.text))
+                    })
+                    .unwrap_or_default(),
+            )
+        })
+    }
+}
+
+#[derive(Default)]
+struct Symbols {
+    tags: OnceLock<Arc<SymbolTags>>,
+    source: Option<TaggedSource>,
+}
+
+struct TaggedSource {
+    tree: Tree,
+    language: LanguageId,
+    text: Arc<str>,
+}
+
+impl fmt::Debug for Symbols {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Symbols")
+            .field("tags", &self.tags.get())
+            .finish_non_exhaustive()
+    }
 }
 
 #[must_use]
-pub fn analyze<'a>(language: impl Into<LanguageHint<'a>>, source: &str) -> SourceSyntax {
+pub fn analyze(language: &str, source: &str) -> SourceSyntax {
     let mut stream = SyntaxStream::new(language);
     let _rejected = stream.append(source);
     stream.syntax()
@@ -42,16 +85,17 @@ pub fn analyze<'a>(language: impl Into<LanguageHint<'a>>, source: &str) -> Sourc
 
 #[derive(Debug, Clone, Default)]
 pub struct SyntaxStream {
-    hint: Option<&'static str>,
+    hint: Option<LanguageId>,
     source: String,
     revision: u64,
     highlights: Arc<DocumentHighlights>,
-    symbols: OnceLock<Arc<SymbolTags>>,
+    symbols: OnceLock<Arc<Symbols>>,
     document: Option<IncrementalDocument>,
-    language: Option<&'static str>,
+    language: Option<LanguageId>,
     language_settled: bool,
     line_starts: Vec<usize>,
     work: SyntaxWorkStats,
+    flattener: Flattener,
 }
 
 #[derive(Debug, Clone)]
@@ -64,9 +108,9 @@ pub struct SyntaxStreamUpdate {
 
 impl SyntaxStream {
     #[must_use]
-    pub fn new<'a>(hint: impl Into<LanguageHint<'a>>) -> Self {
+    pub fn new(language: &str) -> Self {
         Self {
-            hint: resolve_hint(hint.into().as_str()),
+            hint: resolve_hint(language),
             ..Self::default()
         }
     }
@@ -94,19 +138,23 @@ impl SyntaxStream {
     #[must_use]
     pub fn syntax(&self) -> SourceSyntax {
         let symbols = self.symbols.get_or_init(|| {
-            let symbols = self.document.as_ref().and_then(|document| {
-                Some(
-                    document
-                        .grammar()
-                        .tags()?
-                        .extract(document.tree()?, &self.source),
-                )
+            let source = self.document.as_ref().and_then(|document| {
+                document.grammar().tags()?;
+                Some(TaggedSource {
+                    tree: document.tree()?.clone(),
+                    language: self.language?,
+                    text: Arc::from(self.source.as_str()),
+                })
             });
-            Arc::new(symbols.unwrap_or_default())
+            Arc::new(Symbols {
+                tags: OnceLock::new(),
+                source,
+            })
         });
         SourceSyntax {
             highlights: Arc::clone(&self.highlights),
             symbols: Arc::clone(symbols),
+            work: self.work,
         }
     }
 
@@ -146,7 +194,6 @@ impl SyntaxStream {
             .parse(previous_len, &mut work)
             .map(|start| self.project(start, &mut work));
         self.work = self.work + work;
-        THREAD_WORK.set(THREAD_WORK.get() + work);
         let first_changed = match parsed {
             Ok(first_changed) => first_changed,
             Err(error) => {
@@ -188,7 +235,7 @@ impl SyntaxStream {
             Some(document) => document,
             slot => slot.insert(IncrementalDocument::new(language).ok_or_else(|| {
                 SyntaxError::MissingGrammar {
-                    language: language.to_owned(),
+                    language: language.name().to_owned(),
                 }
             })?),
         };
@@ -209,11 +256,10 @@ impl SyntaxStream {
             .partition_point(|&offset| offset <= start)
             .saturating_sub(1);
         let byte_start = self.line_starts.get(first_line).copied().unwrap_or(0);
-        let mut raw = Vec::new();
         if let Some(document) = &self.document {
-            document.spans_from(byte_start, &mut raw);
+            document.spans_from(byte_start, &mut self.flattener.raw);
         }
-        let spans = flatten(&self.source, raw);
+        let spans = self.flattener.flatten(&self.source);
         let previous = &self.highlights;
         let mut lines = HighlightsBuilder::prefix(previous, first_line.min(previous.line_count()));
         let mut first_changed = lines.line_count();
@@ -292,9 +338,7 @@ impl DocumentHighlights {
 #[derive(Debug, Clone, Default)]
 struct HighlightChunk {
     line_ends: Vec<u32>,
-    starts: Vec<u32>,
-    ends: Vec<u32>,
-    ids: Vec<HighlightId>,
+    spans: Vec<(u32, u32, HighlightId)>,
 }
 
 impl HighlightChunk {
@@ -304,9 +348,7 @@ impl HighlightChunk {
             .map_or(0, |previous| self.line_ends[previous] as usize);
         let to = self.line_ends[index] as usize;
         HighlightLine {
-            starts: &self.starts[from..to],
-            ends: &self.ends[from..to],
-            ids: &self.ids[from..to],
+            spans: &self.spans[from..to],
         }
     }
 
@@ -316,9 +358,7 @@ impl HighlightChunk {
             .map_or(0, |last| self.line_ends[last] as usize);
         Self {
             line_ends: self.line_ends[..lines].to_vec(),
-            starts: self.starts[..spans].to_vec(),
-            ends: self.ends[..spans].to_vec(),
-            ids: self.ids[..spans].to_vec(),
+            spans: self.spans[..spans].to_vec(),
         }
     }
 }
@@ -355,13 +395,9 @@ impl HighlightsBuilder {
         previous: Option<HighlightLine<'_>>,
     ) -> bool {
         let tail = &mut self.tail;
-        for (start, end, id) in spans {
-            tail.starts.push(start);
-            tail.ends.push(end);
-            tail.ids.push(id);
-        }
+        tail.spans.extend(spans);
         tail.line_ends
-            .push(u32::try_from(tail.ids.len()).expect("chunk spans fit u32"));
+            .push(u32::try_from(tail.spans.len()).expect("chunk spans fit u32"));
         let unchanged = previous == Some(tail.line(tail.line_ends.len() - 1));
         self.lines += 1;
         if tail.line_ends.len() == CHUNK_LINES {
@@ -383,65 +419,37 @@ impl HighlightsBuilder {
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct HighlightLine<'a> {
-    starts: &'a [u32],
-    ends: &'a [u32],
-    ids: &'a [HighlightId],
+    spans: &'a [(u32, u32, HighlightId)],
 }
-
-type SpanParts<'a> =
-    iter::Zip<iter::Zip<slice::Iter<'a, u32>, slice::Iter<'a, u32>>, slice::Iter<'a, HighlightId>>;
-
-pub type HighlightSpans<'a> =
-    iter::Map<SpanParts<'a>, fn(((&u32, &u32), &HighlightId)) -> HighlightSpan>;
 
 impl<'a> HighlightLine<'a> {
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.ids.len()
+        self.spans.len()
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.ids.is_empty()
+        self.spans.is_empty()
     }
 
     #[must_use]
     pub fn clipped(self, len: usize) -> Self {
-        let kept = self.ends.partition_point(|&end| end as usize <= len);
+        let kept = self
+            .spans
+            .partition_point(|&(_, end, _)| end as usize <= len);
         Self {
-            starts: &self.starts[..kept],
-            ends: &self.ends[..kept],
-            ids: &self.ids[..kept],
+            spans: &self.spans[..kept],
         }
     }
 
-    pub fn iter(&self) -> HighlightSpans<'a> {
-        self.starts
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = HighlightSpan> + use<'a> {
+        self.spans
             .iter()
-            .zip(self.ends)
-            .zip(self.ids)
-            .map(|((&start, &end), &highlight)| HighlightSpan {
+            .map(|&(start, end, highlight)| HighlightSpan {
                 range: start as usize..end as usize,
                 highlight,
             })
-    }
-}
-
-impl<'a> IntoIterator for HighlightLine<'a> {
-    type Item = HighlightSpan;
-    type IntoIter = HighlightSpans<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-impl<'a> IntoIterator for &HighlightLine<'a> {
-    type Item = HighlightSpan;
-    type IntoIter = HighlightSpans<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
     }
 }
 

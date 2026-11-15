@@ -6,11 +6,11 @@ use ast_grep_core::{
     tree_sitter::{LanguageExt, StrDoc, TSLanguage},
 };
 use rouge_syntax::{
-    DocumentHighlights, FontStyle, LanguageHint, MAX_SOURCE_BYTES, SymbolTags, SyntaxError,
-    SyntaxStyle, SyntaxTheme, analyze, thread_work,
+    DocumentHighlights, FontStyle, MAX_SOURCE_BYTES, SymbolTags, SyntaxError, SyntaxStyle,
+    SyntaxTheme, SyntaxWorkStats, analyze,
 };
 use rouge_theme::Rgba;
-use std::{fmt::Write, num::NonZeroU16, ops::Range, sync::Arc};
+use std::{fmt::Write, num::NonZeroU16, ops::Range, ptr};
 use support::{SyntaxBuilder, TestResult, line};
 
 #[test]
@@ -50,14 +50,13 @@ fn a_large_document_is_analyzed_in_one_parse() -> TestResult {
     for index in 0..10_000 {
         writeln!(text, "fn value_{index}() -> usize {{ {index} }}")?;
     }
-    let before = thread_work();
     let analysis = analyze("rust", &text);
-    let after = thread_work();
-    assert_eq!(after.full_parses - before.full_parses, 1);
-    assert_eq!(after.incremental_parses, before.incremental_parses);
-    assert!(after.parser_input_bytes - before.parser_input_bytes >= text.len());
+    let work = analysis.work_stats();
+    assert_eq!(work.full_parses, 1);
+    assert_eq!(work.incremental_parses, 0);
+    assert!(work.parser_input_bytes >= text.len());
     assert!(!line(&analysis.highlights, 9_000)?.is_empty());
-    assert_eq!(analysis.symbols.definitions.len(), 10_000);
+    assert_eq!(analysis.symbols().definitions.len(), 10_000);
     Ok(())
 }
 
@@ -98,12 +97,9 @@ fn aliases_resolve_to_identical_utf8_highlights() -> TestResult {
 #[test]
 fn paths_and_shebangs_resolve_before_the_first_parse() -> TestResult {
     for (hint, source) in [
-        (
-            LanguageHint::Path("src/lib.rs"),
-            "/* alpha\r\nbeta */\nlet café = 1;\n",
-        ),
-        (LanguageHint::Auto, "#!/usr/bin/env python3\nprint('hi')\n"),
-        (LanguageHint::InfoString("python linenums"), "print('hi')\n"),
+        ("src/lib.rs", "/* alpha\r\nbeta */\nlet café = 1;\n"),
+        ("", "#!/usr/bin/env python3\nprint('hi')\n"),
+        ("python", "print('hi')\n"),
     ] {
         let highlights = analyze(hint, source).highlights;
         assert_eq!(highlights.line_count(), source.lines().count());
@@ -144,27 +140,29 @@ fn stream_symbols_are_extracted_once_per_revision() -> TestResult {
     fixture.append("fn first() {}\n")?;
     let before = fixture.stream.syntax();
     let again = fixture.stream.syntax();
-    assert!(Arc::ptr_eq(&before.symbols, &again.symbols));
-    assert_eq!(*before.symbols, *analyze("rust", "fn first() {}\n").symbols);
+    assert!(ptr::eq(before.symbols(), again.symbols()));
+    assert_eq!(
+        *before.symbols(),
+        *analyze("rust", "fn first() {}\n").symbols()
+    );
     fixture.append("fn second() {}\n")?;
     let after = fixture.stream.syntax();
-    assert!(!Arc::ptr_eq(&before.symbols, &after.symbols));
+    assert!(!ptr::eq(before.symbols(), after.symbols()));
     assert_eq!(
-        *after.symbols,
-        *analyze("rust", fixture.stream.source()).symbols
+        *after.symbols(),
+        *analyze("rust", fixture.stream.source()).symbols()
     );
     Ok(())
 }
 
 #[test]
 fn unknown_language_is_plain_text_without_parsing() -> TestResult {
-    let before = thread_work();
     let analysis = analyze("binary.zzz", "abc\n\n");
     assert_eq!(analysis.highlights.line_count(), 2);
     assert!(line(&analysis.highlights, 0)?.is_empty());
     assert!(line(&analysis.highlights, 1)?.is_empty());
-    assert_eq!(thread_work().parses(), before.parses());
-    assert_eq!(*analysis.symbols, SymbolTags::default());
+    assert_eq!(analysis.work_stats().parses(), 0);
+    assert_eq!(**analysis.symbols(), SymbolTags::default());
     Ok(())
 }
 
@@ -177,9 +175,8 @@ fn input_limits_reject_oversized_sources() -> TestResult {
         Err(SyntaxError::InputLimit { limit: MAX_SOURCE_BYTES, attempted }) if attempted == MAX_SOURCE_BYTES + 12
     ));
     assert_eq!(fixture.stream.revision(), accepted.revision);
-    let before = thread_work();
     let rejected = analyze("rust", &"x".repeat(MAX_SOURCE_BYTES + 1));
-    assert_eq!(thread_work(), before);
+    assert_eq!(rejected.work_stats(), SyntaxWorkStats::default());
     assert_eq!(rejected.highlights.line_count(), 0);
     Ok(())
 }
@@ -292,7 +289,7 @@ fn resolved(
         .map(|index| {
             highlights.line(index).map(|spans| {
                 let mut styled: Vec<HighlightSpan> = Vec::new();
-                for span in spans {
+                for span in spans.iter() {
                     let Some(style) = theme.highlight(span.highlight) else {
                         continue;
                     };
@@ -323,7 +320,7 @@ fn theme(foreground: Rgba) -> SyntaxTheme {
         font_style: FontStyle::default(),
     };
     SyntaxTheme::new(
-        ["keyword", "variable", "number", "tag"]
+        &["keyword", "variable", "number", "tag"]
             .into_iter()
             .map(|name| (name.to_owned(), style))
             .collect(),

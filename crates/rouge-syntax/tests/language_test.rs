@@ -1,4 +1,4 @@
-use rouge_syntax::{LanguageHint, SyntaxError, SyntaxStream, analyze, resolve_language};
+use rouge_syntax::{SyntaxError, SyntaxStream, analyze, resolve_language};
 
 #[test]
 fn resolves_aliases_paths_special_files_and_shebangs() {
@@ -184,12 +184,8 @@ fn bundled_languages_resolve_representative_families_and_exclude_nginx() {
     ];
     let mut styled_fixture_count = 0;
     for (path, source, expected) in fixtures {
-        assert_eq!(
-            resolve_language(LanguageHint::Path(path), source),
-            Some(expected),
-            "{path}"
-        );
-        let highlights = analyze(LanguageHint::Path(path), source).highlights;
+        assert_eq!(resolve_language(path, source), Some(expected), "{path}");
+        let highlights = analyze(path, source).highlights;
         styled_fixture_count += usize::from((0..highlights.line_count()).any(|index| {
             highlights
                 .line(index)

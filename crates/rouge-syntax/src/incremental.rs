@@ -1,7 +1,7 @@
 use crate::HighlightId;
 use crate::{
     SyntaxError,
-    language::resolve_language,
+    language::{LANGUAGES, Language, LanguageId, resolve_hint, shebang_id},
     spans::{Injection, Span},
     symbols::TagsGrammar,
 };
@@ -10,14 +10,13 @@ use arborium_theme::tag_for_capture;
 use std::rc::Rc as SharedGrammar;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc as SharedGrammar;
-use std::{borrow::Cow, fmt, ops::Add, sync::OnceLock};
+use std::{borrow::Cow, collections::HashSet, fmt, ops::Add, sync::OnceLock};
 use tree_sitter::{
-    InputEdit, Language, Node, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
+    InputEdit, Language as TreeLanguage, Node, Parser, Point, Query, QueryCursor,
+    StreamingIterator, Tree,
 };
 
-/// Bytes handed to Tree-sitter per input callback. `parser_input_bytes` counts
-/// these requests, so smaller chunks measure re-lexing more precisely.
-const PARSER_CHUNK_BYTES: usize = 64;
+const PARSER_CHUNK_BYTES: usize = 16 << 10;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SyntaxWorkStats {
@@ -55,34 +54,31 @@ impl Add for SyntaxWorkStats {
     }
 }
 
-type Spec = (Language, &'static str, &'static str);
-
 type Compiled = OnceLock<Option<SharedGrammar<Grammar>>>;
 
 #[cfg(not(target_family = "wasm"))]
 fn with_registry<T>(read: impl FnOnce(&[Compiled]) -> T) -> T {
-    static REGISTRY: [Compiled; GRAMMARS.len()] = [const { OnceLock::new() }; GRAMMARS.len()];
+    static REGISTRY: [Compiled; LANGUAGES.len()] = [const { OnceLock::new() }; LANGUAGES.len()];
     read(&REGISTRY)
 }
 
 #[cfg(target_family = "wasm")]
 fn with_registry<T>(read: impl FnOnce(&[Compiled]) -> T) -> T {
     thread_local! {
-        static REGISTRY: [Compiled; GRAMMARS.len()] = const { [const { OnceLock::new() }; GRAMMARS.len()] };
+        static REGISTRY: [Compiled; LANGUAGES.len()] = const { [const { OnceLock::new() }; LANGUAGES.len()] };
     }
     REGISTRY.with(|registry| read(registry))
 }
 
-pub(crate) fn grammar(language: &str) -> Option<SharedGrammar<Grammar>> {
-    let index = GRAMMARS.iter().position(|(name, _)| *name == language)?;
+pub(crate) fn grammar(language: LanguageId) -> Option<SharedGrammar<Grammar>> {
     with_registry(|registry| {
-        registry[index]
-            .get_or_init(|| compile(GRAMMARS[index]))
+        registry[language.index()]
+            .get_or_init(|| compile(language.language()))
             .clone()
     })
 }
 
-fn compile((name, spec): (&'static str, fn() -> Spec)) -> Option<SharedGrammar<Grammar>> {
+fn compile(&Language { name, spec, .. }: &Language) -> Option<SharedGrammar<Grammar>> {
     let (language, highlights, injections) = spec();
     let highlights = if name == "solidity" {
         Cow::Owned(highlights.replace(
@@ -92,7 +88,11 @@ fn compile((name, spec): (&'static str, fn() -> Spec)) -> Option<SharedGrammar<G
     } else {
         Cow::Borrowed(highlights)
     };
-    let query_source = format!("{highlights}\n{injections}");
+    let query_words: HashSet<Box<str>> = [highlights.as_ref(), injections]
+        .into_iter()
+        .flat_map(query_words)
+        .map(String::into_boxed_str)
+        .collect();
     let queried_kinds = (0..language.node_kind_count())
         .map(|_| OnceLock::new())
         .collect();
@@ -107,10 +107,7 @@ fn compile((name, spec): (&'static str, fn() -> Spec)) -> Option<SharedGrammar<G
         .iter()
         .map(|name| CaptureRole::of(name))
         .collect();
-    let error_prefix = !non_local
-        && !["ERROR", "(_ ", "(_\n"]
-            .iter()
-            .any(|pattern| query_source.contains(pattern));
+    let error_prefix = !non_local && !query_words.contains("ERROR") && !query_words.contains("_");
     Some(SharedGrammar::new(Grammar {
         language,
         highlights,
@@ -118,7 +115,7 @@ fn compile((name, spec): (&'static str, fn() -> Spec)) -> Option<SharedGrammar<G
         injections,
         non_local,
         error_prefix,
-        query_source,
+        query_words,
         queried_kinds,
         tags,
     }))
@@ -143,7 +140,7 @@ pub(crate) struct IncrementalDocument {
 
 impl IncrementalDocument {
     /// Creates an empty document, or `None` when no grammar is bundled.
-    pub(crate) fn new(language: &str) -> Option<Self> {
+    pub(crate) fn new(language: LanguageId) -> Option<Self> {
         grammar(language).map(|grammar| Self {
             parser: None,
             tree: None,
@@ -324,8 +321,9 @@ impl IncrementalDocument {
                 let Some(text) = source.get(from..to).filter(|text| !text.is_empty()) else {
                     continue;
                 };
-                let language = resolve_language(injection.language.as_str(), text)
-                    .unwrap_or(&injection.language);
+                let Some(language) = injection.language.or_else(|| shebang_id(text)) else {
+                    continue;
+                };
                 let reused = previous
                     .iter()
                     .position(|entry| {
@@ -339,7 +337,7 @@ impl IncrementalDocument {
                     None => match Self::new(language) {
                         Some(document) => InjectedDocument {
                             offset: from,
-                            language: language.to_owned(),
+                            language,
                             document,
                         },
                         None => continue,
@@ -397,7 +395,7 @@ impl fmt::Debug for IncrementalDocument {
 #[derive(Clone)]
 struct InjectedDocument {
     offset: usize,
-    language: String,
+    language: LanguageId,
     document: IncrementalDocument,
 }
 
@@ -418,13 +416,13 @@ impl CaptureRole {
 }
 
 pub(crate) struct Grammar {
-    language: Language,
+    language: TreeLanguage,
     highlights: Query,
     captures: Box<[CaptureRole]>,
     injections: Query,
     non_local: bool,
     error_prefix: bool,
-    query_source: String,
+    query_words: HashSet<Box<str>>,
     queried_kinds: Box<[OnceLock<bool>]>,
     tags: Option<TagsGrammar>,
 }
@@ -468,7 +466,7 @@ impl Grammar {
     }
 
     fn queries_kind(&self, node: Node<'_>) -> bool {
-        let queried = || self.query_source.contains(node.kind());
+        let queried = || self.query_words.contains(node.kind());
         self.queried_kinds
             .get(usize::from(node.kind_id()))
             .map_or_else(queried, |cell| *cell.get_or_init(queried))
@@ -545,18 +543,14 @@ fn query(
         let mut language = None;
         for property in grammar.injections.property_settings(found.pattern_index) {
             if property.key.as_ref() == "injection.language" {
-                language = property.value.as_deref().map(str::to_owned);
+                language = property.value.as_deref();
             }
         }
         for capture in found.captures() {
             match grammar.injections.capture_names()[capture.index as usize] {
                 "injection.content" => content = Some(capture.node),
                 "injection.language" if language.is_none() => {
-                    language = capture
-                        .node
-                        .utf8_text(source.as_bytes())
-                        .ok()
-                        .map(str::to_owned);
+                    language = capture.node.utf8_text(source.as_bytes()).ok();
                 }
                 _ => {}
             }
@@ -565,82 +559,50 @@ fn query(
             injections.push(Injection {
                 start: u32::try_from(node.start_byte()).expect("source limit fits u32"),
                 end: u32::try_from(node.end_byte()).expect("source limit fits u32"),
-                language,
+                language: resolve_hint(language),
             });
         }
     }
     (spans, injections)
 }
 
-macro_rules! grammars {
-    ($($name:literal => $module:ident),* $(,)?) => {
-        const GRAMMARS: &[(&str, fn() -> Spec)] = &[$((
-            $name,
-            || -> Spec { ($module::language().into(), &$module::HIGHLIGHTS_QUERY, &$module::INJECTIONS_QUERY) },
-        )),*];
-    };
+fn query_words(query: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut chars = query.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            ';' => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '"' => {
+                let mut word = String::new();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '\\' => word.extend(chars.next()),
+                        '"' => break,
+                        c => word.push(c),
+                    }
+                }
+                words.push(word);
+            }
+            c if is_word(c) => {
+                let mut word = String::from(c);
+                while let Some(&c) = chars.peek().filter(|c| is_word(**c)) {
+                    word.push(c);
+                    chars.next();
+                }
+                words.push(word);
+            }
+            _ => {}
+        }
+    }
+    words
 }
 
-grammars! {
-    "asm" => arborium_asm,
-    "bash" => arborium_bash,
-    "batch" => arborium_batch,
-    "c" => arborium_c,
-    "c-sharp" => arborium_c_sharp,
-    "clojure" => arborium_clojure,
-    "cmake" => arborium_cmake,
-    "commonlisp" => arborium_commonlisp,
-    "cpp" => arborium_cpp,
-    "css" => arborium_css,
-    "dart" => arborium_dart,
-    "diff" => arborium_diff,
-    "dockerfile" => arborium_dockerfile,
-    "elixir" => arborium_elixir,
-    "erlang" => arborium_erlang,
-    "fish" => arborium_fish,
-    "go" => arborium_go,
-    "graphql" => arborium_graphql,
-    "haskell" => arborium_haskell,
-    "hcl" => arborium_hcl,
-    "html" => arborium_html,
-    "ini" => arborium_ini,
-    "java" => arborium_java,
-    "javascript" => arborium_javascript,
-    "json" => arborium_json,
-    "just" => arborium_just,
-    "kotlin" => arborium_kotlin,
-    "lua" => arborium_lua,
-    "make" => arborium_make,
-    "markdown" => arborium_markdown,
-    "meson" => arborium_meson,
-    "ninja" => arborium_ninja,
-    "nix" => arborium_nix,
-    "objc" => arborium_objc,
-    "ocaml" => arborium_ocaml,
-    "perl" => arborium_perl,
-    "php" => arborium_php,
-    "powershell" => arborium_powershell,
-    "proto" => arborium_proto,
-    "python" => arborium_python,
-    "r" => arborium_r,
-    "rego" => arborium_rego,
-    "ruby" => arborium_ruby,
-    "rust" => arborium_rust,
-    "scala" => arborium_scala,
-    "scheme" => arborium_scheme,
-    "scss" => arborium_scss,
-    "solidity" => arborium_solidity,
-    "sql" => arborium_sql,
-    "starlark" => arborium_starlark,
-    "svelte" => arborium_svelte,
-    "swift" => arborium_swift,
-    "toml" => arborium_toml,
-    "tsx" => arborium_tsx,
-    "typescript" => arborium_typescript,
-    "vue" => arborium_vue,
-    "x86asm" => arborium_x86asm,
-    "xml" => arborium_xml,
-    "yaml" => arborium_yaml,
-    "zig" => arborium_zig,
-    "zsh" => arborium_zsh,
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }

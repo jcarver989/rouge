@@ -1,4 +1,4 @@
-use crate::{LanguageHint, resolve_language};
+use crate::resolve_language;
 use std::{
     collections::{BTreeMap, HashMap},
     ops::Range,
@@ -83,7 +83,7 @@ impl SymbolTags {
     }
 }
 
-pub fn has_symbols<'a>(language: impl Into<LanguageHint<'a>>, source: &str) -> bool {
+pub fn has_symbols(language: &str, source: &str) -> bool {
     resolve_language(language, source)
         .and_then(tags_query)
         .is_some()

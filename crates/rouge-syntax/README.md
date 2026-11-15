@@ -4,8 +4,9 @@ Reusable syntax highlighting via Tree-sitter and Arborium. Native and browser WA
 
 `SyntaxStream::append` accepts exact UTF-8 text, including partial lines, without
 adding newlines. Complete input is simply the first append: `analyze` parses a
-complete source in one append and extracts its symbol tags from the same tree, so
-highlights and symbols never cost two parses. It exposes `DocumentHighlights`, whose
+complete source in one append and keeps the tree, so `SourceSyntax::symbols`
+extracts symbol tags from it on first access: highlights and symbols never cost two
+parses, and a source whose symbols are never read never runs the tags query. It exposes `DocumentHighlights`, whose
 `line` returns a borrowed `HighlightLine` of byte spans; there are no separate
 source-span or line-sequence highlighting engines. Nothing is cached here: the owner of an
 immutable source holds a `SyntaxCell` beside it that analyzes it on first use and
@@ -33,9 +34,9 @@ parsing.
 `SyntaxStream::work_stats()` reports cumulative parser callback bytes, query range
 bytes, full/incremental parse counts, projected bytes/lines, reused lines, and
 structural nodes compared while refining error-wrapper invalidation.
-`thread_work()` sums the same counters across every stream on the calling thread,
-including injected languages, so hosts and tests measure renderer work as a
-before/after difference.
+Each `SourceSyntax` carries the counters of the stream that produced it
+(`SourceSyntax::work_stats`), including injected languages, so a host measures its
+renderer work by summing the analyses it owns.
 Query range bytes count each range submitted to each highlight/injection query,
 not a claim about Tree-sitter's internal node visits. Appends re-query from the
 earliest capture or changed range the edit touches, so query and projection work
@@ -44,7 +45,8 @@ only changes an unqueried root error wrapper, unchanged child subtrees provide
 a more precise boundary; their comparison work is reported in `compared_nodes`.
 Non-local queries re-query the whole document. Tree-sitter itself may still
 re-lex large regions for invalid text or indentation-sensitive grammars, which
-`parser_input_bytes` reports honestly.
+`parser_input_bytes` reports. Tree-sitter is handed the source in chunks of up
+to 16 KiB, so the counter is an upper bound on what it actually read.
 
 Input limits are checked before changing source, highlights, revisions, or work
 counters. `SyntaxStream::append` reports input limits, missing grammars (including
@@ -56,7 +58,7 @@ parser state.
 ## Example
 
 ```rust
-use clankerdiff_syntax::{SyntaxError, SyntaxStream, SyntaxTheme, analyze};
+use rouge_syntax::{SyntaxError, SyntaxStream, SyntaxTheme, analyze};
 
 fn example() -> Result<(), SyntaxError> {
     let mut stream = SyntaxStream::new("rust");
@@ -66,7 +68,7 @@ fn example() -> Result<(), SyntaxError> {
 
     let source = analyze("rust", "fn main() {}\n");
     assert_eq!(source.highlights.line_count(), 1);
-    assert_eq!(source.symbols.definitions[0].name, "main");
+    assert_eq!(source.symbols().definitions[0].name, "main");
     let theme = SyntaxTheme::default();
     let styled = source.highlights.line(0).unwrap_or_default().iter().filter_map(|span| theme.highlight(span.highlight));
     assert!(styled.count() > 0);

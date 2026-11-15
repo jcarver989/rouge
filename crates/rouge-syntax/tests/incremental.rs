@@ -1,6 +1,6 @@
 mod support;
 
-use rouge_syntax::{MAX_SOURCE_BYTES, SyntaxError, analyze, thread_work};
+use rouge_syntax::{MAX_SOURCE_BYTES, SyntaxError, analyze};
 use std::{fmt::Write, str, sync::Arc};
 use support::{SyntaxBuilder, TestResult, line};
 
@@ -239,14 +239,13 @@ fn empty_updates_do_not_parse() -> TestResult {
 fn complete_analysis_parses_once_and_matches_streaming() -> TestResult {
     let mut fixture = SyntaxBuilder::default().build();
     let source = "/* open\nclosed */\nfn café() {}\n";
-    let before = thread_work();
     let analysis = analyze("rust", source);
-    let after = thread_work();
+    let work = analysis.work_stats();
     fixture.append(source)?;
-    assert_eq!(after.full_parses - before.full_parses, 1);
-    assert_eq!(after.incremental_parses, before.incremental_parses);
+    assert_eq!(work.full_parses, 1);
+    assert_eq!(work.incremental_parses, 0);
     assert_eq!(
-        after.parser_input_bytes - before.parser_input_bytes,
+        work.parser_input_bytes,
         fixture.stream.work_stats().parser_input_bytes
     );
     assert_eq!(analysis.highlights.line_count(), 3);
@@ -256,8 +255,8 @@ fn complete_analysis_parses_once_and_matches_streaming() -> TestResult {
             fixture.stream.highlights().line(index)
         );
     }
-    assert_eq!(analysis.symbols, fixture.stream.syntax().symbols);
-    assert_eq!(analysis.symbols.definitions.len(), 1);
+    assert_eq!(analysis.symbols(), fixture.stream.syntax().symbols());
+    assert_eq!(analysis.symbols().definitions.len(), 1);
     Ok(())
 }
 

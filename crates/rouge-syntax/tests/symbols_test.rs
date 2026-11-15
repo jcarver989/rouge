@@ -1,4 +1,4 @@
-use rouge_syntax::{LanguageHint, LineSpan, SymbolKind, SymbolTags, SyntaxError, analyze};
+use rouge_syntax::{LineSpan, SymbolKind, SymbolTags, SyntaxError, analyze};
 use std::fmt::Write;
 
 #[test]
@@ -303,7 +303,7 @@ fn rustdoc_examples_hide_their_hidden_lines() {
 }
 
 fn extract(path: &str, source: &str) -> SymbolTags {
-    SymbolTags::clone(&analyze(LanguageHint::Path(path), source).symbols)
+    analyze(path, source).symbols().as_ref().clone()
 }
 
 fn definitions(tags: &SymbolTags) -> Vec<(&str, SymbolKind, std::ops::Range<usize>)> {

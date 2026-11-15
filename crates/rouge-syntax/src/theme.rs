@@ -42,40 +42,23 @@ pub struct SyntaxStyle {
     pub font_style: FontStyle,
 }
 
-/// Styles keyed by Tree-sitter capture name.
-///
-/// Capture lookup first tries an exact name and then progressively removes
-/// dot-separated suffixes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntaxTheme {
-    captures: BTreeMap<String, SyntaxStyle>,
     highlights: Arc<[Option<SyntaxStyle>]>,
 }
 
 impl SyntaxTheme {
     #[must_use]
-    pub fn new(captures: BTreeMap<String, SyntaxStyle>) -> Self {
-        let highlights = HIGHLIGHTS
-            .iter()
-            .map(|highlight| {
-                tag_to_name(highlight.tag)
-                    .and_then(|name| lookup(&captures, capture_for_name(name)))
-            })
-            .collect();
+    pub fn new(captures: &BTreeMap<String, SyntaxStyle>) -> Self {
         Self {
-            captures,
-            highlights,
+            highlights: HIGHLIGHTS
+                .iter()
+                .map(|highlight| {
+                    tag_to_name(highlight.tag)
+                        .and_then(|name| capture_style(captures, capture_for_name(name)))
+                })
+                .collect(),
         }
-    }
-
-    #[must_use]
-    pub const fn captures(&self) -> &BTreeMap<String, SyntaxStyle> {
-        &self.captures
-    }
-
-    #[must_use]
-    pub fn style(&self, capture: &str) -> Option<SyntaxStyle> {
-        lookup(&self.captures, capture)
     }
 
     #[must_use]
@@ -86,7 +69,7 @@ impl SyntaxTheme {
 
 impl Default for SyntaxTheme {
     fn default() -> Self {
-        Self::new(BTreeMap::new())
+        Self::new(&BTreeMap::new())
     }
 }
 
@@ -102,7 +85,11 @@ fn capture_for_name(name: &'static str) -> &'static str {
     }
 }
 
-fn lookup(captures: &BTreeMap<String, SyntaxStyle>, capture: &str) -> Option<SyntaxStyle> {
+#[must_use]
+pub fn capture_style(
+    captures: &BTreeMap<String, SyntaxStyle>,
+    capture: &str,
+) -> Option<SyntaxStyle> {
     let mut candidate = capture;
     loop {
         if let Some(style) = captures.get(candidate) {
