@@ -5,9 +5,56 @@ use rouge_core::testing::{TestResult, TestUi, counter};
 use rouge_core::{Color, Point, Rect, Role, Styled, Theme, div, show};
 use rouge_reactive::{Runtime, signal};
 use rouge_theme::UiPalette;
-use rouge_widgets::{Hint, Material, Placement, popover, tooltip};
+use rouge_widgets::{Hint, Material, Placement, hover_card, popover, tooltip};
 use std::thread::sleep;
 use std::time::Duration;
+
+#[test]
+fn hover_card_floats_below_its_anchor_without_blocking_the_page() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let open = signal(true);
+    let anchor = signal(Rect::new(20.0, 20.0, 40.0, 16.0));
+    let hovered = signal(false);
+    let (behind, hit_behind) = counter();
+    let mut ui = builder().build(move || {
+        let card = hover_card(
+            move || open.get(),
+            anchor,
+            move || {
+                div()
+                    .test_id("card")
+                    .size(80.0)
+                    .on_hover(move |inside| hovered.set(inside))
+            },
+        );
+        div()
+            .size_full()
+            .on_click(move |_| hit_behind())
+            .child(card)
+    });
+    ui.run(0.6);
+    assert_eq!(
+        ui.bounds_of("card"),
+        Some(Rect::new(20.0, 40.0, 80.0, 80.0)),
+        "just below the anchor"
+    );
+    ui.pointer_moved(Point::new(40.0, 60.0));
+    assert!(hovered.get(), "the card itself takes hover");
+    ui.click_at(150.0, 150.0);
+    assert_eq!(behind.get(), 1, "the page behind stays interactive");
+    assert!(open.get(), "only its owner closes it");
+    anchor.set(Rect::new(100.0, 10.0, 20.0, 16.0));
+    ui.run(0.1);
+    assert_eq!(
+        ui.bounds_of("card").map(|card| card.origin),
+        Some(Point::new(100.0, 30.0)),
+        "it follows its anchor"
+    );
+    open.set(false);
+    ui.run(0.6);
+    assert_eq!(ui.bounds_of("card"), None);
+    Ok(())
+}
 
 #[test]
 fn popover_opens_below_its_trigger_and_closes_on_outside_click_or_escape() -> TestResult {

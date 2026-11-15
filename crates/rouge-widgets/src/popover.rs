@@ -85,17 +85,28 @@ pub(crate) fn dismissable(layer: Div, panel: Div, dismiss: impl Fn() + Clone + '
         .child(panel.on_pointer_down(PointerEvent::stop_propagation))
 }
 
+fn floating(
+    open: impl Fn() -> bool + 'static,
+    exit: f32,
+    panel: impl Fn() -> Div + 'static,
+) -> impl View {
+    overlay(move || {
+        show(open, panel)
+            .enter(Pose::new().opacity(0.0), Tween::ms(120.0))
+            .exit(Pose::new().opacity(0.0), Tween::ms(exit))
+    })
+}
+
 pub(crate) fn popup(
     open: Signal<bool>,
     backdrop: impl Fn(Div) -> Div + 'static,
     content: impl Fn() -> Div + 'static,
 ) -> impl View {
-    overlay(move || {
-        let layer = move || dismissable(backdrop(div()), content(), move || open.set(false));
-        show(move || open.get(), layer)
-            .enter(Pose::new().opacity(0.0), Tween::ms(120.0))
-            .exit(Pose::new().opacity(0.0), Tween::ms(100.0))
-    })
+    floating(
+        move || open.get(),
+        100.0,
+        move || dismissable(backdrop(div()), content(), move || open.set(false)),
+    )
 }
 
 fn anchored(target: impl View) -> (Div, Signal<Rect>) {
@@ -216,8 +227,10 @@ impl View for Tooltip {
                 }
             }
         });
-        let bubble = overlay(move || {
-            let tip = move || {
+        let bubble = floating(
+            move || open.get(),
+            80.0,
+            move || {
                 let caption = text(label.clone()).small().color(Role::Text).no_wrap();
                 let bubble = div()
                     .pass_through()
@@ -227,11 +240,8 @@ impl View for Tooltip {
                     .rounded(Radius::Control)
                     .child(caption);
                 Placement::Below.place(bubble, anchor)
-            };
-            show(move || open.get(), tip)
-                .enter(Pose::new().opacity(0.0), Tween::ms(120.0))
-                .exit(Pose::new().opacity(0.0), Tween::ms(80.0))
-        });
+            },
+        );
         self.root
             .on_hover(move |inside| {
                 if let Some(task) = pending.take() {
@@ -248,5 +258,60 @@ impl View for Tooltip {
             })
             .child(bubble)
             .build(cx);
+    }
+}
+
+pub struct HoverCard {
+    open: Box<dyn Fn() -> bool>,
+    anchor: Signal<Rect>,
+    content: Rc<dyn Fn() -> AnyView>,
+    placement: Placement,
+    material: Material,
+}
+
+#[component]
+pub fn hover_card<T: View>(
+    open: impl Fn() -> bool + 'static,
+    anchor: Signal<Rect>,
+    children: impl Fn() -> T + 'static,
+) -> HoverCard {
+    HoverCard {
+        open: Box::new(open),
+        anchor,
+        content: Rc::new(move || children().into_any()),
+        placement: Placement::default(),
+        material: Material::default(),
+    }
+}
+
+impl HoverCard {
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    pub fn material(mut self, material: Material) -> Self {
+        self.material = material;
+        self
+    }
+}
+
+impl View for HoverCard {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let HoverCard {
+            open,
+            anchor,
+            content,
+            placement,
+            material,
+        } = self;
+        floating(open, 100.0, move || {
+            let panel = div()
+                .material(material)
+                .on_pointer_down(PointerEvent::stop_propagation)
+                .child(content());
+            placement.place(panel, anchor)
+        })
+        .build(cx);
     }
 }
