@@ -1,4 +1,4 @@
-use parley::fontique::Blob;
+use parley::fontique::{Blob, GenericFamily};
 use parley::{
     Affinity, Alignment, AlignmentOptions, BoundingBox, Cluster, Cursor, FontContext, FontData,
     FontFamily, FontStyle, FontWeight, IndentOptions, Layout, LayoutContext, LineHeight,
@@ -507,6 +507,17 @@ impl TextSystem {
         self.spaces.clear();
         let blob = Blob::new(Arc::new(data.into()));
         let families = self.fonts.collection.register_fonts(blob, None);
+        let collection = &mut self.fonts.collection;
+        if collection
+            .generic_families(GenericFamily::SystemUi)
+            .next()
+            .is_none()
+        {
+            collection.set_generic_families(
+                GenericFamily::SystemUi,
+                families.first().map(|(id, _)| *id).into_iter(),
+            );
+        }
         families
             .into_iter()
             .filter_map(|(id, _)| self.fonts.collection.family_name(id).map(str::to_owned))
