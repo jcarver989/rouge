@@ -9,11 +9,12 @@ use rouge::widgets::inline_edit;
 use sky::night_sky;
 use std::ops::Range;
 use tokens::{
-    ACCENT, BODY_SIZE, CARD_RADIUS, CARD_WIDTH, CHECKBOX, CONTROL, DANGER_TINT, DUSK, EDIT_RING,
-    EDITOR_HEIGHT, FAINT, FOOTER_SIDE, FOOTER_Y, FROST, GAP, GLASS, HAIRLINE, HEADER_Y, HEADING,
-    ICON, ICON_CHECK, ICON_CHEVRON, ICON_CROSS, INSET, LINE, NIGHT, PAGE_BOTTOM, PAGE_TOP, RING,
-    ROSE, ROW_ENTER, ROW_EXIT, ROW_HEIGHT, Radius, SMALL_SIZE, STACK, STAR, STROKE, TAB_HEIGHT,
-    TAB_WIDTH, TINT, TITLE_LINE_HEIGHT, TITLE_SIZE, TITLE_WEIGHT, UI_FONT, UNCHECKED_SCALE, WASH,
+    ACCENT, BODY_SIZE, CARD_RADIUS, CARD_WIDTH, CHECKBOX, COMPACT_WIDTH, CONTROL, DANGER_TINT,
+    DUSK, EDIT_RING, EDITOR_HEIGHT, FAINT, FOOTER_SIDE, FOOTER_Y, FROST, GAP, GLASS, HAIRLINE,
+    HEADER_Y, HEADING, ICON, ICON_CHECK, ICON_CHEVRON, ICON_CROSS, INSET, LINE, NIGHT, PAGE_BOTTOM,
+    PAGE_TOP, RING, ROSE, ROW_ENTER, ROW_EXIT, ROW_HEIGHT, Radius, SMALL_SIZE, STACK, STAR, STROKE,
+    TAB_HEIGHT, TAB_WIDTH, TINT, TITLE_LINE_HEIGHT, TITLE_SIZE, TITLE_WEIGHT, UI_FONT,
+    UNCHECKED_SCALE, WASH,
 };
 
 pub(crate) fn todo_app() -> impl View {
@@ -32,7 +33,7 @@ pub(crate) fn todo_app() -> impl View {
                         <text text_size=TITLE_SIZE font_weight=TITLE_WEIGHT line_height=TITLE_LINE_HEIGHT color=HEADING>
                             "todos"
                         </text>
-                        <div flex col w_full max_w=CARD_WIDTH mt=STACK rounded=CARD_RADIUS
+                        <div flex col w_full max_w=CARD_WIDTH mt=STACK rounded=CARD_RADIUS test_id="card"
                              backdrop=GLASS shadow={BoxShadow::lg()}>
                             <new_todo todos/>
                             <show when=has_todos>
@@ -144,26 +145,68 @@ fn todo_editor(todos: Todos, id: u64, title: Memo<String>, editing: Signal<bool>
 
 #[component]
 fn footer(todos: Todos) -> impl View {
-    let items_left = move || match todos.remaining.get() {
+    let window = window_size();
+    switch(
+        move || window.get().width < COMPACT_WIDTH,
+        move |compact| {
+            if compact {
+                stacked_footer(todos).into_any()
+            } else {
+                inline_footer(todos).into_any()
+            }
+        },
+    )
+}
+
+fn inline_footer(todos: Todos) -> impl View {
+    view! {
+        <div flex items_center justify_between gap=GAP px=INSET py=FOOTER_Y text_size=SMALL_SIZE text_color=DUSK>
+            <div w=FOOTER_SIDE>
+                <items_left todos/>
+            </div>
+            <filter_tabs todos/>
+            <div flex justify_end w=FOOTER_SIDE>
+                <clear_completed todos/>
+            </div>
+        </div>
+    }
+}
+
+fn stacked_footer(todos: Todos) -> impl View {
+    view! {
+        <div flex col items_center gap=GAP px=INSET py=FOOTER_Y text_size=SMALL_SIZE text_color=DUSK>
+            <filter_tabs todos/>
+            <div flex items_center justify_between w_full h=TAB_HEIGHT>
+                <items_left todos/>
+                <clear_completed todos/>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn items_left(todos: Todos) -> impl View {
+    let label = move || match todos.remaining.get() {
         1 => "1 item left".to_owned(),
         count => format!("{count} items left"),
     };
     view! {
-        <div flex items_center justify_between gap=GAP px=INSET py=FOOTER_Y text_size=SMALL_SIZE text_color=DUSK>
-            <div w=FOOTER_SIDE>
-                <text>{items_left}</text>
-            </div>
-            <filter_tabs todos/>
-            <div flex justify_end w=FOOTER_SIDE>
-                <show when={move || todos.has_completed()}>
-                    <div flex items_center h=TAB_HEIGHT px=GAP rounded=Radius::Full
-                         hover:text_color=FROST focus_visible:bg=TINT
-                         on_activate={move || todos.clear_completed()} test_id="clear-completed">
-                        "Clear completed"
-                    </div>
-                </show>
-            </div>
+        <div test_id="items-left">
+            <text>{label}</text>
         </div>
+    }
+}
+
+#[component]
+fn clear_completed(todos: Todos) -> impl View {
+    view! {
+        <show when={move || todos.has_completed()}>
+            <div flex items_center h=TAB_HEIGHT px=GAP rounded=Radius::Full
+                 hover:text_color=FROST focus_visible:bg=TINT
+                 on_activate={move || todos.clear_completed()} test_id="clear-completed">
+                "Clear completed"
+            </div>
+        </show>
     }
 }
 

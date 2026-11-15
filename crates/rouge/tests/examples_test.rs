@@ -192,6 +192,47 @@ fn the_todomvc_example_restores_saved_todos() -> TestResult {
 }
 
 #[test]
+fn the_todomvc_footer_stacks_inside_a_phone_width_card() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(402.0, 874.0, todo::todo_app);
+    add(&mut ui, "Buy milk");
+    ui.click_on("todo-0-toggle")?;
+    ui.run(0.5);
+    let card = ui.rect_of("card")?;
+    let clear = ui.rect_of("clear-completed")?;
+    let items_left = ui.rect_of("items-left")?;
+    let tabs = ui.rect_of("filter-all")?;
+    assert!(
+        clear.max().x <= card.max().x,
+        "clear completed stays in the card"
+    );
+    assert!(
+        tabs.max().y <= items_left.origin.y,
+        "the filter tabs sit above the counts"
+    );
+    assert!(
+        items_left.size.height <= clear.size.height,
+        "the count fits on one line"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_todomvc_footer_is_one_row_on_a_wide_card() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(640.0, 760.0, todo::todo_app);
+    add(&mut ui, "Buy milk");
+    ui.click_on("todo-0-toggle")?;
+    ui.run(0.5);
+    let card = ui.rect_of("card")?;
+    let clear = ui.rect_of("clear-completed")?;
+    let tabs = ui.rect_of("filter-all")?;
+    assert!(clear.max().x <= card.max().x);
+    assert_eq!(tabs.center().y, clear.center().y);
+    Ok(())
+}
+
+#[test]
 fn toggling_one_todo_costs_the_same_in_a_long_list() -> TestResult {
     let _entered = Runtime::new().enter();
     let short = toggle_work(50)?;

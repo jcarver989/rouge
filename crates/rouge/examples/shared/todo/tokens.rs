@@ -34,6 +34,7 @@ pub(crate) const HEADER_Y: f32 = 20.0;
 pub(crate) const FOOTER_Y: f32 = 12.0;
 
 pub(crate) const CARD_WIDTH: f32 = 560.0;
+pub(crate) const COMPACT_WIDTH: f32 = 560.0;
 pub(crate) const CARD_RADIUS: Corners = Corners::all(28.0);
 pub(crate) const ROW_HEIGHT: f32 = 60.0;
 pub(crate) const EDITOR_HEIGHT: f32 = 40.0;
