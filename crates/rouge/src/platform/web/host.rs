@@ -447,7 +447,7 @@ impl Host {
             return Some(Instant::now());
         }
         let surfaced = latch(&mut state.surfaces, [&mut state.driver]);
-        state.driver.frame_due(surfaced)
+        state.driver.frame_due(surfaced, Instant::now())
     }
 
     fn invalidate_rect(&self) {

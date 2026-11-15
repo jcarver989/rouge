@@ -201,7 +201,7 @@ impl ApplicationHandler for Runner {
         let now = Instant::now();
         let mut deadline = self.surfaces.as_ref().and_then(Surfaces::next_deadline);
         for state in self.windows.iter_mut().filter(|state| !state.occluded) {
-            match state.driver.frame_due(surfaced) {
+            match state.driver.frame_due(surfaced, now) {
                 Some(due) if due <= now => state.window.request_redraw(),
                 Some(due) => deadline = Some(deadline.map_or(due, |at| at.min(due))),
                 None => {}

@@ -178,9 +178,8 @@ impl Driver {
         Some((width, height))
     }
 
-    pub(crate) fn frame_due(&mut self, surfaced: bool) -> Option<Instant> {
+    pub(crate) fn frame_due(&mut self, surfaced: bool, now: Instant) -> Option<Instant> {
         self.ui.flush();
-        let now = Instant::now();
         if (surfaced && self.ui.has_surfaces())
             || self.profile.as_ref().is_some_and(Profile::wants_frames)
         {
