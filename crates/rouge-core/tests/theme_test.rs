@@ -105,6 +105,24 @@ fn a_theme_switch_runs_no_effects_and_repaints_roles_hover_and_inherited_text() 
 }
 
 #[test]
+fn a_layered_element_takes_its_role_background_from_the_theme_it_was_built_under() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().size(200.0, 100.0).build(|| {
+        Theme::provide(UiPalette::dark());
+        div()
+            .size_full()
+            .child(div().layer().size_full().bg(Role::Canvas))
+    });
+    let canvas = Color::from(UiPalette::dark().canvas).to_rgba8();
+    assert_near(
+        ui.pixel(100, 50)?,
+        canvas,
+        "the dark canvas, not the default light one",
+    );
+    Ok(())
+}
+
+#[test]
 fn a_subtree_can_provide_its_own_theme() {
     let _rt = Runtime::new().enter();
     let (_ui, seen) = TestUiBuilder::default().build_with(|| {

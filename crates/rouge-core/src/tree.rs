@@ -615,6 +615,7 @@ impl Tree {
         if self.is_connected(parent) {
             self.refresh_variant_subtree(child);
             self.refresh_text_subtree(child);
+            self.sync_backing_subtree(child);
         }
         self.mark_layer(parent, true);
         self.mark(Dirty::Layout);

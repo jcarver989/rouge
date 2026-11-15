@@ -56,6 +56,14 @@ impl Tree {
         }
     }
 
+    pub(super) fn sync_backing_subtree(&mut self, id: ElementId) {
+        self.sync_backing(id);
+        let children = self.elements[id].children.clone();
+        for child in children {
+            self.sync_backing_subtree(child);
+        }
+    }
+
     pub(super) fn sync_backing(&mut self, id: ElementId) {
         if self
             .elements
