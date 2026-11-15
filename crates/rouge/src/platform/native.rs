@@ -173,7 +173,10 @@ pub(crate) fn window_command(window: &Window, command: WindowCommand) {
             };
             let _ = window.drag_resize_window(direction);
         }
-        WindowCommand::Close | WindowCommand::Quit | WindowCommand::Menu(_) => {}
+        WindowCommand::Close
+        | WindowCommand::Quit
+        | WindowCommand::Menu(_)
+        | WindowCommand::Navigate(_) => {}
     }
 }
 

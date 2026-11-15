@@ -56,7 +56,7 @@ pub use style::{BoxShadow, Declaration, Slot, StyleDelta, Styled, Typography};
 pub use surface::{Surface, surface};
 pub use theme::{Fill, Palette, Theme};
 pub use tree::{FrameStats, PaintRegion};
-pub use ui::{Frame, Ui, Wake, window_size, zoom};
+pub use ui::{Frame, Ui, Wake, modifiers, window_size, zoom};
 pub use view::{AnyView, Apply, BuildCx, Div, FocusPolicy, Text, View, div, rich_text, text};
 
 #[doc(hidden)]
@@ -72,5 +72,5 @@ pub use text::{SpanStyle, TextAlign, TextStats, TextStyle, Underline, WrapIndent
 
 pub use window::{
     Appearance, Decorations, EditAction, Menu, MenuAction, MenuItem, ResizeEdge, WindowCommand,
-    WindowHandle, appearance, window_focused, window_handle,
+    WindowHandle, appearance, route, window_focused, window_handle,
 };

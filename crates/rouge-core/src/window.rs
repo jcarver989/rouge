@@ -231,6 +231,7 @@ edit_commands! {
 
 pub enum WindowCommand {
     SetTitle(String),
+    Navigate(String),
     Minimize,
     Zoom,
     Close,
@@ -250,6 +251,7 @@ pub(crate) enum Sent {
 pub struct WindowHandle {
     pub(crate) queue: Signal<Queue>,
     pub(crate) title: Signal<String>,
+    pub(crate) route: Signal<String>,
     pub(crate) appearance: Signal<Appearance>,
     pub(crate) focused: Signal<bool>,
 }
@@ -264,6 +266,10 @@ pub fn appearance() -> ReadSignal<Appearance> {
 
 pub fn window_focused() -> ReadSignal<bool> {
     window_handle().focused.read_only()
+}
+
+pub fn route() -> ReadSignal<String> {
+    window_handle().route.read_only()
 }
 
 impl WindowHandle {
@@ -288,6 +294,13 @@ impl WindowHandle {
         }
         self.title.set(title.clone());
         self.send(WindowCommand::SetTitle(title));
+    }
+
+    pub fn navigate(self, path: impl Into<String>) {
+        let path = path.into();
+        if self.route.is_alive() && self.route.set_if_changed(path.clone()) {
+            self.send(WindowCommand::Navigate(path));
+        }
     }
 
     pub fn minimize(self) {

@@ -1,7 +1,7 @@
 use rouge_core::testing::{TestResult, TestUiBuilder};
 use rouge_core::{
     Appearance, EditAction, MenuItem, Point, Styled, WindowCommand, appearance, div, editable,
-    window_focused, window_handle,
+    route, window_focused, window_handle,
 };
 use rouge_reactive::{Runtime, signal};
 
@@ -90,3 +90,24 @@ fn dispatching_an_action_reaches_the_focused_handlers_through_the_window() {
 
 #[derive(Clone, Copy)]
 struct Ping;
+
+#[test]
+fn the_route_follows_the_host_and_navigation_is_sent_to_it() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, (route, handle)) =
+        TestUiBuilder::default().build_with(|| (div(), (route(), window_handle())));
+    assert_eq!(route.get_untracked(), "");
+    ui.set_route("/active");
+    assert_eq!(route.get_untracked(), "/active");
+    assert!(
+        ui.take_window_commands().is_empty(),
+        "a host route is not echoed back"
+    );
+    handle.navigate("/completed");
+    assert_eq!(route.get_untracked(), "/completed");
+    assert!(
+        matches!(&ui.take_window_commands()[..], [WindowCommand::Navigate(path)] if path == "/completed")
+    );
+    handle.navigate("/completed");
+    assert!(ui.take_window_commands().is_empty());
+}

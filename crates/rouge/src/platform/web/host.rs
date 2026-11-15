@@ -53,7 +53,7 @@ enum Source {
     Resolution,
 }
 
-const PAGE_EVENTS: &[&str] = &["resize", "scroll", "focus", "blur"];
+const PAGE_EVENTS: &[&str] = &["resize", "scroll", "focus", "blur", "hashchange"];
 const DOCUMENT_EVENTS: &[&str] = &["visibilitychange"];
 const CANVAS_EVENTS: &[&str] = &[
     "pointerdown",
@@ -327,9 +327,11 @@ impl Host {
                 fonts,
                 profile: settings,
             };
-            Driver::open(gpu, surface, setup, clipboard.clone(), move || {
+            let mut driver = Driver::open(gpu, surface, setup, clipboard.clone(), move || {
                 window_root(title, bar, false, root)
-            })?
+            })?;
+            driver.ui().set_route(route(&window));
+            driver
         };
         let animate = Closure::new(bind(&slot, Host::draw));
         let timed = bind(&slot, |host, ()| {
@@ -433,6 +435,9 @@ impl Host {
         for command in commands.drain(..) {
             match command {
                 WindowCommand::SetTitle(title) => self.document.set_title(&title),
+                WindowCommand::Navigate(path) => {
+                    let _ = self.window.location().set_hash(&path);
+                }
                 WindowCommand::Focus => {
                     let _ = self.canvas.focus();
                 }
@@ -578,6 +583,7 @@ impl Host {
             (Source::Page, "resize" | "scroll") => self.invalidate_rect(),
             (Source::Page, "focus") => state.driver.ui().set_focused(true),
             (Source::Page, "blur") => self.blur(state),
+            (Source::Page, "hashchange") => state.driver.ui().set_route(route(&self.window)),
             (Source::Document, _) => self.visibility(state),
             (Source::Scheme, _) => state.driver.ui().set_appearance(appearance(&self.window)),
             (Source::Resolution, _) => {
@@ -870,6 +876,14 @@ fn listeners(
         .into_iter()
         .map(|(target, source, names)| Listener::new(slot, target, source, names))
         .collect()
+}
+
+fn route(window: &Window) -> String {
+    window
+        .location()
+        .hash()
+        .map(|hash| hash.trim_start_matches('#').to_owned())
+        .unwrap_or_default()
 }
 
 fn canvas(document: &Document, id: Option<&str>) -> Result<HtmlCanvasElement, AppError> {

@@ -45,6 +45,13 @@ pub fn zoom() -> Signal<f32> {
     expect_context::<Zoom>().0
 }
 
+#[derive(Clone, Copy)]
+struct HeldModifiers(ReadSignal<Modifiers>);
+
+pub fn modifiers() -> ReadSignal<Modifiers> {
+    expect_context::<HeldModifiers>().0
+}
+
 const DRAG_SLOP: f32 = 3.0;
 const TOUCH_SLOP: f32 = 8.0;
 const VELOCITY_WINDOW: f64 = 0.1;
@@ -120,7 +127,7 @@ pub struct Ui {
     drag: Option<Drag>,
     scrolling: Option<ScrollDrag>,
     touch: Option<Touch>,
-    modifiers: Modifiers,
+    modifiers: Signal<Modifiers>,
     clicks: Option<(f64, Point, u32)>,
     started: Instant,
     clock: Option<f64>,
@@ -169,10 +176,11 @@ impl Ui {
         }
         let scope = Scope::root();
         let viewport = size;
-        let (size, zoom, window_handle) = scope.run(|| {
+        let (size, zoom, modifiers, window_handle) = scope.run(|| {
             let window_handle = WindowHandle {
                 queue: signal(queue.clone()),
                 title: signal(String::new()),
+                route: signal(String::new()),
                 appearance: signal(Appearance::Light),
                 focused: signal(true),
             };
@@ -181,6 +189,8 @@ impl Ui {
             provide_context(WindowSize(size.read_only()));
             let zoom = signal(1.0);
             provide_context(Zoom(zoom));
+            let modifiers = signal(Modifiers::NONE);
+            provide_context(HeldModifiers(modifiers.read_only()));
             provide_context(UiContext::new(queue.clone()));
             let keymap = Keymap(signal(Vec::new()));
             provide_context(keymap);
@@ -195,7 +205,7 @@ impl Ui {
                 theme: Some((theme, None)),
             };
             root().build(&mut cx);
-            (size, zoom, window_handle)
+            (size, zoom, modifiers, window_handle)
         });
         Ui {
             window_handle,
@@ -215,7 +225,7 @@ impl Ui {
             drag: None,
             scrolling: None,
             touch: None,
-            modifiers: Modifiers::NONE,
+            modifiers,
             clicks: None,
             started: Instant::now(),
             clock: None,
@@ -307,7 +317,8 @@ impl Ui {
         }
         if self.pointer.is_some() {
             let _hover = trace_span!("hover").entered();
-            self.tree.set_pointer(self.pointer, self.modifiers);
+            self.tree
+                .set_pointer(self.pointer, self.modifiers.get_untracked());
         }
         true
     }
@@ -331,6 +342,10 @@ impl Ui {
 
     pub fn set_appearance(&mut self, appearance: Appearance) {
         self.window_handle.appearance.set_if_changed(appearance);
+    }
+
+    pub fn set_route(&mut self, route: impl Into<String>) {
+        self.window_handle.route.set_if_changed(route.into());
     }
 
     pub fn set_focused(&mut self, focused: bool) {
@@ -502,7 +517,8 @@ impl Ui {
 
     fn refresh_pointer(&mut self) {
         self.flush();
-        self.tree.set_pointer(self.pointer, self.modifiers);
+        self.tree
+            .set_pointer(self.pointer, self.modifiers.get_untracked());
         self.flush();
     }
 
@@ -541,8 +557,8 @@ impl Ui {
     }
 
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
-        if self.modifiers != modifiers {
-            self.modifiers = modifiers;
+        if self.modifiers.get_untracked() != modifiers {
+            self.modifiers.set(modifiers);
             self.refresh_pointer();
         }
     }
@@ -899,12 +915,13 @@ impl Ui {
     fn dispatch(&mut self, path: &[ElementId], on: On, position: Point, button: PointerButton) {
         self.flush();
         if on == On::Click {
-            self.tree.text_click(path, position, self.modifiers);
+            self.tree
+                .text_click(path, position, self.modifiers.get_untracked());
             self.flush();
         }
         let listeners = self.tree.listeners(path, on);
         let mut event = PointerEvent::new(position, button);
-        event.modifiers = self.modifiers;
+        event.modifiers = self.modifiers.get_untracked();
         event.click_count = self.clicks.map_or(1, |(_, _, count)| count);
         let tree = &self.tree;
         let target = Cell::new(None);
