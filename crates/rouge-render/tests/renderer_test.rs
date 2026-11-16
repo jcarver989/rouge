@@ -1,10 +1,13 @@
 mod common;
 
-use common::{BLUE, CLEAR, Canvas, RED, WHITE, backdrop, full, quads, render_layers, split_scene};
+use common::{
+    BLUE, CLEAR, Canvas, RED, WHITE, backdrop, full, quads, render_layers, render_layers_on,
+    split_scene,
+};
 use rouge_render::headless::{Image, assert_near};
 use rouge_render::{
     Affine, Color, Corners, DrawList, Edges, EffectDraw, Glass, Glyph, GpuError, ImageData,
-    ImageQuad, LayerDraw, Point, Quad, Rect, Shadow,
+    ImageQuad, LayerDraw, ListKey, Point, Quad, Rect, Shadow,
 };
 use std::error::Error;
 use std::f32::consts::FRAC_PI_4;
@@ -642,6 +645,178 @@ fn a_backdrop_is_reused_until_something_behind_it_changes() -> Result<(), GpuErr
 }
 
 #[test]
+fn a_change_behind_a_backdrop_but_away_from_it_keeps_the_blur() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+    let glass = LayerDraw {
+        backdrop: Some(backdrop(Rect::new(44.0, 44.0, 16.0, 16.0), 2.0)),
+        ..LayerDraw::default()
+    };
+    let mark_at = |x: f32, y: f32| LayerDraw {
+        transform: Affine::translate(x, y),
+        ..LayerDraw::new(mark)
+    };
+
+    canvas.frame(&[LayerDraw::new(scene), mark_at(0.0, 0.0), glass]);
+    let moved = canvas.frame(&[LayerDraw::new(scene), mark_at(2.0, 0.0), glass]);
+    assert_eq!(
+        (moved.backdrop_blurs, moved.backdrops_reused),
+        (0, 1),
+        "the mark never reaches the blurred region"
+    );
+
+    let reaching = canvas.frame(&[LayerDraw::new(scene), mark_at(30.0, 30.0), glass]);
+    assert_eq!(
+        (reaching.backdrop_blurs, reaching.backdrops_reused),
+        (1, 0),
+        "a mark moved under the glass re-blurs"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_frame_redraws_only_what_changed_and_matches_a_full_redraw() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+    let frame = |x: f32| [LayerDraw::new(scene), moved(mark, x, 0.0)];
+
+    assert_eq!(
+        canvas.frame(&frame(0.0)).damaged,
+        64 * 64,
+        "the first frame is drawn whole"
+    );
+    let moved_once = canvas.frame(&frame(4.0));
+    assert!(
+        moved_once.damaged > 0 && moved_once.damaged < 64 * 64 / 4,
+        "only around the mark: {}",
+        moved_once.damaged
+    );
+    assert_eq!(
+        canvas.frame(&frame(4.0)).damaged,
+        0,
+        "an unchanged frame redraws nothing"
+    );
+
+    let fresh = render_layers_on(64, Color::WHITE, |canvas| {
+        let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+        vec![LayerDraw::new(scene), moved(mark, 4.0, 0.0)]
+    })?;
+    assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
+fn swapping_the_order_of_unchanged_layers_matches_a_full_redraw() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let (red, blue) = (
+        canvas.add(square(Color::RED)),
+        canvas.add(square(Color::BLUE)),
+    );
+    canvas.frame(&[LayerDraw::new(red), moved(blue, 5.0, 5.0)]);
+    canvas.frame(&[moved(blue, 5.0, 5.0), LayerDraw::new(red)]);
+
+    let fresh = render_layers_on(64, Color::WHITE, |canvas| {
+        let (red, blue) = (
+            canvas.add(square(Color::RED)),
+            canvas.add(square(Color::BLUE)),
+        );
+        vec![moved(blue, 5.0, 5.0), LayerDraw::new(red)]
+    })?;
+    assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
+fn a_change_under_glass_redraws_what_it_blurs_and_matches_a_full_redraw() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(128, 1.0, Color::WHITE)?;
+    let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+    let glass = LayerDraw {
+        backdrop: Some(backdrop(Rect::new(88.0, 88.0, 32.0, 32.0), 4.0)),
+        ..LayerDraw::default()
+    };
+    let frame = |x: f32, y: f32| [LayerDraw::new(scene), moved(mark, x, y), glass];
+
+    canvas.frame(&frame(0.0, 0.0));
+    let under = canvas.frame(&frame(70.0, 70.0));
+    assert_eq!(under.backdrop_blurs, 1);
+    assert!(
+        under.damaged < 128 * 128,
+        "still not the whole frame: {}",
+        under.damaged
+    );
+
+    let fresh = render_layers_on(128, Color::WHITE, |canvas| {
+        let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+        vec![LayerDraw::new(scene), moved(mark, 70.0, 70.0), glass]
+    })?;
+    assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
+fn removing_a_layer_over_a_transparent_clear_matches_a_full_redraw() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(64, 1.0, Color::TRANSPARENT)?;
+    let (red, blue) = (
+        canvas.add(square(Color::RED)),
+        canvas.add(square(Color::BLUE)),
+    );
+    canvas.frame(&[LayerDraw::new(red), moved(blue, 20.0, 20.0)]);
+    let removed = canvas.frame(&[LayerDraw::new(red)]);
+    assert!(removed.damaged < 64 * 64, "only where blue was");
+
+    let fresh = render_layers(64, |canvas| {
+        vec![LayerDraw::new(canvas.add(square(Color::RED)))]
+    })?;
+    assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
+fn a_change_beside_a_clipped_backdrop_matches_a_full_redraw() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(128, 1.0, Color::WHITE)?;
+    let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+    let glass = LayerDraw {
+        backdrop: Some(backdrop(Rect::new(60.0, 60.0, 40.0, 40.0), 6.0)),
+        scissor: Some(Rect::new(60.0, 60.0, 20.0, 40.0)),
+        ..LayerDraw::default()
+    };
+    let frame = |x: f32| [LayerDraw::new(scene), moved(mark, x, 50.0), glass];
+
+    canvas.frame(&frame(0.0));
+    canvas.frame(&frame(62.0));
+
+    let fresh = render_layers_on(128, Color::WHITE, |canvas| {
+        let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+        vec![LayerDraw::new(scene), moved(mark, 62.0, 50.0), glass]
+    })?;
+    assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
+fn a_change_under_overlapping_backdrops_matches_a_full_redraw() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(128, 1.0, Color::WHITE)?;
+    let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+    let glass = |x: f32, y: f32| LayerDraw {
+        backdrop: Some(backdrop(Rect::new(x, y, 40.0, 40.0), 4.0)),
+        ..LayerDraw::default()
+    };
+    let (lower, upper) = (glass(30.0, 30.0), glass(55.0, 55.0));
+    let frame = |x: f32| [LayerDraw::new(scene), moved(mark, x, 15.0), lower, upper];
+
+    canvas.frame(&frame(0.0));
+    let under = canvas.frame(&frame(20.0));
+    assert_eq!(under.backdrop_blurs, 2, "both glasses see the change");
+
+    let fresh = render_layers_on(128, Color::WHITE, |canvas| {
+        let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+        vec![LayerDraw::new(scene), moved(mark, 20.0, 15.0), lower, upper]
+    })?;
+    assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
 fn backdrop_effects_follow_the_layer_transform() -> Result<(), GpuError> {
     let tint = Glass::frosted(0.0).tint(Color::RED);
     let glass = EffectDraw::new(&tint, Rect::new(40.0, 40.0, 20.0, 20.0));
@@ -848,6 +1023,13 @@ fn runs(pixels: Vec<[u8; 4]>, color: [u8; 4]) -> Vec<usize> {
         }
     }
     runs
+}
+
+fn moved(list: ListKey, x: f32, y: f32) -> LayerDraw {
+    LayerDraw {
+        transform: Affine::translate(x, y),
+        ..LayerDraw::new(list)
+    }
 }
 
 fn square(color: Color) -> DrawList {

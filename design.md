@@ -417,11 +417,13 @@ A compositor-only frame therefore updates records and re-issues draws for existi
 
 A backdrop effect reads what has already been drawn behind an element.
 
-1. When a frame needs a backdrop, the scene renders into an offscreen scene target instead of the swapchain, and is blitted at the end. Frames without backdrops draw straight to the swapchain.
+1. The scene renders into the persistent scene target (see Damage below), which is blitted to the swapchain at the end.
 2. On reaching a layer with a backdrop effect, the region under it, grown by the blur's reach, is copied from the scene and blurred with a dual-Kawase down/up chain at reduced resolution into a backdrop texture.
 3. The layer's backdrop shader draws, sampling that texture, followed by the layer's content.
 
-Cost controls: consecutive backdrops share one pass break when nothing drawn since the break touches the later one's region (each still runs its own blur); a backdrop is reused with no pass break when everything drawn before it hashes the same as last frame; blur radii are continuous, though the kernel changes shape at each power of two. An element has at most one backdrop effect. Inside a rasterized group, backdrop effects are skipped and blend modes draw normally, because they only see the window's scene.
+Cost controls: consecutive backdrops share one pass break when nothing drawn since the break touches the later one's region (each still runs its own blur); a backdrop is reused with no pass break when everything drawn before it that reaches its region hashes the same as last frame, so an animation elsewhere on screen does not re-blur it; blur radii are continuous, though the kernel changes shape at each power of two. An element has at most one backdrop effect. Inside a rasterized group, backdrop effects are skipped and blend modes draw normally, because they only see the window's scene.
+
+Damage: the window's scene lives in a persistent texture that is copied to the target each frame, and only what changed is redrawn into it. The renderer fingerprints each top-level command with its device extent and diffs the list against the last frame; the extents of commands that appeared, disappeared or changed are cleared to the clear color and redrawn, every step clipped to them, in one pass so each backdrop is still snapshotted once. A backdrop samples the persistent scene, so when the damage touches the region a backdrop reads, that whole region is redrawn too, and nothing stale from a previous frame's glass is blurred. The whole frame is redrawn on the first frame, a resize, a change of scale or clear color, a reordering of unchanged commands, or a backdrop appearing or disappearing; damage is kept as at most six disjoint rectangles before collapsing to their bounds. `RenderStats::damaged` counts the pixels redrawn.
 
 ### 10.4 Clipping
 

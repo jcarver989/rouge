@@ -53,3 +53,8 @@ fn fs_up(in: VsOut) -> @location(0) vec4<f32> {
     sum += tap(in, in.uv + vec2<f32>(-h.x, -h.y)) * 2.0;
     return sum / 12.0;
 }
+
+@fragment
+fn fs_fill(in: VsOut) -> @location(0) vec4<f32> {
+    return in.options;
+}

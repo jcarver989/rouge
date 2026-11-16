@@ -40,6 +40,8 @@ const IDLE_FRAMES: u64 = 600;
 const MAINTENANCE_FRAMES: u64 = 60;
 const IMAGE_BUDGET_BYTES: u64 = 256 << 20;
 const INSTANCE_MIN_BYTES: u64 = 64 << 10;
+const MAX_DAMAGE_RECTS: usize = 6;
+const DAMAGE_SLACK: f32 = 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Viewport {
@@ -275,6 +277,7 @@ impl<'a> Scene<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
     pub instance_bytes_uploaded: u64,
+    pub damaged: u64,
     pub draw_calls: u32,
     pub layers: u32,
     pub backdrop_passes: u32,
@@ -756,9 +759,18 @@ struct Children<'a> {
 }
 
 struct Behind {
-    hasher: FxHasher,
+    base: u64,
+    drawn: Vec<Drawn>,
+    reads: Option<Rect>,
     open: Option<usize>,
     backdrops: usize,
+}
+
+#[derive(Clone, Copy)]
+struct Drawn {
+    fingerprint: u64,
+    extent: Option<Rect>,
+    reads: Option<Rect>,
 }
 
 struct Placed<'a> {
@@ -788,8 +800,30 @@ struct BackdropTarget {
 
 struct Destination<'a> {
     view: &'a TextureView,
-    load: LoadOp<ClearColor>,
+    clear: Clear<'a>,
     scene: Option<&'a Target>,
+}
+
+enum Clear<'a> {
+    All(ClearColor),
+    Within(&'a [Scissor], Record),
+}
+
+enum Redraw {
+    Unchanged,
+    Full,
+    Partial(Vec<Scissor>),
+}
+
+impl Redraw {
+    fn pixels(&self, area: Area) -> u64 {
+        let pixels = |size: (u32, u32)| u64::from(size.0) * u64::from(size.1);
+        match self {
+            Redraw::Unchanged => 0,
+            Redraw::Full => pixels(area.size),
+            Redraw::Partial(clips) => clips.iter().map(|clip| pixels((clip[2], clip[3]))).sum(),
+        }
+    }
 }
 
 struct Target {
@@ -1030,6 +1064,17 @@ impl<'a> Bound<'a> {
     }
 }
 
+fn clipped(scissor: Scissor, clips: Option<&[Scissor]>) -> impl Iterator<Item = Scissor> + '_ {
+    let all = clips.is_none().then_some(scissor);
+    let each = clips.into_iter().flatten().filter_map(move |clip| {
+        let (x, y) = (scissor[0].max(clip[0]), scissor[1].max(clip[1]));
+        let right = (scissor[0] + scissor[2]).min(clip[0] + clip[2]);
+        let bottom = (scissor[1] + scissor[3]).min(clip[1] + clip[3]);
+        (right > x && bottom > y).then(|| [x, y, right - x, bottom - y])
+    });
+    all.into_iter().chain(each)
+}
+
 fn rebind<'a, T>(slot: &mut Option<&'a T>, value: &'a T) -> bool {
     let changed = !slot.is_some_and(|bound| ptr::eq(bound, value));
     *slot = Some(value);
@@ -1045,6 +1090,7 @@ pub struct Renderer {
     records_group: BindGroup,
     primitive: RenderPipeline,
     fullscreen: [RenderPipeline; 3],
+    fill: RenderPipeline,
     effect_layout: PipelineLayout,
     effects: Vec<(&'static str, RenderPipeline)>,
     instances: Instances,
@@ -1057,6 +1103,7 @@ pub struct Renderer {
     images: Images,
     surface_binds: FxHashMap<SurfaceKey, BindGroup>,
     plan: Plan,
+    damage: Option<Damage>,
     frame: u64,
     stats: RenderStats,
 }
@@ -1158,6 +1205,7 @@ impl Renderer {
             records,
             records_group,
             primitive,
+            fill: fullscreen("fs_fill"),
             fullscreen: ["fs_blit", "fs_down", "fs_up"].map(fullscreen),
             effect_layout,
             effects: Vec::new(),
@@ -1171,6 +1219,7 @@ impl Renderer {
             images: Images::default(),
             surface_binds: FxHashMap::default(),
             plan: Plan::default(),
+            damage: None,
             frame: 0,
             stats: RenderStats::default(),
             textures,
@@ -1322,9 +1371,19 @@ impl Renderer {
                     self.plan_group(group, children, area, behind.as_deref_mut(), plan)
                 }
             };
-            if let Some(behind) = behind.as_deref_mut().filter(|_| shown) {
-                scene.fingerprint(index, &mut behind.hasher);
-                plan.since.extend(scene.extent(index, plan.scale));
+            if let Some(behind) = behind.as_deref_mut() {
+                let reads = behind.reads.take();
+                if shown {
+                    let mut hasher = FxHasher::default();
+                    scene.fingerprint(index, &mut hasher);
+                    let extent = scene.extent(index, plan.scale);
+                    behind.drawn.push(Drawn {
+                        fingerprint: hasher.finish(),
+                        extent,
+                        reads,
+                    });
+                    plan.since.extend(extent);
+                }
             }
             index = next;
         }
@@ -1614,7 +1673,14 @@ impl Renderer {
             let Some(geometry) = BlurGeometry::new(&viewport, region, kernel) else {
                 return;
             };
-            let mut hasher = behind.hasher.clone();
+            behind.reads = Some(region);
+            let mut hasher = FxHasher::default();
+            behind.base.hash(&mut hasher);
+            for drawn in &behind.drawn {
+                if (drawn.extent).is_none_or(|extent| !extent.intersect(&region).is_empty()) {
+                    drawn.fingerprint.hash(&mut hasher);
+                }
+            }
             (
                 geometry.origin.0.to_bits(),
                 geometry.origin.1.to_bits(),
@@ -1738,10 +1804,27 @@ impl Renderer {
         let Some(atlas) = self.atlas.as_ref().map(|atlas| &atlas.bind_group) else {
             return;
         };
-        let Destination { view, load, scene } = destination;
+        let Destination { view, clear, scene } = destination;
         let blank = &self.blank.bind_group;
+        let load = match clear {
+            Clear::All(color) => LoadOp::Clear(color),
+            Clear::Within(..) => LoadOp::Load,
+        };
         let mut pass = begin_pass(encoder, view, load);
         let mut bound = Bound::default();
+        let clips = match clear {
+            Clear::All(_) => None,
+            Clear::Within(clips, fill) => {
+                for clip in clips {
+                    bound.scissor(&mut pass, *clip);
+                    bound.pipeline(&mut pass, &self.fill);
+                    bound.group(&mut pass, 0, blank);
+                    bound.page(&mut pass, &self.records_group, fill.page);
+                    pass.draw(fill.vertices(), 0..1);
+                }
+                Some(clips)
+            }
+        };
         for step in &plan.steps[steps.start as usize..steps.end as usize] {
             match step {
                 Step::Snapshot(passes) => {
@@ -1757,25 +1840,27 @@ impl Renderer {
                     scissor,
                     batches,
                 } => {
-                    bound.scissor(&mut pass, *scissor);
                     bound.pipeline(&mut pass, &self.primitive);
                     bound.page(&mut pass, &self.records_group, record.page);
                     if !bound.instances {
                         pass.set_vertex_buffer(0, self.instances.buffer.slice(..));
                         bound.instances = true;
                     }
-                    for batch in &plan.batches[batches.start as usize..batches.end as usize] {
-                        let texture = match batch.image {
-                            Some(id) => match self.images.cached.get(&id) {
-                                Some(image) => &image.target.bind_group,
-                                None => continue,
-                            },
-                            None => atlas,
-                        };
-                        bound.group(&mut pass, 0, texture);
-                        pass.draw(record.vertices(), batch.instances.clone());
-                        stats.images += u32::from(batch.image.is_some());
-                        stats.draw_calls += 1;
+                    for scissor in clipped(*scissor, clips) {
+                        bound.scissor(&mut pass, scissor);
+                        for batch in &plan.batches[batches.start as usize..batches.end as usize] {
+                            let texture = match batch.image {
+                                Some(id) => match self.images.cached.get(&id) {
+                                    Some(image) => &image.target.bind_group,
+                                    None => continue,
+                                },
+                                None => atlas,
+                            };
+                            bound.group(&mut pass, 0, texture);
+                            pass.draw(record.vertices(), batch.instances.clone());
+                            stats.images += u32::from(batch.image.is_some());
+                            stats.draw_calls += 1;
+                        }
                     }
                     stats.layers += 1;
                 }
@@ -1805,15 +1890,17 @@ impl Renderer {
                     let backdrop = backdrop
                         .and_then(|index| self.attachment(Attachment::Backdrop(index), None))
                         .map_or(blank, |target| &target.bind_group);
-                    bound.scissor(&mut pass, *scissor);
                     bound.pipeline(&mut pass, &self.effects[*pipeline as usize].1);
                     bound.group(&mut pass, 0, texture);
                     bound.page(&mut pass, &self.records_group, record.page);
                     bound.group(&mut pass, 2, backdrop);
-                    pass.draw(record.vertices(), 0..1);
+                    for scissor in clipped(*scissor, clips) {
+                        bound.scissor(&mut pass, scissor);
+                        pass.draw(record.vertices(), 0..1);
+                        stats.draw_calls += 1;
+                    }
                     stats.groups += u32::from(matches!(content, Content::Group { .. }));
                     stats.surfaces += u32::from(matches!(content, Content::Surface(_)));
-                    stats.draw_calls += 1;
                 }
             }
         }
@@ -1839,17 +1926,20 @@ impl Renderer {
         };
         let mut plan = take(&mut self.plan);
         plan.begin(viewport.scale, area);
-        let mut behind = Behind {
-            hasher: FxHasher::default(),
-            open: None,
-            backdrops: 0,
-        };
+        let mut base = FxHasher::default();
         (
             area.size,
             viewport.scale.to_bits(),
             clear.to_array().map(f32::to_bits),
         )
-            .hash(&mut behind.hasher);
+            .hash(&mut base);
+        let mut behind = Behind {
+            base: base.finish(),
+            drawn: Vec::new(),
+            reads: None,
+            open: None,
+            backdrops: 0,
+        };
         let main = self.plan_items(
             scene,
             0..scene.commands.len(),
@@ -1872,22 +1962,36 @@ impl Renderer {
             bounds: [0.0, 0.0, 1.0, 1.0],
             options: [0.0; 4],
         });
+        let premultiplied = [clear.r, clear.g, clear.b, 1.0].map(|c| c * clear.a);
+        let fill = plan.records.push(&RegionRecord {
+            rect: [0.0, 0.0, 1.0, 1.0],
+            bounds: [0.0, 0.0, 1.0, 1.0],
+            options: premultiplied,
+        });
         self.sync_records(&plan.records);
         if plan.blurs() {
             self.sync_scratch(plan.scratch);
         }
-        let snapshot = !plan.snapshots.is_empty();
-        if snapshot {
-            self.textures
-                .ensure(&self.device, &mut self.scene, "rouge scene", area.size);
-        }
-        let scene = self.scene.as_ref().filter(|_| snapshot);
+        let created = self
+            .textures
+            .ensure(&self.device, &mut self.scene, "rouge scene", area.size);
+        let key = DamageKey {
+            size: area.size,
+            scale: viewport.scale.to_bits(),
+            clear: clear.to_array().map(f32::to_bits),
+        };
+        let damage = Damage::new(key, behind.drawn);
+        let previous = self.damage.take().filter(|_| !created);
+        let redraw = damage.since(previous.as_ref(), area);
+        self.damage = Some(damage);
+        let scene = self.scene.as_ref();
 
         let descriptor = CommandEncoderDescriptor {
             label: Some("rouge frame"),
         };
         let mut encoder = self.device.create_command_encoder(&descriptor);
         let mut stats = self.stats;
+        stats.damaged = redraw.pixels(area);
         for pass in &plan.passes {
             match pass {
                 Pass::Raster { key, steps } => {
@@ -1896,7 +2000,7 @@ impl Renderer {
                     };
                     let destination = Destination {
                         view: &target.view,
-                        load: LoadOp::Clear(ClearColor::TRANSPARENT),
+                        clear: Clear::All(ClearColor::TRANSPARENT),
                         scene: None,
                     };
                     self.encode(&mut encoder, destination, steps.clone(), &plan, &mut stats);
@@ -1908,19 +2012,20 @@ impl Renderer {
                 }
             }
         }
-        let clear = [clear.r, clear.g, clear.b, 1.0].map(|c| f64::from(c * clear.a));
-        let destination = Destination {
-            view: scene.map_or(target, |scene| &scene.view),
-            load: LoadOp::Clear(ClearColor {
-                r: clear[0],
-                g: clear[1],
-                b: clear[2],
-                a: clear[3],
-            }),
-            scene,
+        let [r, g, b, a] = premultiplied.map(f64::from);
+        let clear = match &redraw {
+            Redraw::Unchanged => None,
+            Redraw::Full => Some(Clear::All(ClearColor { r, g, b, a })),
+            Redraw::Partial(clips) => Some(Clear::Within(clips, fill)),
         };
-        self.encode(&mut encoder, destination, main, &plan, &mut stats);
-
+        if let (Some(scene), Some(clear)) = (scene, clear) {
+            let destination = Destination {
+                view: &scene.view,
+                clear,
+                scene: Some(scene),
+            };
+            self.encode(&mut encoder, destination, main, &plan, &mut stats);
+        }
         if let Some(scene) = scene {
             let mut pass = begin_pass(&mut encoder, target, LoadOp::Clear(ClearColor::TRANSPARENT));
             pass.set_pipeline(&self.fullscreen[BlurKind::Copy as usize]);
@@ -2008,4 +2113,152 @@ fn write_rows(queue: &Queue, texture: &Texture, y: u32, rows: &[u8], bytes_per_r
             depth_or_array_layers: 1,
         },
     );
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct DamageKey {
+    size: (u32, u32),
+    scale: u32,
+    clear: [u32; 4],
+}
+
+struct Damage {
+    key: DamageKey,
+    drawn: Vec<Drawn>,
+}
+
+impl Damage {
+    fn new(key: DamageKey, drawn: Vec<Drawn>) -> Self {
+        Damage { key, drawn }
+    }
+
+    fn readers(&self) -> impl Iterator<Item = (usize, Rect)> + '_ {
+        (self.drawn.iter().enumerate()).filter_map(|(index, drawn)| Some((index, drawn.reads?)))
+    }
+
+    fn since(&self, previous: Option<&Damage>, area: Area) -> Redraw {
+        let Some(previous) = previous.filter(|previous| {
+            previous.key == self.key && previous.readers().count() == self.readers().count()
+        }) else {
+            return Redraw::Full;
+        };
+        let Some(rects) = changed(&previous.drawn, &self.drawn) else {
+            return Redraw::Full;
+        };
+        let before: Vec<_> = previous.readers().collect();
+        let after: Vec<_> = self.readers().collect();
+        let clips: Vec<Scissor> = settle(rects, &before, &after, area.rect())
+            .iter()
+            .filter_map(|rect| area.cover(rect))
+            .map(|cover| {
+                [
+                    cover.origin.0 as u32,
+                    cover.origin.1 as u32,
+                    cover.size.0,
+                    cover.size.1,
+                ]
+            })
+            .collect();
+        if clips.is_empty() {
+            Redraw::Unchanged
+        } else if clips == [[0, 0, area.size.0, area.size.1]] {
+            Redraw::Full
+        } else {
+            Redraw::Partial(clips)
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Depth {
+    Under,
+    Was(usize),
+    Is(usize),
+}
+
+impl Depth {
+    fn behind(self, (was, is): (usize, usize)) -> bool {
+        match self {
+            Depth::Under => true,
+            Depth::Was(index) => index < was,
+            Depth::Is(index) => index < is,
+        }
+    }
+}
+
+fn changed(before: &[Drawn], after: &[Drawn]) -> Option<Vec<(Rect, Depth)>> {
+    let mut rects = Vec::new();
+    let kept_before = unmatched(before, after, Depth::Was, &mut rects);
+    let kept_after = unmatched(after, before, Depth::Is, &mut rects);
+    (kept_before == kept_after).then_some(rects)
+}
+
+fn unmatched(
+    from: &[Drawn],
+    to: &[Drawn],
+    depth: fn(usize) -> Depth,
+    rects: &mut Vec<(Rect, Depth)>,
+) -> Vec<u64> {
+    let mut counts: FxHashMap<u64, usize> = FxHashMap::default();
+    for drawn in to {
+        *counts.entry(drawn.fingerprint).or_default() += 1;
+    }
+    let mut kept = Vec::new();
+    for (index, drawn) in from.iter().enumerate() {
+        match counts.get_mut(&drawn.fingerprint) {
+            Some(count) if *count > 0 => {
+                *count -= 1;
+                kept.push(drawn.fingerprint);
+            }
+            _ => rects.extend(drawn.extent.map(|extent| (extent, depth(index)))),
+        }
+    }
+    kept
+}
+
+fn settle(
+    mut rects: Vec<(Rect, Depth)>,
+    before: &[(usize, Rect)],
+    after: &[(usize, Rect)],
+    full: Rect,
+) -> Vec<Rect> {
+    let readers: Vec<((usize, usize), Rect)> = (before.iter().zip(after))
+        .map(|((was, _), (is, region))| ((*was, *is), *region))
+        .collect();
+    for ((_, was), (_, region)) in before.iter().zip(after) {
+        if was != region {
+            rects.extend([(*was, Depth::Under), (*region, Depth::Under)]);
+        }
+    }
+    let reaches = |rects: &[(Rect, Depth)], (at, region): &((usize, usize), Rect)| {
+        (rects.iter()).any(|(rect, depth)| depth.behind(*at) && !rect.intersect(region).is_empty())
+    };
+    let mut resampled = vec![false; readers.len()];
+    while let Some(index) =
+        (0..readers.len()).find(|index| !resampled[*index] && reaches(&rects, &readers[*index]))
+    {
+        resampled[index] = true;
+        rects.push((readers[index].1, Depth::Under));
+    }
+    let mut merged: Vec<Rect> = Vec::new();
+    for rect in rects.iter().map(|(rect, _)| rect.intersect(&full)) {
+        if rect.is_empty() {
+            continue;
+        }
+        let mut rect = rect;
+        while let Some(index) = (merged.iter())
+            .position(|other| !other.inflate(DAMAGE_SLACK).intersect(&rect).is_empty())
+        {
+            rect = rect.union(&merged.swap_remove(index));
+        }
+        merged.push(rect);
+    }
+    if merged.len() > MAX_DAMAGE_RECTS {
+        let bounds = merged
+            .iter()
+            .copied()
+            .reduce(|bounds, rect| bounds.union(&rect));
+        merged = bounds.into_iter().collect();
+    }
+    merged
 }

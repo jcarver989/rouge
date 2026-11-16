@@ -62,7 +62,15 @@ pub(crate) fn render_layers(
     size: u32,
     layers: impl FnOnce(&mut Canvas) -> Vec<LayerDraw>,
 ) -> Result<Image, GpuError> {
-    let mut canvas = Canvas::new(size, 1.0, Color::TRANSPARENT)?;
+    render_layers_on(size, Color::TRANSPARENT, layers)
+}
+
+pub(crate) fn render_layers_on(
+    size: u32,
+    clear: Color,
+    layers: impl FnOnce(&mut Canvas) -> Vec<LayerDraw>,
+) -> Result<Image, GpuError> {
+    let mut canvas = Canvas::new(size, 1.0, clear)?;
     let layers = layers(&mut canvas);
     canvas.frame(&layers);
     canvas.image()
