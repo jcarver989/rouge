@@ -1,7 +1,9 @@
 use rouge_core::testing::{
     BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
 };
-use rouge_core::{Color, Menu, MenuItem, Point, PointerButton, Rect, Styled, div, dynamic};
+use rouge_core::{
+    Color, Keyframes, Menu, MenuItem, Point, PointerButton, Rect, Styled, div, dynamic,
+};
 use rouge_reactive::{Runtime, signal};
 use std::assert_matches;
 use std::path::PathBuf;
@@ -57,7 +59,7 @@ fn run_and_wait_until_advance_the_clock_in_steps() -> TestResult {
     ui.run(0.5);
     assert_eq!(ui.first_x(RED, 10)?, 50);
     assert!(ui.wait_until(|ui| ui.first_x(RED, 10).is_ok_and(|x| x == 100)));
-    assert!(ui.draw()?.layers > 0);
+    assert_eq!(ui.draw()?.damaged, 0, "the settled frame is already drawn");
     ui.wait()?;
     Ok(())
 }
@@ -168,3 +170,43 @@ fn input_helpers_target_elements_by_test_id() -> TestResult {
 
 #[derive(Clone, Copy)]
 struct Save;
+
+#[test]
+fn compositor_frames_counts_only_the_frames_the_compositor_wakes_for() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let steps = (0..4u8).fold(Keyframes::new(), |keyframes, step| {
+        let (start, end) = (f32::from(step) / 4.0, f32::from(step + 1) / 4.0);
+        let x = f32::from(step) * 10.0;
+        keyframes
+            .at(start, |pose| pose.translate_x(x))
+            .at(end, |pose| pose.translate_x(x))
+    });
+    let mut stepping = TestUi::new(move || {
+        div()
+            .size(10.0)
+            .bg(Color::RED)
+            .animate(steps.duration(1.0).repeat())
+    });
+    stepping.advance(0.0);
+    stepping.draw()?;
+    assert_eq!(
+        stepping.compositor_frames(1.0)?,
+        3,
+        "a frame at each later step: 0.25, 0.5 and 0.75"
+    );
+    let mut idle = TestUi::new(|| div().size(10.0).bg(Color::RED));
+    idle.draw()?;
+    assert_eq!(idle.compositor_frames(1.0)?, 0);
+    let slide = Keyframes::new()
+        .at(0.0, |pose| pose.translate_x(0.0))
+        .at(1.0, |pose| pose.translate_x(40.0));
+    let mut sliding = TestUiBuilder::default()
+        .refresh_rate(100.0)
+        .build(move || div().size(10.0).bg(Color::RED).animate(slide.repeat()));
+    sliding.draw()?;
+    assert!(
+        sliding.compositor_frames(1.0)? > 100,
+        "a slide draws at the refresh rate"
+    );
+    Ok(())
+}

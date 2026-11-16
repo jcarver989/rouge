@@ -57,6 +57,7 @@ pub struct TestUiBuilder {
     size: Size,
     scale: f32,
     clear: Color,
+    interval: f64,
 }
 
 impl Default for TestUiBuilder {
@@ -68,6 +69,7 @@ impl Default for TestUiBuilder {
             size: Size::new(200.0, 100.0),
             scale: 1.0,
             clear: Color::TRANSPARENT,
+            interval: STEP,
         }
     }
 }
@@ -85,6 +87,11 @@ impl TestUiBuilder {
 
     pub fn clear(mut self, clear: Color) -> Self {
         self.clear = clear;
+        self
+    }
+
+    pub fn refresh_rate(mut self, hertz: f64) -> Self {
+        self.interval = 1.0 / hertz;
         self
     }
 
@@ -129,6 +136,7 @@ impl TestUiBuilder {
             size: self.size,
             scale: self.scale,
             clear: self.clear,
+            interval: self.interval,
             actor: None,
             clock: 0.0,
             commands: Vec::new(),
@@ -143,6 +151,7 @@ pub struct TestUi {
     size: Size,
     scale: f32,
     clear: Color,
+    interval: f64,
     actor: Option<CompositorActor>,
     clock: f64,
     commands: Vec<WindowCommand>,
@@ -161,7 +170,7 @@ impl TestUi {
         let config = WindowConfig {
             width: (self.size.width * self.scale) as u32,
             height: (self.size.height * self.scale) as u32,
-            interval: Duration::from_secs_f64(STEP),
+            interval: Duration::from_secs_f64(self.interval),
             visible: true,
         };
         if self.actor.is_none() {
@@ -202,6 +211,22 @@ impl TestUi {
     pub fn composite(&mut self, seconds: f64) -> Result<Image, TestError> {
         let actor = self.present(self.clock + seconds)?;
         Ok(actor.image(WINDOW).ok_or(TestError::Closed)??)
+    }
+
+    pub fn compositor_frames(&mut self, seconds: f64) -> Result<usize, TestError> {
+        let end = self.clock + seconds;
+        let mut now = self.clock;
+        let mut frames = 0;
+        while let Some(at) = self.actor()?.next_wake(now)
+            && at < end
+        {
+            now = at.max(now);
+            self.actor()?.frame(now);
+            let (actor, ui) = (self.actor.as_mut().ok_or(TestError::Closed)?, &mut self.ui);
+            actor.events().for_each(|(_, event)| ui.handle(event));
+            frames += 1;
+        }
+        Ok(frames)
     }
 
     pub fn wait(&self) -> Result<(), TestError> {
