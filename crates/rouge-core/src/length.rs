@@ -20,22 +20,28 @@ pub fn auto() -> Length {
     Length::Auto
 }
 
-macro_rules! into_taffy {
-    ($($ty:ident => $auto:expr;)*) => {$(
-        impl From<Length> for $ty {
-            fn from(value: Length) -> Self {
-                match value {
-                    Length::Px(v) => $ty::length(v),
-                    Length::Fraction(v) => $ty::percent(v),
-                    Length::Auto => $auto,
-                }
-            }
-        }
-    )*};
+impl From<Length> for Dimension {
+    fn from(value: Length) -> Self {
+        LengthPercentageAuto::from(value).into()
+    }
 }
 
-into_taffy! {
-    Dimension => Dimension::auto();
-    LengthPercentageAuto => LengthPercentageAuto::auto();
-    LengthPercentage => LengthPercentage::length(0.0);
+impl From<Length> for LengthPercentageAuto {
+    fn from(value: Length) -> Self {
+        match value {
+            Length::Px(v) => LengthPercentageAuto::length(v),
+            Length::Fraction(v) => LengthPercentageAuto::percent(v),
+            Length::Auto => LengthPercentageAuto::auto(),
+        }
+    }
+}
+
+impl From<Length> for LengthPercentage {
+    fn from(value: Length) -> Self {
+        match value {
+            Length::Px(v) => LengthPercentage::length(v),
+            Length::Fraction(v) => LengthPercentage::percent(v),
+            Length::Auto => LengthPercentage::length(0.0),
+        }
+    }
 }

@@ -43,22 +43,13 @@ pub struct SpanStyle {
 
 impl SpanStyle {
     fn overlay(&mut self, other: &Self) {
-        macro_rules! fields {
-            ($($field:ident),*) => {$(
-                if other.$field.is_some() {
-                    self.$field.clone_from(&other.$field);
-                }
-            )*};
-        }
-        fields!(
-            color,
-            background,
-            weight,
-            italic,
-            underline,
-            strikethrough,
-            family
-        );
+        self.color = other.color.or(self.color);
+        self.background = other.background.or(self.background);
+        self.weight = other.weight.or(self.weight);
+        self.italic = other.italic.or(self.italic);
+        self.underline = other.underline.or(self.underline);
+        self.strikethrough = other.strikethrough.or(self.strikethrough);
+        self.family = other.family.clone().or(self.family.take());
     }
 }
 

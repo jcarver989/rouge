@@ -36,9 +36,15 @@ pub struct Menu {
 
 impl Menu {
     pub fn edit() -> Self {
-        let mut items: Vec<_> = EditAction::ALL
+        let mut items: Vec<_> = EDIT_COMMANDS
             .iter()
-            .map(|action| action.menu_item())
+            .map(|&(action, title, key, shift)| {
+                let modifiers = Modifiers {
+                    shift,
+                    ..Modifiers::COMMAND
+                };
+                MenuItem::action(title, action).shortcut(Chord::new(Key::character(key), modifiers))
+            })
             .collect();
         items.insert(2, MenuItem::Separator);
         Menu::new("Edit", items)
@@ -186,47 +192,53 @@ impl MenuItem {
     }
 }
 
-macro_rules! edit_commands {
-    ($($action:ident: $title:literal, $key:literal, $shift:literal;)*) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub enum EditAction { $($action,)* }
-
-        impl EditAction {
-            const ALL: &[Self] = &[$(Self::$action,)*];
-
-            fn menu_item(self) -> MenuItem {
-                let (title, key, shift) = match self {
-                    $(Self::$action => ($title, $key, $shift),)*
-                };
-                let mut modifiers = Modifiers::COMMAND;
-                modifiers.shift = shift;
-                MenuItem::action(title, self).shortcut(Chord::new(Key::character(key), modifiers))
-            }
-
-            pub(crate) fn from_key(event: &KeyEvent) -> Option<Self> {
-                let Key::Character(key) = &event.key else { return None };
-                if !event.modifiers.command() { return None; }
-                match (key.as_str(), event.modifiers.shift) {
-                    $(($key, shift) if $key != "z" || shift == $shift => Some(Self::$action),)*
-                    ("y", _) => Some(Self::Redo),
-                    _ => None,
-                }
-            }
-
-            pub(crate) fn operation(self) -> EditOp {
-                match self { $(Self::$action => EditOp::$action,)* }
-            }
-        }
-    };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditAction {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
 }
 
-edit_commands! {
-    Undo: "Undo", "z", false;
-    Redo: "Redo", "z", true;
-    Cut: "Cut", "x", false;
-    Copy: "Copy", "c", false;
-    Paste: "Paste", "v", false;
-    SelectAll: "Select All", "a", false;
+const EDIT_COMMANDS: [(EditAction, &str, &str, bool); 6] = [
+    (EditAction::Undo, "Undo", "z", false),
+    (EditAction::Redo, "Redo", "z", true),
+    (EditAction::Cut, "Cut", "x", false),
+    (EditAction::Copy, "Copy", "c", false),
+    (EditAction::Paste, "Paste", "v", false),
+    (EditAction::SelectAll, "Select All", "a", false),
+];
+
+impl EditAction {
+    pub(crate) fn from_key(event: &KeyEvent) -> Option<Self> {
+        let Key::Character(key) = &event.key else {
+            return None;
+        };
+        if !event.modifiers.command() {
+            return None;
+        }
+        if key == "y" {
+            return Some(Self::Redo);
+        }
+        let shift = event.modifiers.shift;
+        EDIT_COMMANDS
+            .iter()
+            .find(|(_, _, k, s)| k == key && (*k != "z" || *s == shift))
+            .map(|command| command.0)
+    }
+
+    pub(crate) fn operation(self) -> EditOp {
+        match self {
+            Self::Undo => EditOp::Undo,
+            Self::Redo => EditOp::Redo,
+            Self::Cut => EditOp::Cut,
+            Self::Copy => EditOp::Copy,
+            Self::Paste => EditOp::Paste,
+            Self::SelectAll => EditOp::SelectAll,
+        }
+    }
 }
 
 pub enum WindowCommand {
