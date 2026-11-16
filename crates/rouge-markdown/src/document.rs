@@ -576,10 +576,10 @@ impl Builder<'_> {
                 let block = self.block(range, MarkdownBlockKind::Rule);
                 self.attach(block);
             }
-            Event::Text(text) if matches!(self.stack.last(), Some(Frame::Code { .. })) => {
-                if let Some(Frame::Code { text: code, .. }) = self.stack.last_mut() {
-                    code.push_str(text);
-                }
+            Event::Text(text)
+                if let Some(Frame::Code { text: code, .. }) = self.stack.last_mut() =>
+            {
+                code.push_str(text);
             }
             event => {
                 if let Some(text) = self.sink() {

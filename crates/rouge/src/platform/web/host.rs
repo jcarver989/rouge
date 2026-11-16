@@ -592,36 +592,27 @@ impl Host {
             }
             (Source::Canvas, "pointerleave") => self.leave(state, event),
             (Source::Canvas, "contextmenu") => event.prevent_default(),
-            (Source::Canvas, "wheel") => {
-                if let Some(event) = event.dyn_ref() {
-                    self.wheel(state, event);
-                }
+            (Source::Canvas, "wheel") if let Some(event) = event.dyn_ref() => {
+                self.wheel(state, event);
             }
-            (Source::Canvas, _) if name.starts_with("pointer") || name == "lostpointercapture" => {
-                if let Some(event) = event.dyn_ref() {
-                    self.pointer(state, name, event);
-                }
+            (Source::Canvas, _)
+                if (name.starts_with("pointer") || name == "lostpointercapture")
+                    && let Some(event) = event.dyn_ref() =>
+            {
+                self.pointer(state, name, event);
             }
-            (_, "keydown" | "keyup") => {
-                if let Some(event) = event.dyn_ref() {
-                    self.key(state, name, event);
-                }
+            (_, "keydown" | "keyup") if let Some(event) = event.dyn_ref() => {
+                self.key(state, name, event);
             }
-            (_, "copy" | "cut" | "paste") => {
-                if let Some(event) = event.dyn_ref() {
-                    self.clipboard_event(state, name, event);
-                }
+            (_, "copy" | "cut" | "paste") if let Some(event) = event.dyn_ref() => {
+                self.clipboard_event(state, name, event);
             }
-            (Source::Input, "beforeinput") => {
-                if let Some(event) = event.dyn_ref() {
-                    Self::before_input(state, event);
-                }
+            (Source::Input, "beforeinput") if let Some(event) = event.dyn_ref() => {
+                Self::before_input(state, event);
             }
             (Source::Input, "input") => self.inserted(state, event),
-            (Source::Input, _) => {
-                if let Some(event) = event.dyn_ref() {
-                    self.compose(state, name, event);
-                }
+            (Source::Input, _) if let Some(event) = event.dyn_ref() => {
+                self.compose(state, name, event);
             }
             _ => {}
         }
