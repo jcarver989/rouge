@@ -241,7 +241,7 @@ impl Tree {
         if self.capture.is_some() {
             return;
         }
-        let path = point.map(|p| self.hit_test(p)).unwrap_or_default();
+        let path = point.map_or_default(|p| self.hit_test(p));
         let text_hover = |id: &ElementId| {
             let extras = self.elements[*id].extras();
             extras.and_then(|extras| extras.text_hover.as_ref())

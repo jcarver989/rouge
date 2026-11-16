@@ -882,8 +882,7 @@ fn route(window: &Window) -> String {
     window
         .location()
         .hash()
-        .map(|hash| hash.trim_start_matches('#').to_owned())
-        .unwrap_or_default()
+        .map_or_default(|hash| hash.trim_start_matches('#').to_owned())
 }
 
 fn canvas(document: &Document, id: Option<&str>) -> Result<HtmlCanvasElement, AppError> {

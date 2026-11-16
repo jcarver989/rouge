@@ -252,8 +252,7 @@ pub fn select<T: Clone + PartialEq + 'static>(
         labels
             .iter()
             .find(|(option, _)| *option == chosen)
-            .map(|(_, label)| label.clone())
-            .unwrap_or_default()
+            .map_or_default(|(_, label)| label.clone())
     };
     let items = options.iter().cloned().map(move |(option, label)| {
         MenuItem::callback(label, move || {

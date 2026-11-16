@@ -19,11 +19,7 @@ fn main() -> ExitCode {
     let mut project = Project::new();
     project.apply(
         RustMonorepo::new()
-            .rust(
-                Rust::new("1.99")
-                    .toolchain("1.99.1")
-                    .targets(["aarch64-apple-ios", "aarch64-apple-ios-sim"]),
-            )
+            .rust(Rust::new("1.100").targets(["aarch64-apple-ios", "aarch64-apple-ios-sim"]))
             .workspace(Workspace::new().license("MIT OR Apache-2.0"))
             .without_conventions(),
     );
