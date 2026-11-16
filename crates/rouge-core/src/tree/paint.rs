@@ -3,7 +3,7 @@ use super::edit::CARET_WIDTH;
 use super::layers::{LayerRef, LayerState, Slot};
 use super::{Element, ElementId, Kind, Tree, theme_at};
 use crate::canvas::{PaintOp, ShapedRun};
-use crate::compositor::{Compositor, Content, Nested};
+use crate::compositor::{Content, Layers, Nested};
 use crate::image::{Fit, ImageSpec};
 use crate::path::Path;
 use crate::style::Dirty;
@@ -111,7 +111,7 @@ impl Tree {
                 &mut self.elements,
                 (self.root, Slot::Own),
                 &mut cx,
-                &mut self.compositor,
+                &mut self.layers,
             );
             self.stats.layer_paints += cx.layer_paints;
             self.stats.paints += 1;
@@ -135,7 +135,7 @@ fn paint_layers(
     elements: &mut SlotMap<ElementId, Element>,
     layer: LayerRef,
     cx: &mut PaintCx<'_>,
-    compositor: &mut Compositor,
+    layers: &mut Layers,
 ) {
     let Some(state) = layer_mut(elements, layer) else {
         return;
@@ -168,7 +168,7 @@ fn paint_layers(
             nested: nested.collect(),
             lists: target.lists,
         };
-        compositor.set_content(layer_id, content);
+        layers.set_content(layer_id, content);
         cx.layer_paints += 1;
         if let Some(state) = layer_mut(elements, layer) {
             state.nested = target
@@ -183,7 +183,7 @@ fn paint_layers(
     };
     let mut index = 0;
     while let Some(layer) = nested(elements, index) {
-        paint_layers(elements, layer, cx, compositor);
+        paint_layers(elements, layer, cx, layers);
         index += 1;
     }
 }

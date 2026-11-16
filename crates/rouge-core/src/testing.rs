@@ -1,18 +1,19 @@
 use crate::animation::{Ease, Tween};
+use crate::compositor::{CompositorActor, Message, WindowConfig, WindowId};
 use crate::event::{FileDropPhase, KeyEvent, PointerButton};
 use crate::theme::{Palette, Theme};
 use crate::ui::Ui;
 use crate::view::View;
 use crate::window::{Menu, WindowCommand};
-use rouge_render::headless::{Headless, Image};
-use rouge_render::{Color, Command, GpuError, Point, Rect, RenderStats, Size, Surfaces, Viewport};
+use rouge_render::headless::{Image, headless_gpu};
+use rouge_render::{Color, Command, GpuError, Point, Rect, RenderStats, Size, Surfaces, Target};
 use rouge_theme::UiPalette;
 use std::borrow::Cow;
 use std::mem::take;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use thiserror::Error;
 
 pub use rouge_reactive::testing::{TestResult, counter, recorder};
@@ -30,6 +31,8 @@ pub enum TestError {
     NoText(String),
     #[error("{0:?} never scrolled into view")]
     NotScrolledIntoView(String),
+    #[error("the test window is closed")]
+    Closed,
     #[error(transparent)]
     Gpu(#[from] GpuError),
 }
@@ -42,6 +45,7 @@ pub const BLACK: [u8; 4] = [0, 0, 0, 255];
 pub const CLEAR: [u8; 4] = [0, 0, 0, 0];
 
 const STEP: f64 = 0.05;
+const WINDOW: WindowId = WindowId(0);
 const CLICK_PAUSE: f64 = 1.0;
 const DRAG_STEPS: u8 = 8;
 const MAX_SCROLLS: usize = 100;
@@ -117,6 +121,7 @@ impl TestUiBuilder {
             extra = Some(value);
             view
         });
+        ui.pin_clock(0.0);
         ui.set_device_scale(self.scale);
         ui.bind_menus(&self.menus);
         let mut ui = TestUi {
@@ -124,7 +129,7 @@ impl TestUiBuilder {
             size: self.size,
             scale: self.scale,
             clear: self.clear,
-            headless: None,
+            actor: None,
             clock: 0.0,
             commands: Vec::new(),
         };
@@ -138,7 +143,7 @@ pub struct TestUi {
     size: Size,
     scale: f32,
     clear: Color,
-    headless: Option<(Viewport, Headless)>,
+    actor: Option<CompositorActor>,
     clock: f64,
     commands: Vec<WindowCommand>,
 }
@@ -152,62 +157,70 @@ impl TestUi {
         TestUiBuilder::default().clear(Color::WHITE).build(root)
     }
 
-    fn headless(&mut self) -> Result<&mut Headless, TestError> {
-        let viewport = Viewport::new(
-            (self.size.width * self.scale) as u32,
-            (self.size.height * self.scale) as u32,
-            self.ui.scale(),
-        );
-        let headless = match self.headless.take() {
-            Some((current, headless)) if current == viewport => headless,
-            Some((_, headless)) => Headless::with_gpu(headless.gpu().clone(), viewport),
-            None => Headless::new(viewport)?,
+    fn actor(&mut self) -> Result<&mut CompositorActor, TestError> {
+        let config = WindowConfig {
+            width: (self.size.width * self.scale) as u32,
+            height: (self.size.height * self.scale) as u32,
+            scale: self.ui.scale(),
+            interval: Duration::from_secs_f64(STEP),
+            visible: true,
         };
-        Ok(&mut self.headless.insert((viewport, headless)).1)
+        if self.actor.is_none() {
+            let gpu = headless_gpu()?;
+            let target = Target::offscreen(&gpu, config.width, config.height);
+            let mut actor = CompositorActor::new(gpu.clone(), Surfaces::new(&gpu));
+            actor.handle(Message::Open(WINDOW, target, config));
+            self.actor = Some(actor);
+        }
+        let actor = self.actor.as_mut().ok_or(TestError::Closed)?;
+        actor.handle(Message::Configure(WINDOW, config));
+        Ok(actor)
     }
 
     pub fn surfaces(&mut self) -> Result<&mut Surfaces, TestError> {
-        Ok(self.headless()?.surfaces())
+        Ok(self.actor()?.surfaces())
     }
 
-    fn present(&mut self) -> Result<(RenderStats, &Headless), TestError> {
-        self.headless()?;
-        let (_, headless) = self
-            .headless
-            .as_mut()
-            .expect("the headless renderer exists");
-        self.ui.sync_surfaces(headless.surfaces());
-        headless.surfaces().latch();
-        let frame = self.ui.frame(headless.surfaces());
-        let stats = headless.render(self.clear, frame.scene, frame.atlas);
-        headless
-            .surfaces()
-            .presented(Instant::now(), Duration::from_secs_f64(STEP));
-        Ok((stats, headless))
+    fn sync(&mut self) -> Result<(), TestError> {
+        let mut commit = self.ui.commit();
+        commit.clear = Some(self.clear);
+        self.actor()?.handle(Message::Commit(WINDOW, commit));
+        Ok(())
+    }
+
+    fn present(&mut self, at: f64) -> Result<&mut CompositorActor, TestError> {
+        self.actor()?.draw(WINDOW, at);
+        let (actor, ui) = (self.actor.as_mut().ok_or(TestError::Closed)?, &mut self.ui);
+        actor.events().for_each(|(_, event)| ui.handle(event));
+        Ok(actor)
     }
 
     pub fn draw(&mut self) -> Result<RenderStats, TestError> {
-        Ok(self.present()?.0)
+        self.sync()?;
+        Ok(self.present(self.clock)?.stats())
+    }
+
+    pub fn composite(&mut self, seconds: f64) -> Result<Image, TestError> {
+        let actor = self.present(self.clock + seconds)?;
+        Ok(actor.image(WINDOW).ok_or(TestError::Closed)??)
     }
 
     pub fn wait(&self) -> Result<(), TestError> {
-        if let Some((_, headless)) = &self.headless {
-            headless.wait()?;
+        if let Some(actor) = &self.actor {
+            actor.gpu().wait()?;
         }
         Ok(())
     }
 
     pub fn commands(&mut self) -> Result<Vec<Command>, TestError> {
-        self.headless()?;
-        let (_, headless) = self
-            .headless
-            .as_mut()
-            .expect("the headless renderer exists");
-        Ok(self.ui.frame(headless.surfaces()).scene.commands.to_vec())
+        self.sync()?;
+        let clock = self.clock;
+        Ok(self.actor()?.commands(WINDOW, clock).unwrap_or_default())
     }
 
     pub fn render(&mut self) -> Result<Image, TestError> {
-        Ok(self.present()?.1.image()?)
+        self.sync()?;
+        self.composite(0.0)
     }
 
     pub fn pixel(&mut self, x: u32, y: u32) -> Result<[u8; 4], TestError> {
@@ -232,6 +245,7 @@ impl TestUi {
     }
 
     pub fn advance(&mut self, seconds: f64) -> bool {
+        self.ui.flush();
         self.clock += seconds;
         let changed = self.ui.update_at(self.clock);
         loop {

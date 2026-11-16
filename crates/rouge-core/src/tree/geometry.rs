@@ -18,13 +18,34 @@ impl Tree {
             self.settle_scroll_targets();
         }
         batch(|| {
-            for (id, value) in &self.motions {
-                if let Some(current) = self.compositor.motion(*id).filter(|_| value.is_alive()) {
-                    value.set_if_changed(current);
-                }
-            }
+            self.publish_motions();
             for index in 0..self.observers.len() {
                 self.publish_observers(self.observers[index]);
+            }
+        });
+    }
+
+    pub(crate) fn observed_animating(&self) -> bool {
+        if !self.layers.is_animating() {
+            return false;
+        }
+        self.observers.iter().any(|id| {
+            self.chain(*id).iter().any(|node| {
+                self.elements[*node]
+                    .layers
+                    .iter()
+                    .flatten()
+                    .any(|layer| self.layers.is_layer_moving(layer.id))
+            })
+        })
+    }
+
+    pub(crate) fn publish_motions(&self) {
+        batch(|| {
+            for (id, value) in &self.motions {
+                if let Some(current) = self.layers.motion(*id).filter(|_| value.is_alive()) {
+                    value.set_if_changed(current);
+                }
             }
         });
     }
@@ -188,7 +209,7 @@ impl Tree {
 
     fn enter(&self, id: ElementId, slot: Slot) -> Option<Affine> {
         let element = &self.elements[id];
-        let pose = self.compositor.pose(element.layer(slot)?.id)?;
+        let pose = self.layers.pose(element.layer(slot)?.id)?;
         Some(pose.transform(element.bounds))
     }
 

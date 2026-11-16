@@ -1,7 +1,7 @@
 use super::layers::Slot;
 use super::{ElementId, Exit, Kind, Presence, Tree};
+use crate::compositor::SurfaceOp;
 use crate::style::Dirty;
-use crate::surface::SurfaceOp;
 use slotmap::new_key_type;
 use std::mem::take;
 
@@ -262,7 +262,7 @@ impl Tree {
             let layer = self.elements.get(top).and_then(|e| e.layer(Slot::Own));
             let exits = match (exit, layer) {
                 (Some((to, timing)), Some(layer)) => {
-                    self.compositor.exit(layer.id, to, timing);
+                    self.layers.exit(layer.id, to, timing);
                     true
                 }
                 _ => false,
@@ -274,10 +274,11 @@ impl Tree {
             }) {
                 self.stats.elements_removed += 1;
                 if let Kind::Surface(surface) = &element.kind {
+                    self.surface_sinks.remove(&surface.id);
                     self.surface_ops.push(SurfaceOp::Detach(surface.id));
                 }
                 for layer in element.layers.into_iter().flatten().filter(|_| !exits) {
-                    self.compositor.remove_layer(layer.id);
+                    self.layers.remove_layer(layer.id);
                 }
                 if let Some(fragment) = element.fragment {
                     self.free(fragment);

@@ -287,9 +287,9 @@ fn a_content_effect_over_a_surface_refreshes_on_every_frame() -> TestResult {
 #[test]
 fn glass_over_a_surface_does_not_reuse_a_stale_backdrop() -> TestResult {
     let (mut surface, mut stage) = scene(TestSurface::builder().size(100, 100))?;
-    let glass = stage.compositor.create_layer();
+    let glass = stage.layers.create_layer();
     stage
-        .compositor
+        .layers
         .set_frame(glass, Rect::new(20.0, 20.0, 60.0, 60.0));
     stage.effect(glass, EffectSlot::Backdrop, &Glass::frosted(8.0), false);
     stage.content(glass, vec![DrawList::new()], vec![]);
@@ -342,7 +342,7 @@ fn a_replaced_buffer_is_released_after_the_gpu_finishes_with_it() -> TestResult 
         Err(TestSurfaceError::NoFreeBuffer)
     );
     stage.draw();
-    stage.headless.wait()?;
+    stage.wait()?;
     stage.surfaces().maintain();
     surface.pump()?;
     assert_eq!(surface.free_buffers(), 1);
@@ -407,9 +407,9 @@ fn a_detached_surface_keeps_its_last_frame_until_its_layer_is_gone() -> TestResu
     assert_near(stage.image()?.pixel(50, 50), RED, "the last frame stays");
     assert_eq!(stage.surfaces().stats().surfaces, 1);
 
-    stage.compositor.remove_layer(stage.child);
+    stage.layers.remove_layer(stage.child);
     stage.draw();
-    stage.headless.wait()?;
+    stage.wait()?;
     stage.surfaces().maintain();
     assert_eq!(stage.surfaces().stats().surfaces, 0);
     surface.pump()?;

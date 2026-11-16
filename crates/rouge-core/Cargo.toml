@@ -34,6 +34,18 @@ wgpu.workspace = true
 workspace = true
 
 [[test]]
+name = "compositor_actor_test"
+path = "tests/compositor/actor_test.rs"
+
+[[test]]
+name = "compositor_thread_test"
+path = "tests/compositor/thread_test.rs"
+
+[[test]]
+name = "compositor_layers_test"
+path = "tests/compositor/layers_test.rs"
+
+[[test]]
 name = "tree_edit_test"
 path = "tests/tree/edit_test.rs"
 

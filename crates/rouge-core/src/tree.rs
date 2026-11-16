@@ -1,13 +1,13 @@
 use crate::animation::{Pose, Timing};
 use crate::canvas::{CanvasData, HitListener};
 use crate::clipboard::{Clipboard, MemoryClipboard};
-use crate::compositor::{Compositor, MotionId};
+use crate::compositor::{Layers, MotionId, SurfaceOp};
 use crate::event::{Chord, Cursor};
 use crate::image::ImageSpec;
 use crate::keymap::Keymap;
 use crate::scroll::scroll_key;
 use crate::style::{Declaration, Dirty, Style, base_layout};
-use crate::surface::{SurfaceOp, SurfaceSpec};
+use crate::surface::{StatusSink, SurfaceSpec};
 use crate::text::TextStats;
 use crate::theme::{Palette, Theme};
 use crate::view::Queue;
@@ -17,7 +17,7 @@ use fragment::Fragment;
 use layers::{LayerState, Slot};
 use layout::{LayoutNode, root_layout};
 use rouge_reactive::{ReactiveStats, Signal};
-use rouge_render::{Color, Edges, Rect, Size};
+use rouge_render::{Color, Edges, Rect, Size, SurfaceId};
 use rouge_theme::UiPalette;
 use rustc_hash::FxHashMap;
 use slotmap::{SecondaryMap, SlotMap, new_key_type};
@@ -322,7 +322,7 @@ pub(crate) struct Tree {
     press_path: Vec<ElementId>,
     capture: Option<Vec<ElementId>>,
     pub(crate) stats: FrameStats,
-    pub(crate) compositor: Compositor,
+    pub(crate) layers: Layers,
     repaint_all: bool,
     observers: Vec<ElementId>,
     dirty_styles: Vec<ElementId>,
@@ -342,6 +342,7 @@ pub(crate) struct Tree {
     keymap: Option<Keymap>,
     surfaces: Vec<ElementId>,
     surface_ops: Vec<SurfaceOp>,
+    surface_sinks: FxHashMap<SurfaceId, StatusSink>,
     window_visible: bool,
 }
 
@@ -360,7 +361,7 @@ impl Tree {
             press_path: Vec::new(),
             capture: None,
             stats: FrameStats::default(),
-            compositor: Compositor::new(),
+            layers: Layers::new(),
             repaint_all: true,
             observers: Vec::new(),
             dirty_styles: Vec::new(),
@@ -380,6 +381,7 @@ impl Tree {
             keymap: None,
             surfaces: Vec::new(),
             surface_ops: Vec::new(),
+            surface_sinks: FxHashMap::default(),
             window_visible: true,
         };
         tree.root = tree.create_element(ElementSpec {
@@ -388,7 +390,7 @@ impl Tree {
             ..Default::default()
         });
         if let Some(layer) = tree.elements[tree.root].layer(Slot::Own) {
-            tree.compositor.set_root(layer.id);
+            tree.layers.set_root(layer.id);
         }
         tree.content = tree.fragment(Node::Element(tree.root));
         tree
@@ -522,8 +524,7 @@ impl Tree {
         let content = observer.map(|observer| {
             let layer = self.new_layer(LayerSpec::default());
             if let Some(state) = observer {
-                self.compositor
-                    .set_scroll_source(layer.id, scroll_key(state));
+                self.layers.set_scroll_source(layer.id, scroll_key(state));
             }
             layer
         });
@@ -566,7 +567,8 @@ impl Tree {
         }
         if let Some(attach) = attach {
             if let Some((source, status)) = attach {
-                self.surface_ops.push(SurfaceOp::Attach(source, status));
+                self.surface_sinks.insert(source.id(), status);
+                self.surface_ops.push(SurfaceOp::Attach(source));
             }
             self.surfaces.push(id);
         }

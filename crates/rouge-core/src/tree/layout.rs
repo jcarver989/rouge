@@ -172,7 +172,7 @@ impl Tree {
             let layer = layer.as_mut()?;
             let frame = within(space);
             if layer.frame.replace(frame) != Some(frame) {
-                self.compositor.set_frame(layer.id, frame);
+                self.layers.set_frame(layer.id, frame);
             }
             *space = Space {
                 origin,
@@ -199,10 +199,9 @@ impl Tree {
                 viewport.height + layout.scroll_height(),
             );
             if replace(&mut scroll.extent, (viewport, content)) != (viewport, content) {
-                self.compositor
-                    .set_scroll_extent(scroller, viewport, content);
+                self.layers.set_scroll_extent(scroller, viewport, content);
                 if let Some(target) = scroll.target {
-                    self.compositor.scroll_to(scroller, target);
+                    self.layers.scroll_to(scroller, target);
                 }
             }
         }

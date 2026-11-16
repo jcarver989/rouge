@@ -315,15 +315,15 @@ fn transition_runs_in_the_compositor_and_lands_on_target() -> TestResult {
     ui.flush();
     assert!(ui.is_animating() && (ui.next_frame() == Wake::Now));
 
-    ui.update_at(5.0);
+    ui.update_at(0.0);
     assert_eq!(
         ui.first_x(RED, 10)?,
         0,
-        "the animation starts at the first update after the change"
+        "the animation starts when the change is flushed"
     );
     let mut positions = Vec::new();
     for frame in 1..=20 {
-        assert!(ui.update_at(5.0 + f64::from(frame) * 0.05));
+        assert!(ui.update_at(f64::from(frame) * 0.05));
         positions.push(ui.first_x(RED, 10)?);
     }
     assert_eq!(positions[1], 10, "linear: 10% after 0.1s");
@@ -408,14 +408,16 @@ fn spring_result_is_frame_rate_independent() -> TestResult {
 }
 
 #[test]
-fn long_gaps_do_not_cause_jumps() -> TestResult {
+fn a_long_gap_skips_ahead_to_where_the_animation_would_be() -> TestResult {
     let _rt = Runtime::new().enter();
     let (mut ui, open, _) = animated_box(LINEAR);
     open.set(true);
     ui.update_at(1.0);
+    ui.update_at(1.5);
+    assert_eq!(ui.first_x(RED, 10)?, 50, "halfway after half a second");
     ui.update_at(31.0);
-    let x = ui.first_x(RED, 10)?;
-    assert!(x < 10, "a 30s stall advances at most one capped tick: {x}");
+    assert_eq!(ui.first_x(RED, 10)?, 100, "a stall lands on the target");
+    assert!(!ui.is_animating());
     Ok(())
 }
 
@@ -478,7 +480,7 @@ fn animation_frames_upload_no_instance_data() -> TestResult {
     open.set(true);
     let stats = ui.stats();
     let mut frames = 0;
-    while ui.next_frame() == Wake::Now {
+    while ui.next_frame() == Wake::Now || ui.is_animating() {
         frames += 1;
         ui.update_at(f64::from(frames) / 120.0);
         assert_eq!(
@@ -743,7 +745,12 @@ fn effect_parameters_follow_the_element_transition() -> TestResult {
     );
     frosted.set(true);
     ui.run(0.5);
-    assert_eq!(ui.next_frame(), Wake::Now, "the radius is still animating");
+    assert!(ui.is_animating(), "the radius is still animating");
+    assert_eq!(
+        ui.next_frame(),
+        Wake::Idle,
+        "a compositor-only animation does not step the UI"
+    );
     let partly = ui.pixel(105, 20)?[1];
     ui.run(0.6);
     let fully = ui.pixel(105, 20)?[1];

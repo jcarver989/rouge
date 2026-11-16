@@ -30,9 +30,12 @@ pub use animation::{
 pub use canvas::{Canvas, Continuation, Icon, Measure, Painter, TextHit, TextRun, canvas, icon};
 pub use clipboard::{Clipboard, ClipboardMedia, MemoryClipboard, PasteRequest};
 pub use compositor::{
-    Compositor, Content, EffectSlot, LayerId, LayerPose, MotionId, Nested, ScrollLinked,
-    ScrollState,
+    Commit, CompositorActor, CompositorEvent, Content, EffectSlot, Events, LayerChanges,
+    LayerDelta, LayerId, LayerModel, LayerPose, Layers, Mailbox, Message, MotionId, Nested,
+    ScrollLinked, ScrollState, SurfaceOp, WindowConfig, WindowId, mailbox,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use compositor::{ThreadError, spawn};
 pub use control::{Each, IntoItems, Show, dynamic, each, overlay, show, switch};
 pub use editable::{Editable, editable};
 pub use event::{
@@ -58,7 +61,7 @@ pub use style::{
 pub use surface::{Surface, surface};
 pub use theme::{Fill, Palette, Theme};
 pub use tree::{FrameStats, Interaction, PaintRegion};
-pub use ui::{Frame, Ui, Wake, modifiers, safe_area, window_size, zoom};
+pub use ui::{Ui, Wake, modifiers, safe_area, window_size, zoom};
 pub use view::{AnyView, Apply, BuildCx, Div, FocusPolicy, Text, View, div, rich_text, text};
 
 #[doc(hidden)]

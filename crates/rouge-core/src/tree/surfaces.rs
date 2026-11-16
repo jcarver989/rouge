@@ -1,6 +1,6 @@
 use super::{Kind, Tree};
-use crate::surface::SurfaceOp;
-use rouge_render::{SurfaceConfig, Surfaces};
+use crate::compositor::SurfaceOp;
+use rouge_render::{SurfaceConfig, SurfaceId, SurfaceStatus};
 use std::mem::take;
 
 impl Tree {
@@ -33,15 +33,14 @@ impl Tree {
         }
     }
 
-    pub(crate) fn sync_surfaces(&mut self, surfaces: &mut Surfaces) {
-        for op in take(&mut self.surface_ops) {
-            match op {
-                SurfaceOp::Attach(source, status) => surfaces.attach(source, status),
-                SurfaceOp::Place(id, placement) => surfaces.place(id, placement),
-                SurfaceOp::Detach(id) => surfaces.detach(id),
-            }
+    pub(crate) fn take_surface_ops(&mut self) -> Vec<SurfaceOp> {
+        take(&mut self.surface_ops)
+    }
+
+    pub(crate) fn surface_status(&self, id: SurfaceId, status: SurfaceStatus) {
+        if let Some(sink) = self.surface_sinks.get(&id) {
+            sink(status);
         }
-        self.compositor.sync_surfaces(surfaces);
     }
 
     pub(crate) fn set_window_visible(&mut self, visible: bool) {

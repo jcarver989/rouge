@@ -35,7 +35,7 @@ impl Tree {
         scroll.target = Some(offset);
         self.scrolled.push(id);
         if let Some(layer) = self.layer_id(id, Slot::Content) {
-            self.compositor.scroll_to(layer, offset);
+            self.layers.scroll_to(layer, offset);
             self.mark(Dirty::Composite);
         }
     }
@@ -47,17 +47,17 @@ impl Tree {
     }
 
     pub(crate) fn scroll_by(&mut self, layer: LayerId, delta: Point) {
-        self.compositor.scroll_by(layer, delta);
+        self.layers.scroll_by(layer, delta);
         self.mark(Dirty::Composite);
     }
 
     pub(crate) fn scroll_drag(&mut self, layer: LayerId, delta: Point) {
-        self.compositor.scroll_drag(layer, delta);
+        self.layers.scroll_drag(layer, delta);
         self.mark(Dirty::Composite);
     }
 
     pub(crate) fn scroll_release(&mut self, layer: LayerId, velocity: Point) {
-        self.compositor.scroll_release(layer, velocity);
+        self.layers.scroll_release(layer, velocity);
         self.mark(Dirty::Composite);
     }
 
@@ -70,7 +70,7 @@ impl Tree {
                 .scroll()
                 .is_some_and(|scroll| scroll.target.is_none())
         });
-        let Some(state) = layer.and_then(|layer| self.compositor.scroll(layer.id)) else {
+        let Some(state) = layer.and_then(|layer| self.layers.scroll(layer.id)) else {
             return;
         };
         if let Some(scroll) = self.elements[id].scroll_mut() {

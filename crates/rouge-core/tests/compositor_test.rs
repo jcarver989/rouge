@@ -7,7 +7,8 @@ use rouge_core::{
     Animation, BlendMode, Blur, Color, ColorMatrix, Decay, EffectSlot, Inputs, Keyframes,
     LayerProp, LayoutTransition, Mask, MotionId, Point, Pose, Quad, Rect, ShaderEffect, Spring,
 };
-use rouge_render::{DrawList, GpuError};
+use rouge_render::DrawList;
+use std::error::Error;
 
 #[test]
 fn translucent_layers_with_overlapping_content_fade_as_a_group() -> TestResult {
@@ -68,7 +69,7 @@ fn opaque_layers_are_replayed_directly_unless_asked_to_rasterize() -> TestResult
     assert_eq!(stage.draw().groups, 0);
     let direct = stage.image()?;
 
-    stage.compositor.set_rasterize(stage.child, true);
+    stage.layers.set_rasterize(stage.child, true);
     stage.set(stage.child, LayerProp::TranslateX, 20.0);
     assert_eq!(stage.draw().groups, 1);
     let rasterized = stage.image()?;
@@ -124,22 +125,20 @@ fn scroll_offset_moves_content_and_is_clamped() -> TestResult {
         ]))
         .build()?;
     stage.scroll_extent(200.0);
-    stage
-        .compositor
-        .scroll_by(stage.child, Point::new(0.0, 60.0));
+    stage.layers.scroll_by(stage.child, Point::new(0.0, 60.0));
     stage.draw();
     assert_eq!(stage.image()?.pixel(50, 30), RED);
     assert_eq!(stage.image()?.pixel(50, 50), BLUE);
     assert_eq!(stage.offset(), Point::new(0.0, 60.0));
 
     stage
-        .compositor
+        .layers
         .scroll_by(stage.child, Point::new(-500.0, 500.0));
     assert_eq!(stage.offset(), Point::new(0.0, 100.0));
     stage.scroll_extent(130.0);
     assert_eq!(stage.offset(), Point::new(0.0, 30.0));
     assert!(
-        !stage.compositor.is_animating(),
+        !stage.layers.is_animating(),
         "scrolling is not an animation"
     );
     Ok(())
@@ -149,12 +148,12 @@ fn scroll_offset_moves_content_and_is_clamped() -> TestResult {
 fn layout_transition_animates_from_the_old_frame() -> TestResult {
     let mut stage = StageBuilder::default().child(square()).build()?;
     stage
-        .compositor
+        .layers
         .set_layout_transition(stage.child, Some(LINEAR.into()));
     stage
-        .compositor
+        .layers
         .set_frame(stage.child, Rect::new(60.0, 0.0, 20.0, 20.0));
-    assert!(stage.compositor.is_animating());
+    assert!(stage.layers.is_animating());
     stage.draw();
     assert_eq!(
         stage.image()?.pixel(10, 10),
@@ -172,7 +171,7 @@ fn layout_transition_animates_from_the_old_frame() -> TestResult {
     );
 
     stage
-        .compositor
+        .layers
         .set_frame(stage.child, Rect::new(0.0, 0.0, 20.0, 20.0));
     stage.draw();
     assert_eq!(
@@ -183,7 +182,7 @@ fn layout_transition_animates_from_the_old_frame() -> TestResult {
     stage.run(1.1);
     stage.draw();
     assert_eq!(stage.image()?.pixel(10, 10), RED);
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -194,17 +193,17 @@ fn one_shot_keyframes_hold_their_final_pose_and_looping_ones_repeat() -> TestRes
         .at(1.0, |pose| pose.translate_x(60.0))
         .duration(1.0);
     let mut stage = StageBuilder::default().child(square()).build()?;
-    stage.compositor.animate(stage.child, slide.clone());
+    stage.layers.animate(stage.child, slide.clone());
     stage.run(0.5);
     assert_eq!(stage.x(stage.child), 30.0);
     stage.run(0.6);
     assert_eq!(stage.x(stage.child), 60.0, "fills forwards");
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
 
-    stage.compositor.animate(stage.child, slide.repeat());
+    stage.layers.animate(stage.child, slide.repeat());
     stage.run(1.5);
     assert_eq!(stage.x(stage.child), 30.0, "wrapped around");
-    assert!(stage.compositor.is_animating(), "a loop never settles");
+    assert!(stage.layers.is_animating(), "a loop never settles");
     Ok(())
 }
 
@@ -212,7 +211,7 @@ fn one_shot_keyframes_hold_their_final_pose_and_looping_ones_repeat() -> TestRes
 fn enter_starts_from_a_pose_and_exit_keeps_the_layer_until_it_arrives() -> TestResult {
     let mut stage = StageBuilder::default().child(square()).build()?;
     let from = Pose::new().opacity(0.0).translate_x(40.0);
-    stage.compositor.enter(stage.child, from, LINEAR.into());
+    stage.layers.enter(stage.child, from, LINEAR.into());
     assert_eq!(stage.x(stage.child), 40.0);
     stage.run(0.5);
     assert_eq!(stage.x(stage.child), 20.0);
@@ -222,7 +221,7 @@ fn enter_starts_from_a_pose_and_exit_keeps_the_layer_until_it_arrives() -> TestR
     stage.exit(Pose::new().translate_x(60.0));
     stage.content(stage.root, vec![background()], vec![]);
     assert_eq!(
-        stage.compositor.layer_count(),
+        stage.layers.layer_count(),
         2,
         "an exiting layer outlives its place in the tree"
     );
@@ -234,10 +233,10 @@ fn enter_starts_from_a_pose_and_exit_keeps_the_layer_until_it_arrives() -> TestR
         "still composited while it leaves"
     );
     stage.run(0.6);
-    assert_eq!(stage.compositor.layer_count(), 1, "then it is released");
+    assert_eq!(stage.layers.layer_count(), 1, "then it is released");
     stage.draw();
     assert_eq!(stage.image()?.pixel(70, 10), WHITE);
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -246,8 +245,8 @@ fn removing_a_parent_releases_its_exiting_children() -> TestResult {
     let mut stage = StageBuilder::default().child(square()).build()?;
     stage.exit(Pose::new().opacity(0.0));
     stage.content(stage.root, vec![background()], vec![]);
-    stage.compositor.remove_layer(stage.root);
-    assert_eq!(stage.compositor.layer_count(), 0);
+    stage.layers.remove_layer(stage.root);
+    assert_eq!(stage.layers.layer_count(), 0);
     Ok(())
 }
 
@@ -259,10 +258,11 @@ fn motions_drive_bound_props_and_report_completion() -> TestResult {
     assert_eq!(stage.x(stage.child), 10.0);
 
     let mut sliding = stage.animate(motion, 50.0, LINEAR.into());
+    assert_eq!(stage.layers.completion_deadline(), Some(1.0));
     stage.run(0.5);
     assert!(
         stage
-            .compositor
+            .layers
             .motion(motion)
             .is_some_and(|value| (value - 30.0).abs() < 0.01)
     );
@@ -270,11 +270,12 @@ fn motions_drive_bound_props_and_report_completion() -> TestResult {
     assert_eq!(settled(&mut sliding), None, "still running");
     stage.run(0.6);
     assert_eq!(settled(&mut sliding), Some(true));
-    assert!(!stage.compositor.is_animating());
+    assert_eq!(stage.layers.completion_deadline(), None);
+    assert!(!stage.layers.is_animating());
 
     let mut interrupted = stage.animate(motion, 0.0, Spring::smooth().into());
     stage.run(0.1);
-    stage.compositor.set_motion(motion, 5.0);
+    stage.layers.set_motion(motion, 5.0);
     assert_eq!(
         settled(&mut interrupted),
         Some(false),
@@ -282,7 +283,7 @@ fn motions_drive_bound_props_and_report_completion() -> TestResult {
     );
     assert_eq!(stage.x(stage.child), 5.0);
     stage.run(0.1);
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
 
     let mut at_rest = stage.animate(motion, 5.0, LINEAR.into());
     assert_eq!(settled(&mut at_rest), Some(true), "already there");
@@ -293,15 +294,15 @@ fn motions_drive_bound_props_and_report_completion() -> TestResult {
 fn layout_transitions_can_animate_size_by_stretching_the_layer() -> TestResult {
     let mut stage = StageBuilder::default().child(square()).build()?;
     stage
-        .compositor
+        .layers
         .set_layout_transition(stage.child, Some(LayoutTransition::new(LINEAR).size()));
     stage
-        .compositor
+        .layers
         .set_frame(stage.child, Rect::new(0.0, 0.0, 40.0, 20.0));
     let edge = |stage: &mut Stage, inside: u32| {
         stage.draw();
         let img = stage.image()?;
-        Ok::<_, GpuError>((img.pixel(inside, 10), img.pixel(inside + 2, 10)))
+        Ok::<_, Box<dyn Error>>((img.pixel(inside, 10), img.pixel(inside + 2, 10)))
     };
     assert_eq!(
         edge(&mut stage, 9)?,
@@ -320,7 +321,7 @@ fn layout_transitions_can_animate_size_by_stretching_the_layer() -> TestResult {
         (RED, WHITE),
         "and settles unstretched"
     );
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -330,7 +331,7 @@ fn fill_and_corner_radius_animate_without_uploading_instances() -> TestResult {
     backing.push_quad(Quad::backing(Rect::new(0.0, 0.0, 40.0, 40.0)));
     let mut stage = StageBuilder::default().child(backing).build()?;
     stage
-        .compositor
+        .layers
         .set_frame(stage.child, Rect::new(0.0, 0.0, 40.0, 40.0));
     stage.pose(stage.child, Pose::new().background(Color::RED), false);
     stage.draw();
@@ -340,7 +341,7 @@ fn fill_and_corner_radius_animate_without_uploading_instances() -> TestResult {
     );
 
     stage
-        .compositor
+        .layers
         .set_transition(stage.child, Some(LINEAR.into()));
     stage.pose(
         stage.child,
@@ -369,7 +370,7 @@ fn fill_and_corner_radius_animate_without_uploading_instances() -> TestResult {
     stage.draw();
     assert_eq!(stage.image()?.pixel(20, 20), BLUE);
     assert_eq!(stage.image()?.pixel(5, 5), WHITE, "a full circle");
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -381,7 +382,7 @@ fn decay_coasts_to_rest_from_a_velocity() -> TestResult {
     let (done, mut coasting) = Animation::pending();
     let decay = Decay::new().rate(2.0).rest(1.0);
     assert_eq!(decay.distance(100.0), 50.0);
-    stage.compositor.decay_motion(motion, 100.0, decay, done);
+    stage.layers.decay_motion(motion, 100.0, decay, done);
     stage.run(0.1);
     let early = stage.x(stage.child);
     assert!(
@@ -396,7 +397,7 @@ fn decay_coasts_to_rest_from_a_velocity() -> TestResult {
         stage.x(stage.child)
     );
     assert_eq!(settled(&mut coasting), Some(true));
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -406,25 +407,22 @@ fn dragging_past_the_limit_rubber_bands_and_release_springs_back() -> TestResult
     let offset = |stage: &Stage| stage.offset().y;
     stage.scroll_extent(200.0);
     stage
-        .compositor
+        .layers
         .scroll_drag(stage.child, Point::new(-30.0, -40.0));
     assert_eq!(stage.offset().x, 0.0, "nothing to scroll sideways");
     assert_eq!(offset(&stage), -40.0);
     stage
-        .compositor
+        .layers
         .scroll_drag(stage.child, Point::new(0.0, -40.0));
     let pulled = offset(&stage);
     assert!(
         pulled < -40.0 && pulled > -50.0,
         "further pulling meets resistance: {pulled}"
     );
-    assert!(
-        !stage.compositor.is_animating(),
-        "held in place while dragging"
-    );
+    assert!(!stage.layers.is_animating(), "held in place while dragging");
 
-    stage.compositor.scroll_release(stage.child, Point::ZERO);
-    assert!(stage.compositor.is_animating());
+    stage.layers.scroll_release(stage.child, Point::ZERO);
+    assert!(stage.layers.is_animating());
     stage.run(0.1);
     assert!(
         offset(&stage) > pulled && offset(&stage) < 0.0,
@@ -432,10 +430,10 @@ fn dragging_past_the_limit_rubber_bands_and_release_springs_back() -> TestResult
     );
     stage.run(2.0);
     assert!(offset(&stage).abs() < 0.01);
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
 
     stage
-        .compositor
+        .layers
         .scroll_release(stage.child, Point::new(0.0, 100.0));
     stage.run(0.1);
     let coasting = offset(&stage);
@@ -447,7 +445,7 @@ fn dragging_past_the_limit_rubber_bands_and_release_springs_back() -> TestResult
     assert!((offset(&stage) - 49.5).abs() < 0.1, "and decays to rest");
 
     stage
-        .compositor
+        .layers
         .scroll_release(stage.child, Point::new(0.0, 3000.0));
     let mut peak = 0.0f32;
     for _ in 0..300 {
@@ -456,7 +454,7 @@ fn dragging_past_the_limit_rubber_bands_and_release_springs_back() -> TestResult
     }
     assert!(peak > 101.0, "momentum overshoots the end: {peak}");
     assert!((offset(&stage) - 100.0).abs() < 0.01, "then settles on it");
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -513,7 +511,7 @@ fn effect_parameters_animate_with_the_layer_transition() -> TestResult {
         false,
     );
     stage
-        .compositor
+        .layers
         .set_transition(stage.child, Some(LINEAR.into()));
     stage.effect(
         stage.child,
@@ -521,7 +519,7 @@ fn effect_parameters_animate_with_the_layer_transition() -> TestResult {
         &ColorMatrix::grayscale(),
         true,
     );
-    assert!(stage.compositor.is_animating());
+    assert!(stage.layers.is_animating());
     stage.draw();
     assert_eq!(
         stage.image()?.pixel(50, 50),
@@ -546,7 +544,7 @@ fn effect_parameters_animate_with_the_layer_transition() -> TestResult {
         [54, 54, 54, 255],
         "red at its luma",
     );
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -554,7 +552,7 @@ fn effect_parameters_animate_with_the_layer_transition() -> TestResult {
 fn layer_origins_snap_to_device_pixels() -> TestResult {
     let mut stage = StageBuilder::default().child(square()).build()?;
     stage
-        .compositor
+        .layers
         .set_frame(stage.child, Rect::new(10.4, 0.0, 20.0, 20.0));
     stage.draw();
     let img = stage.image()?;
@@ -578,7 +576,7 @@ fn a_clocked_effect_runs_on_compositor_time_until_it_is_removed() -> TestResult 
         .at(40.0, 40.0)
         .build()?;
     stage.effect(stage.child, EffectSlot::Content(0), &Sweep, false);
-    assert!(stage.compositor.is_animating(), "a clock never settles");
+    assert!(stage.layers.is_animating(), "a clock never settles");
     stage.draw();
     assert_eq!(stage.image()?.pixel(42, 50), RED, "nothing swept yet");
 
@@ -594,7 +592,7 @@ fn a_clocked_effect_runs_on_compositor_time_until_it_is_removed() -> TestResult 
 
     stage.effect_off(stage.child, EffectSlot::Content(0));
     stage.run(0.1);
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     Ok(())
 }
 
@@ -693,19 +691,19 @@ fn a_translucent_group_slides_and_fades_without_rasterizing_again() -> TestResul
     stage.set(stage.child, LayerProp::Opacity, 0.5);
     assert_eq!(stage.draw().group_passes, 1);
     stage
-        .compositor
+        .layers
         .set_transition(stage.child, Some(LINEAR.into()));
     stage
-        .compositor
+        .layers
         .set_prop(stage.child, LayerProp::TranslateX, 20.0, true);
     stage
-        .compositor
+        .layers
         .set_prop(stage.child, LayerProp::Opacity, 0.8, true);
     for _ in 0..11 {
         stage.run(0.1);
         assert_eq!(stage.draw().group_passes, 0, "moved, not re-rendered");
     }
-    assert!(!stage.compositor.is_animating());
+    assert!(!stage.layers.is_animating());
     let img = stage.image()?;
     assert_eq!(img.pixel(20, 20), WHITE, "the red half left its old place");
     assert_near(img.pixel(35, 20), [255, 51, 51, 255], "red at 0.8");
@@ -779,7 +777,7 @@ fn blend_modes_mix_with_what_is_behind() -> TestResult {
         stage.effect(stage.child, EffectSlot::Blend, &mode, false);
         let stats = stage.draw();
         let img = stage.image()?;
-        Ok::<_, GpuError>(((img.pixel(45, 50), img.pixel(55, 50)), stats))
+        Ok::<_, Box<dyn Error>>(((img.pixel(45, 50), img.pixel(55, 50)), stats))
     };
     let ((on_white, on_gray), stats) = mixed(BlendMode::Multiply)?;
     assert_eq!(

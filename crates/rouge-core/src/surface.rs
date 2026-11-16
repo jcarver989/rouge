@@ -8,18 +8,12 @@ use rouge_render::{SurfaceConfig, SurfaceError, SurfaceId, SurfaceSource, Surfac
 use std::rc::Rc;
 
 type Fallback = Rc<dyn Fn(SurfaceError) -> AnyView>;
-type StatusSink = Box<dyn Fn(SurfaceStatus)>;
+pub(crate) type StatusSink = Box<dyn Fn(SurfaceStatus)>;
 
 pub(crate) struct SurfaceSpec {
     pub id: SurfaceId,
     pub attach: Option<(SurfaceSource, StatusSink)>,
     pub placement: Option<SurfaceConfig>,
-}
-
-pub(crate) enum SurfaceOp {
-    Attach(SurfaceSource, StatusSink),
-    Place(SurfaceId, SurfaceConfig),
-    Detach(SurfaceId),
 }
 
 pub struct Surface {

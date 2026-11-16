@@ -205,7 +205,7 @@ impl Tree {
         }
         let through = |slot: Slot, point: Point| {
             let layer = element.layer(slot);
-            let Some(pose) = layer.and_then(|layer| self.compositor.pose(layer.id)) else {
+            let Some(pose) = layer.and_then(|layer| self.layers.pose(layer.id)) else {
                 return Some(point);
             };
             let inverse = pose

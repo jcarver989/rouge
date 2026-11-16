@@ -38,15 +38,15 @@ pub(super) struct LayerState {
 
 impl Tree {
     pub(super) fn new_layer(&mut self, spec: LayerSpec) -> LayerState {
-        let compositor = &mut self.compositor;
-        let id = compositor.create_layer();
-        compositor.set_transition(id, spec.transition);
-        compositor.set_layout_transition(id, spec.layout_transition);
+        let layers = &mut self.layers;
+        let id = layers.create_layer();
+        layers.set_transition(id, spec.transition);
+        layers.set_layout_transition(id, spec.layout_transition);
         if let Some(keyframes) = spec.keyframes {
-            compositor.animate(id, keyframes);
+            layers.animate(id, keyframes);
         }
-        compositor.set_rasterize(id, spec.rasterize);
-        compositor.set_surface(id, spec.surface);
+        layers.set_rasterize(id, spec.rasterize);
+        layers.set_surface(id, spec.surface);
         LayerState {
             id,
             dirty: true,
@@ -90,7 +90,7 @@ impl Tree {
         }
         let animate = previous.is_some() && layer.frame.is_some();
         for (prop, value) in Pose::new().background(backing.0).rounded(backing.1).iter() {
-            self.compositor.set_prop(layer.id, prop, value, animate);
+            self.layers.set_prop(layer.id, prop, value, animate);
         }
         self.mark(Dirty::Composite);
     }
@@ -110,8 +110,8 @@ impl Tree {
             return;
         };
         match value {
-            MotionProp::Motion(motion) => self.compositor.bind_prop(layer, prop, motion.id()),
-            MotionProp::Value(value) => self.compositor.set_prop(layer, prop, value, animate),
+            MotionProp::Motion(motion) => self.layers.bind_prop(layer, prop, motion.id()),
+            MotionProp::Value(value) => self.layers.set_prop(layer, prop, value, animate),
         }
         self.mark(Dirty::Composite);
     }
@@ -123,14 +123,14 @@ impl Tree {
         effect: EffectInstance,
     ) {
         if let Some(layer) = self.layer_id(id, Slot::Own) {
-            self.compositor.set_effect(layer, slot, Some(effect), true);
+            self.layers.set_effect(layer, slot, Some(effect), true);
             self.mark(Dirty::Composite);
         }
     }
 
     pub(crate) fn set_scroll_link(&mut self, id: ElementId, key: u64, link: ScrollLinked) {
         if let Some(layer) = self.layer_id(id, Slot::Own) {
-            self.compositor.set_scroll_link(layer, Some((key, link)));
+            self.layers.set_scroll_link(layer, Some((key, link)));
             self.mark(Dirty::Composite);
         }
     }
@@ -148,35 +148,35 @@ impl Tree {
         }
         if let (Some((from, timing)), Some(layer)) = (presence.enter, self.layer_id(id, Slot::Own))
         {
-            self.compositor.enter(layer, from, timing);
+            self.layers.enter(layer, from, timing);
             self.mark(Dirty::Composite);
         }
     }
 
     pub(crate) fn motion(&mut self, id: MotionId, op: MotionOp) {
-        let compositor = &mut self.compositor;
+        let layers = &mut self.layers;
         match op {
             MotionOp::Create(value) => {
                 if value.is_alive() {
-                    compositor.create_motion(id, value.get_untracked());
+                    layers.create_motion(id, value.get_untracked());
                     self.motions.insert(id, value);
                 }
                 return;
             }
-            MotionOp::Set(value) => compositor.set_motion(id, value),
+            MotionOp::Set(value) => layers.set_motion(id, value),
             MotionOp::Animate {
                 target,
                 timing,
                 done,
-            } => compositor.animate_motion(id, target, timing, done),
+            } => layers.animate_motion(id, target, timing, done),
             MotionOp::Decay {
                 velocity,
                 decay,
                 done,
-            } => compositor.decay_motion(id, velocity, decay, done),
-            MotionOp::Stop => compositor.stop_motion(id),
+            } => layers.decay_motion(id, velocity, decay, done),
+            MotionOp::Stop => layers.stop_motion(id),
             MotionOp::Remove => {
-                compositor.remove_motion(id);
+                layers.remove_motion(id);
                 self.motions.remove(&id);
             }
         }

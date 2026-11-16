@@ -5,6 +5,7 @@ use rouge_core::{
     show,
 };
 use rouge_reactive::{Runtime, signal};
+use rouge_render::headless::Image;
 use std::future::Future;
 use std::pin::{Pin, pin};
 use std::task::{Context, Poll, Waker};
@@ -183,6 +184,44 @@ fn a_drag_moves_a_motion_and_flings_it_with_decay() -> TestResult {
         (0, 0, 0),
         "all of it in the compositor"
     );
+    Ok(())
+}
+
+#[test]
+fn the_compositor_keeps_animating_while_the_ui_is_stalled() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, x) = moving_box(0.0);
+    let mut arrived = x.animate_to(100.0, LINEAR);
+    ui.advance(0.0);
+    ui.draw()?;
+    let (before, time) = (ui.stats(), ui.time());
+
+    let first = |image: &Image| (0..image.width).find(|x| image.pixel(*x, 10) == RED);
+    let quarter = ui.composite(0.25)?;
+    let half = ui.composite(0.5)?;
+    assert_eq!(
+        first(&quarter),
+        Some(25),
+        "the compositor drew the frame at 0.25s"
+    );
+    assert_eq!(first(&half), Some(50), "and at 0.5s");
+    let stalled = ui.stats() - before;
+    assert_eq!(
+        (stalled.layouts, stalled.paints, stalled.patches),
+        (0, 0, 0),
+        "the UI did no work"
+    );
+    assert_eq!(ui.time(), time, "the UI's clock did not move");
+    assert_eq!(poll(Pin::new(&mut arrived)), Poll::Pending);
+
+    ui.advance(1.0);
+    assert_eq!(
+        poll(Pin::new(&mut arrived)),
+        Poll::Ready(true),
+        "the animation resolves from the UI's own model when it resumes"
+    );
+    assert_eq!(x.get(), 100.0);
+    assert_eq!(ui.first_x(RED, 10)?, 100, "and both models agree");
     Ok(())
 }
 

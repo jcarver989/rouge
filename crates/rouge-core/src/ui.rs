@@ -1,5 +1,5 @@
 use crate::clipboard::Clipboard;
-use crate::compositor::LayerId;
+use crate::compositor::{Commit, CompositorEvent, LayerId};
 use crate::event::{
     Chord, Cursor, DragEvent, DragPhase, FileDropEvent, FileDropPhase, ImeEvent, IntoChord, Key,
     KeyEvent, Modifiers, PointerButton, PointerEvent, ScrollEvent, TouchPhase,
@@ -17,7 +17,7 @@ use crate::window::{Appearance, Menu, MenuItem, Sent, WindowCommand, WindowHandl
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, expect_context, poll_tasks, provide_context, signal, stats,
 };
-use rouge_render::{Atlas, Color, Edges, Point, Rect, Scene, Size, Surfaces};
+use rouge_render::{Color, Edges, Point, Rect, Size};
 use rouge_theme::UiPalette;
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
@@ -140,7 +140,7 @@ pub struct Ui {
     clicks: Option<(f64, Point, u32)>,
     started: Instant,
     clock: Option<f64>,
-    last_tick: Option<f64>,
+    committed_clear: Option<Color>,
     shortcuts: Vec<(Chord, MenuItem)>,
 }
 
@@ -160,11 +160,6 @@ impl Wake {
             (Wake::Idle, Wake::Idle) => Wake::Idle,
         }
     }
-}
-
-pub struct Frame<'a> {
-    pub scene: Scene<'a>,
-    pub atlas: &'a mut Atlas,
 }
 
 impl Ui {
@@ -242,7 +237,7 @@ impl Ui {
             clicks: None,
             started: Instant::now(),
             clock: None,
-            last_tick: None,
+            committed_clear: None,
             shortcuts: Vec::new(),
         }
     }
@@ -257,15 +252,30 @@ impl Ui {
         self.step(now)
     }
 
+    fn catch_up(&mut self) {
+        let before = self.tree.layers.time();
+        self.tree.layers.advance(self.time());
+        if self.tree.layers.time() > before {
+            self.scope.run(|| self.tree.publish_motions());
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn pin_clock(&mut self, now: f64) {
+        self.clock = Some(now);
+    }
+
     fn step(&mut self, now: f64) -> bool {
         let _update = trace_span!("update").entered();
+        let animating = self.tree.layers.is_animating();
+        self.tree.layers.advance(now);
         self.tree.tick_caret(now);
         self.flush();
-        let animating = self.animate(now);
+        self.publish();
+        self.flush();
         self.settle_layout();
         let changed = self.paint();
         self.tree.place_surfaces(self.cache.scale);
-        self.last_tick = self.tree.compositor.is_animating().then_some(now);
         animating || changed
     }
 
@@ -281,6 +291,7 @@ impl Ui {
     }
 
     pub fn flush(&mut self) {
+        self.catch_up();
         poll_tasks();
         loop {
             self.scope.run(|| {
@@ -308,17 +319,6 @@ impl Ui {
         self.tree.publish_bindings();
     }
 
-    fn animate(&mut self, now: f64) -> bool {
-        let animating = self.tree.compositor.is_animating();
-        if animating {
-            let dt = self.last_tick.map_or(0.0, |last| (now - last).max(0.0));
-            self.tree.compositor.tick(dt as f32);
-        }
-        self.publish();
-        self.flush();
-        animating
-    }
-
     fn publish(&mut self) {
         let _publish = trace_span!("publish").entered();
         self.tree.publish();
@@ -340,17 +340,13 @@ impl Ui {
         self.tree.paint(&mut self.cache, &mut self.text_system)
     }
 
-    pub fn sync_surfaces(&mut self, surfaces: &mut Surfaces) {
-        self.tree.sync_surfaces(surfaces);
-    }
-
     pub fn set_visible(&mut self, visible: bool) {
         self.tree.set_window_visible(visible);
         self.tree.place_surfaces(self.cache.scale);
     }
 
     pub fn has_surfaces(&self) -> bool {
-        self.tree.compositor.has_surfaces()
+        self.tree.layers.has_surfaces()
     }
 
     pub fn set_appearance(&mut self, appearance: Appearance) {
@@ -383,15 +379,20 @@ impl Ui {
     pub fn next_frame(&self) -> Wake {
         if !self.queue.is_empty()
             || self.tree.dirty() != Dirty::None
-            || self.tree.compositor.is_animating()
+            || self.tree.observed_animating()
         {
             return Wake::Now;
         }
-        self.tree.caret_wake(self.time())
+        let completions = self
+            .tree
+            .layers
+            .completion_deadline()
+            .map_or(Wake::Idle, Wake::At);
+        self.tree.caret_wake(self.time()).sooner(completions)
     }
 
     pub fn is_animating(&self) -> bool {
-        self.tree.compositor.is_animating()
+        self.tree.layers.is_animating()
     }
 
     pub fn set_size(&mut self, size: Size) {
@@ -463,11 +464,20 @@ impl Ui {
             .unwrap_or_else(|| self.started.elapsed().as_secs_f64())
     }
 
-    pub fn frame<'a>(&'a mut self, surfaces: &Surfaces) -> Frame<'a> {
-        let _scene = trace_span!("scene").entered();
-        Frame {
-            scene: self.tree.compositor.scene(self.cache.scale, surfaces),
-            atlas: &mut self.cache.atlas,
+    pub fn commit(&mut self) -> Commit {
+        let _commit = trace_span!("commit").entered();
+        let clear = self.clear_color();
+        Commit {
+            clear: (self.committed_clear.replace(clear) != Some(clear)).then_some(clear),
+            atlas: self.cache.atlas.take_uploads(),
+            surfaces: self.tree.take_surface_ops(),
+            ..self.tree.layers.commit()
+        }
+    }
+
+    pub fn handle(&mut self, event: CompositorEvent) {
+        if let CompositorEvent::Surface(id, status) = event {
+            self.tree.surface_status(id, status);
         }
     }
 
@@ -865,6 +875,7 @@ impl Ui {
             return;
         };
         let velocity = drag.samples.velocity(self.time());
+        self.catch_up();
         if let Some(layer) = drag.layer {
             self.tree.scroll_release(layer, velocity);
         }
@@ -885,7 +896,7 @@ impl Ui {
         let targets = self.tree.scroll_targets();
         let moves = |layer: &&LayerId| {
             self.tree
-                .compositor
+                .layers
                 .scroll(**layer)
                 .is_some_and(|s| s.clamp(s.offset + by) != s.offset)
         };
