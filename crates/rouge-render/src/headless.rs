@@ -101,14 +101,9 @@ impl Headless {
     }
 
     pub fn render(&mut self, clear: Color, scene: Scene<'_>, atlas: &mut Atlas) -> RenderStats {
-        self.renderer.render(
-            &self.view,
-            self.viewport,
-            clear,
-            scene,
-            atlas,
-            &self.surfaces,
-        );
+        self.renderer.upload_atlas(&atlas.take_uploads());
+        self.renderer
+            .render(&self.view, self.viewport, clear, scene, &self.surfaces);
         self.surfaces.maintain();
         self.renderer.stats()
     }
@@ -119,46 +114,49 @@ impl Headless {
     }
 
     pub fn image(&self) -> Result<Image, GpuError> {
-        let Viewport { width, height, .. } = self.viewport;
-        let unpadded = width * 4;
-        let padded = unpadded.next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT);
-        let buffer = self.gpu.device.create_buffer(&BufferDescriptor {
-            label: Some("rouge headless readback"),
-            size: u64::from(padded * height),
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .gpu
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor::default());
-        encoder.copy_texture_to_buffer(
-            self.texture.as_image_copy(),
-            TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(height),
-                },
-            },
-            self.texture.size(),
-        );
-        self.gpu.queue.submit([encoder.finish()]);
-
-        let slice = buffer.slice(..);
-        slice.map_async(MapMode::Read, |_| {});
-        self.wait()?;
-        let data = slice.get_mapped_range()?;
-        let pixels = data
-            .chunks(padded as usize)
-            .flat_map(|row| &row[..unpadded as usize])
-            .copied()
-            .collect();
-        Ok(Image {
-            width,
-            height,
-            pixels,
-        })
+        read_texture(&self.gpu, &self.texture)
     }
+}
+
+pub fn read_texture(gpu: &Gpu, texture: &Texture) -> Result<Image, GpuError> {
+    let (width, height) = (texture.width(), texture.height());
+    let unpadded = width * 4;
+    let padded = unpadded.next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer = gpu.device.create_buffer(&BufferDescriptor {
+        label: Some("rouge headless readback"),
+        size: u64::from(padded * height),
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(height),
+            },
+        },
+        texture.size(),
+    );
+    gpu.queue.submit([encoder.finish()]);
+
+    let slice = buffer.slice(..);
+    slice.map_async(MapMode::Read, |_| {});
+    gpu.device.poll(PollType::wait_indefinitely())?;
+    let data = slice.get_mapped_range()?;
+    let pixels = data
+        .chunks(padded as usize)
+        .flat_map(|row| &row[..unpadded as usize])
+        .copied()
+        .collect();
+    Ok(Image {
+        width,
+        height,
+        pixels,
+    })
 }

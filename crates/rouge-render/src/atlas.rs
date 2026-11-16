@@ -1,4 +1,6 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use std::mem::replace;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AtlasRect {
     pub x: u32,
     pub y: u32,
@@ -17,9 +19,23 @@ pub struct Atlas {
     pixels: Vec<u8>,
     shelves: Vec<Shelf>,
     dirty_rows: Option<(u32, u32)>,
+    uploaded: u32,
 }
 
-const INITIAL_HEIGHT: u32 = 512;
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AtlasUploads {
+    pub height: u32,
+    pub start: u32,
+    pub rows: Vec<u8>,
+}
+
+impl AtlasUploads {
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
+pub(crate) const INITIAL_HEIGHT: u32 = 512;
 const PADDING: u32 = 1;
 
 impl Default for Atlas {
@@ -38,6 +54,7 @@ impl Atlas {
             pixels: vec![0; (Self::WIDTH * INITIAL_HEIGHT) as usize],
             shelves: Vec::new(),
             dirty_rows: None,
+            uploaded: 0,
         }
     }
 
@@ -45,12 +62,19 @@ impl Atlas {
         (Self::WIDTH, self.height)
     }
 
-    pub(crate) fn rows(&self, start: u32, end: u32) -> &[u8] {
-        &self.pixels[(start * Self::WIDTH) as usize..(end * Self::WIDTH) as usize]
-    }
-
-    pub(crate) fn take_dirty_rows(&mut self) -> Option<(u32, u32)> {
-        self.dirty_rows.take()
+    pub fn take_uploads(&mut self) -> AtlasUploads {
+        let (start, end) = self.dirty_rows.take().unwrap_or_default();
+        let start = if replace(&mut self.uploaded, self.height) == self.height {
+            start
+        } else {
+            0
+        };
+        AtlasUploads {
+            height: self.height,
+            start,
+            rows: self.pixels[(start * Self::WIDTH) as usize..(end * Self::WIDTH) as usize]
+                .to_vec(),
+        }
     }
 
     pub fn insert(&mut self, width: u32, height: u32, data: &[u8]) -> Option<AtlasRect> {

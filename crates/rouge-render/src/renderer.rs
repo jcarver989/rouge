@@ -1,8 +1,11 @@
+use crate::atlas::INITIAL_HEIGHT;
 use crate::effect::{EffectDraw, PASSTHROUGH_WGSL, Passthrough, SurfaceSample};
 use crate::gpu::{PipelineDesc, begin_pass, create_pipeline, create_texture};
 use crate::scene::{DrawList, DrawLists, Instance, ListKey};
 use crate::surface::{AlphaMode, BufferRef, Origin, SurfaceId, Surfaces};
-use crate::{Affine, Atlas, Color, Corners, ImageData, ImageFormat, Inputs, Point, Rect};
+use crate::{
+    Affine, Atlas, AtlasUploads, Color, Corners, ImageData, ImageFormat, Inputs, Point, Rect,
+};
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
 use rustc_hash::{FxHashMap, FxHasher};
 use std::collections::hash_map::Entry;
@@ -1215,34 +1218,28 @@ impl Renderer {
         );
     }
 
-    fn sync_atlas(&mut self, atlas: &mut Atlas) {
-        let size = atlas.size();
-        let mut rows = atlas.take_dirty_rows();
-        if self
-            .atlas
-            .as_ref()
-            .is_none_or(|target| target.texture.height() != size.1)
-        {
-            let usage = TextureUsages::COPY_DST;
-            let target = self.textures.target(
+    pub fn upload_atlas(&mut self, uploads: &AtlasUploads) {
+        if !uploads.is_empty() {
+            self.write_atlas(uploads.height, uploads.start, &uploads.rows);
+        }
+    }
+
+    fn write_atlas(&mut self, height: u32, start: u32, rows: &[u8]) {
+        let kept = self.atlas.take();
+        let kept = kept.filter(|target| target.texture.height() == height);
+        let target = kept.unwrap_or_else(|| {
+            self.textures.target(
                 &self.device,
                 "rouge glyph atlas",
-                size,
+                (Atlas::WIDTH, height),
                 TextureFormat::R8Unorm,
-                usage,
-            );
-            self.atlas = Some(target);
-            rows = Some((0, size.1));
+                TextureUsages::COPY_DST,
+            )
+        });
+        if !rows.is_empty() {
+            write_rows(&self.queue, &target.texture, start, rows, Atlas::WIDTH);
         }
-        if let (Some(target), Some((start, end))) = (&self.atlas, rows) {
-            write_rows(
-                &self.queue,
-                &target.texture,
-                start,
-                atlas.rows(start, end),
-                size.0,
-            );
-        }
+        self.atlas = Some(target);
     }
 
     fn sync_list(&mut self, list: &DrawList) -> u32 {
@@ -1828,12 +1825,13 @@ impl Renderer {
         viewport: Viewport,
         clear: Color,
         scene: Scene<'_>,
-        atlas: &mut Atlas,
         surfaces: &Surfaces,
     ) {
         self.stats = RenderStats::default();
         self.frame += 1;
-        self.sync_atlas(atlas);
+        if self.atlas.is_none() {
+            self.write_atlas(INITIAL_HEIGHT, 0, &[]);
+        }
 
         let area = Area {
             origin: (0, 0),

@@ -10,10 +10,11 @@ pub mod interop;
 mod renderer;
 mod scene;
 mod surface;
+mod target;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
 
-pub use atlas::{Atlas, AtlasRect};
+pub use atlas::{Atlas, AtlasRect, AtlasUploads};
 pub use color::Color;
 pub use effect::{
     BackdropBlur, BlendMode, Blur, ColorMatrix, EffectDraw, EffectInstance, Glass, Inputs, Mask,
@@ -31,3 +32,4 @@ pub use surface::{
     SurfaceCx, SurfaceError, SurfaceEvent, SurfaceId, SurfaceProducer, SurfaceSource, SurfaceStats,
     SurfaceStatus, Surfaces, surface_channel,
 };
+pub use target::{Acquire, Target, TargetFrame};

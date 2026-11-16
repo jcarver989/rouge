@@ -10,7 +10,7 @@ use wgpu::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use wgpu::{MapRangeError, PollError};
+use wgpu::{MapRangeError, PollError, PollType};
 
 #[derive(Clone)]
 pub struct Gpu {
@@ -34,6 +34,12 @@ pub enum GpuError {
 }
 
 impl Gpu {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait(&self) -> Result<(), GpuError> {
+        self.device.poll(PollType::wait_indefinitely())?;
+        Ok(())
+    }
+
     pub async fn new(
         instance: Instance,
         compatible_surface: Option<&Surface<'_>>,

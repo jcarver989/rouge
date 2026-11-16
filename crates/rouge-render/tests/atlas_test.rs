@@ -52,6 +52,32 @@ fn rejects_oversized_and_empty_masks() {
     assert!(atlas.insert(0, 4, &[]).is_none());
 }
 
+#[test]
+fn uploads_carry_dirty_rows_once_and_every_row_after_growth() -> Result<(), &'static str> {
+    let mut atlas = Atlas::new();
+    let width = Atlas::WIDTH as usize;
+    let rect = atlas.insert(2, 2, &[1, 2, 3, 4]).ok_or("atlas has room")?;
+    let first = atlas.take_uploads();
+    assert_eq!((first.start, first.rows.len()), (rect.y, 2 * width));
+    assert_eq!(first.rows[width + rect.x as usize + 1], 4);
+    assert!(atlas.take_uploads().is_empty(), "each row is sent once");
+
+    let initial = atlas.size().1;
+    while atlas.size().1 == initial {
+        atlas
+            .insert(1000, 100, &vec![9; 100_000])
+            .ok_or("atlas can grow")?;
+    }
+    let grown = atlas.take_uploads();
+    assert_eq!(
+        (grown.height, grown.start),
+        (atlas.size().1, 0),
+        "a grown atlas is sent whole"
+    );
+    assert_eq!(grown.rows[rect.x as usize], 1, "old masks survive growth");
+    Ok(())
+}
+
 fn overlaps(a: &AtlasRect, b: &AtlasRect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
