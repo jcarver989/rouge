@@ -40,22 +40,15 @@ pub(crate) const ROW_HEIGHT: f32 = 60.0;
 pub(crate) const EDITOR_HEIGHT: f32 = 40.0;
 pub(crate) const CONTROL: f32 = 32.0;
 pub(crate) const CHECKBOX: f32 = 24.0;
-pub(crate) const ICON: f32 = 16.0;
 pub(crate) const TAB_WIDTH: f32 = 92.0;
 pub(crate) const TAB_HEIGHT: f32 = 28.0;
-pub(crate) const FOOTER_SIDE: f32 = 120.0;
 
 pub(crate) const HAIRLINE: f32 = 1.0;
 pub(crate) const RING: f32 = 1.5;
-pub(crate) const STROKE: f32 = 2.0;
 
 pub(crate) const UNCHECKED_SCALE: f32 = 0.9;
 pub(crate) const ROW_ENTER: Pose = Pose::new().opacity(0.0).translate_y(-10.0);
 pub(crate) const ROW_EXIT: Pose = Pose::new().opacity(0.0).scale(0.97);
-
-pub(crate) const ICON_CHECK: &str = "M6 12.5 L10 16.5 L18 8";
-pub(crate) const ICON_CHEVRON: &str = "M6 9 L12 15 L18 9";
-pub(crate) const ICON_CROSS: &str = "M7 7 L17 17 M17 7 L7 17";
 
 pub(crate) const GLASS: Glass = Glass::new()
     .blur(9.0)

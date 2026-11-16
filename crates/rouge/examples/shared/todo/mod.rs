@@ -3,18 +3,17 @@ mod sky;
 mod tokens;
 
 use model::{Filter, Todos};
-use rouge::core::{Prop, SpanStyle};
 use rouge::prelude::*;
-use rouge::widgets::inline_edit;
+use rouge::widgets::{
+    CheckModel, CheckState, IconName, icon_button, inline_edit, segment, segmented_control,
+};
 use sky::night_sky;
-use std::ops::Range;
 use tokens::{
     ACCENT, BODY_SIZE, CARD_RADIUS, CARD_WIDTH, CHECKBOX, COMPACT_WIDTH, CONTROL, DANGER_TINT,
-    DUSK, EDIT_RING, EDITOR_HEIGHT, FAINT, FOOTER_SIDE, FOOTER_Y, FROST, GAP, GLASS, HAIRLINE,
-    HEADER_Y, HEADING, ICON, ICON_CHECK, ICON_CHEVRON, ICON_CROSS, INSET, LINE, NIGHT, PAGE_BOTTOM,
-    PAGE_TOP, RING, ROSE, ROW_ENTER, ROW_EXIT, ROW_HEIGHT, Radius, SMALL_SIZE, STACK, STAR, STROKE,
-    TAB_HEIGHT, TAB_WIDTH, TINT, TITLE_LINE_HEIGHT, TITLE_SIZE, TITLE_WEIGHT, UI_FONT,
-    UNCHECKED_SCALE, WASH,
+    DUSK, EDIT_RING, EDITOR_HEIGHT, FAINT, FOOTER_Y, FROST, GAP, GLASS, HAIRLINE, HEADER_Y,
+    HEADING, INSET, LINE, NIGHT, PAGE_BOTTOM, PAGE_TOP, RING, ROSE, ROW_ENTER, ROW_EXIT,
+    ROW_HEIGHT, Radius, SMALL_SIZE, STACK, STAR, TAB_HEIGHT, TAB_WIDTH, TINT, TITLE_LINE_HEIGHT,
+    TITLE_SIZE, TITLE_WEIGHT, UI_FONT, UNCHECKED_SCALE, WASH,
 };
 
 pub(crate) fn todo_app() -> impl View {
@@ -62,9 +61,10 @@ fn new_todo(todos: Todos) -> impl View {
         <div flex items_center gap=GAP px=INSET py=HEADER_Y>
             <div flex_none size=CONTROL>
                 <show when={move || !todos.items.is_empty()}>
-                    <icon_button path=ICON_CHEVRON color={move || if todos.all_done() { FROST } else { FAINT }}
+                    <icon_button icon=IconName::ChevronDown label="Toggle all" size=CONTROL rounded=Radius::Full
+                                 color={move || if todos.remaining.get() == 0 { FROST } else { FAINT }}
                                  hover:bg=TINT focus_visible:bg=TINT
-                                 on_activate={move || todos.toggle_all()} test_id="toggle-all"/>
+                                 on_click={move || todos.toggle_all()} test_id="toggle-all"/>
                 </show>
             </div>
             <div flex_1 min_w=0.0>
@@ -90,179 +90,87 @@ fn todo_list(todos: Todos) -> impl View {
 
 #[component]
 fn todo_row(todos: Todos, id: u64) -> impl View {
-    let title = todos.title(id);
-    let done = todos.done(id);
-    let editing = signal(false);
+    let done = todos.items.select(id, |todo| todo.done);
+    let title = todos.items.select(id, |todo| todo.title.clone());
     view! {
         <div flex items_center gap=GAP px=INSET h=ROW_HEIGHT border_b=HAIRLINE border_color=LINE
-             hover:bg=WASH group="todo" layout_transition={Spring::smooth()} test_id={format!("todo-{id}")}>
-            <div flex flex_none items_center justify_center size=CONTROL>
-                <check_circle checked=done on_activate={move || todos.toggle(id)}
-                              test_id={format!("todo-{id}-toggle")}/>
+             hover:bg=WASH group="todo" layout_transition={Spring::smooth()} test_scope={format!("todo-{id}")}>
+            <div flex flex_none items_center justify_center size=CONTROL
+                 scale={done.pick(1.0, UNCHECKED_SCALE)} transition={Spring::bouncy()}>
+                <checkbox checked={Done(todos, id)} mark_color=NIGHT size=CHECKBOX rounded=Radius::Full border=RING bg=Color::TRANSPARENT
+                          border_color=FAINT hover:border_color=FROST focus_visible:border_color=FROST
+                          checked:bg=STAR checked:border_color=STAR test_id="toggle"/>
             </div>
-            <show when={move || editing.get()} otherwise={move || view! { <todo_title id title done editing/> }}>
-                <todo_editor todos id title editing/>
-            </show>
-            <icon_button path=ICON_CROSS color=ROSE invisible group_hover=("todo", Styled::visible)
-                         hover:bg=DANGER_TINT
-                         on_activate={move || todos.remove(id)} test_id={format!("todo-{id}-delete")}/>
+            <inline_edit value=title flex_1 font=UI_FONT text_size=BODY_SIZE
+                         text_color={done.pick(FAINT, FROST)} strikethrough=done
+                         editing:flex editing:items_center editing:h=EDITOR_HEIGHT editing:px=GAP editing:ml={-(GAP + HAIRLINE)}
+                         editing:bg=WASH editing:border_color=EDIT_RING editing:rounded=Radius::Control editing:text_color=FROST
+                         on_commit={move |title: String| todos.rename(id, &title)} test_id="title"/>
+            <icon_button icon=IconName::X label="Delete" size=CONTROL rounded=Radius::Full color=ROSE
+                         invisible group_hover=("todo", Styled::visible) hover:bg=DANGER_TINT
+                         on_click={move || { todos.items.remove(&id); }} test_id="delete"/>
         </div>
-    }
-}
-
-#[component]
-fn todo_title(id: u64, title: Memo<String>, done: Memo<bool>, editing: Signal<bool>) -> impl View {
-    let edit_on_double_click = move |event: &PointerEvent| {
-        if event.click_count == 2 {
-            editing.set(true);
-        }
-    };
-    view! {
-        <div flex_1 min_w=0.0 on_click=edit_on_double_click test_id={format!("todo-{id}-title")}>
-            <text text_size=BODY_SIZE color={move || if done.get() { FAINT } else { FROST }}
-                  spans={move || struck_through(done.get(), title.with(String::len))}>
-                "{title}"
-            </text>
-        </div>
-    }
-}
-
-#[component]
-fn todo_editor(todos: Todos, id: u64, title: Memo<String>, editing: Signal<bool>) -> impl View {
-    let draft = signal(title.get_untracked());
-    let commit = move |title: String| {
-        editing.set(false);
-        todos.rename(id, &title);
-    };
-    view! {
-        <inline_edit value=draft flex flex_1 items_center h=EDITOR_HEIGHT px=GAP ml={-(GAP + HAIRLINE)}
-                     font=UI_FONT text_size=BODY_SIZE text_color=FROST
-                     bg=WASH border_color=EDIT_RING rounded=Radius::Control
-                     on_commit=commit on_cancel={move || editing.set(false)}
-                     test_id={format!("todo-{id}-edit")}/>
     }
 }
 
 #[component]
 fn footer(todos: Todos) -> impl View {
     let window = window_size();
-    switch(
-        move || window.get().width < COMPACT_WIDTH,
-        move |compact| {
-            if compact {
-                stacked_footer(todos).into_any()
-            } else {
-                inline_footer(todos).into_any()
-            }
-        },
-    )
-}
-
-fn inline_footer(todos: Todos) -> impl View {
-    view! {
-        <div flex items_center justify_between gap=GAP px=INSET py=FOOTER_Y text_size=SMALL_SIZE text_color=DUSK>
-            <div w=FOOTER_SIDE>
-                <items_left todos/>
-            </div>
-            <filter_tabs todos/>
-            <div flex justify_end w=FOOTER_SIDE>
-                <clear_completed todos/>
-            </div>
-        </div>
-    }
-}
-
-fn stacked_footer(todos: Todos) -> impl View {
-    view! {
-        <div flex col items_center gap=GAP px=INSET py=FOOTER_Y text_size=SMALL_SIZE text_color=DUSK>
-            <filter_tabs todos/>
-            <div flex items_center justify_between w_full h=TAB_HEIGHT>
-                <items_left todos/>
-                <clear_completed todos/>
-            </div>
-        </div>
-    }
-}
-
-#[component]
-fn items_left(todos: Todos) -> impl View {
-    let label = move || match todos.remaining.get() {
+    let compact = move || window.get().width < COMPACT_WIDTH;
+    let items_left = move || match todos.remaining.get() {
         1 => "1 item left".to_owned(),
         count => format!("{count} items left"),
     };
     view! {
-        <div test_id="items-left">
-            <text>{label}</text>
-        </div>
-    }
-}
-
-#[component]
-fn clear_completed(todos: Todos) -> impl View {
-    view! {
-        <show when={move || todos.has_completed()}>
-            <div flex items_center h=TAB_HEIGHT px=GAP rounded=Radius::Full
-                 hover:text_color=FROST focus_visible:bg=TINT
-                 on_activate={move || todos.clear_completed()} test_id="clear-completed">
-                "Clear completed"
+        <div relative flex justify_center px=INSET pt=FOOTER_Y text_size=SMALL_SIZE text_color=DUSK
+             pb={move || if compact() { FOOTER_Y + GAP + TAB_HEIGHT } else { FOOTER_Y }}>
+            <div absolute left=INSET right=INSET bottom=FOOTER_Y h=TAB_HEIGHT flex items_center justify_between>
+                <text test_id="items-left">{items_left}</text>
+                <show when={move || todos.remaining.get() < todos.items.len()}>
+                    <div flex items_center h=TAB_HEIGHT px=GAP rounded=Radius::Full
+                         hover:text_color=FROST focus_visible:bg=TINT
+                         on_activate={move || todos.items.retain(|todo| !todo.done)} test_id="clear-completed">
+                        "Clear completed"
+                    </div>
+                </show>
             </div>
-        </show>
+            <filter_tabs todos/>
+        </div>
     }
 }
 
 #[component]
 fn filter_tabs(todos: Todos) -> impl View {
-    let tabs = Filter::ALL.map(|filter| view! { <filter_tab todos filter/> });
+    let window = window_handle();
+    let tabs = Filter::ALL.map(|filter| {
+        view! {
+            <segment label={format!("{filter:?}")} w=TAB_WIDTH h_full rounded=Radius::Full text_color=DUSK
+                     selected={move || todos.filter.get() == filter} on_click={move || window.navigate(filter.route())}
+                     test_id={format!("filter-{filter:?}").to_lowercase()}/>
+        }
+    });
     view! {
-        <div relative flex h=TAB_HEIGHT>
-            <div absolute top=0.0 left=0.0 w=TAB_WIDTH h_full rounded=Radius::Full
-                 bg=TINT border=HAIRLINE border_color=LINE
-                 translate_x={move || todos.filter.get() as usize as f32 * TAB_WIDTH}
-                 transition={Spring::snappy()}/>
+        <segmented_control h=TAB_HEIGHT p=0.0 gap=0.0 bg=Color::TRANSPARENT
+                           indicator:rounded=Radius::Full indicator:bg=TINT indicator:border=HAIRLINE indicator:border_color=LINE>
             {..tabs}
-        </div>
+        </segmented_control>
     }
 }
 
-#[component]
-fn filter_tab(todos: Todos, filter: Filter) -> impl View {
-    view! {
-        <div flex items_center justify_center w=TAB_WIDTH h_full rounded=Radius::Full
-             is_selected={move || todos.filter.get() == filter} selected:text_color=FROST
-             focus_visible:bg=WASH on_activate={move || todos.show(filter)}
-             test_id={format!("filter-{}", filter.label().to_lowercase())}>
-            <text>{filter.label()}</text>
-        </div>
-    }
-}
+#[derive(Clone, Copy)]
+struct Done(Todos, u64);
 
-#[component]
-fn check_circle(checked: Memo<bool>) -> Div {
-    view! {
-        <div flex flex_none items_center justify_center size=CHECKBOX rounded=Radius::Full
-             border=RING border_color=FAINT hover:border_color=FROST focus_visible:border_color=FROST
-             is_checked=checked checked:bg=STAR checked:border_color=STAR
-             scale={move || if checked.get() { 1.0 } else { UNCHECKED_SCALE }} transition={Spring::bouncy()}>
-            <show when={move || checked.get()}>
-                <icon path={Path::svg(ICON_CHECK)} stroke_round=STROKE size=ICON color=NIGHT/>
-            </show>
-        </div>
+impl CheckModel for Done {
+    fn state(self) -> CheckState {
+        let Done(todos, id) = self;
+        match todos.items.with(&id, |todo| todo.done) {
+            Some(true) => CheckState::Checked,
+            _ => CheckState::Unchecked,
+        }
     }
-}
 
-#[component]
-fn icon_button(path: &'static str, #[prop(reactive)] color: Prop<Fill>) -> Div {
-    view! {
-        <div flex flex_none items_center justify_center size=CONTROL rounded=Radius::Full>
-            <icon path={Path::svg(path)} stroke_round=STROKE size=ICON color=color/>
-        </div>
+    fn toggle(self) {
+        let Done(todos, id) = self;
+        todos.toggle(id);
     }
-}
-
-fn struck_through(done: bool, len: usize) -> Vec<(Range<usize>, SpanStyle)> {
-    let style = SpanStyle {
-        strikethrough: Some(true),
-        ..SpanStyle::default()
-    };
-    done.then_some((0..len, style)).into_iter().collect()
 }
