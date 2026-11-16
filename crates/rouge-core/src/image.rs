@@ -156,12 +156,12 @@ fn show(queue: &Queue, id: ElementId, source: ImageSource, on_error: Option<Erro
     }
     let queue = queue.clone();
     spawn(async move {
-        #[cfg(not(target_arch = "wasm32"))]
-        let loaded = spawn_blocking(move || load(source))
-            .await
-            .unwrap_or_else(|error| Err(error.into()));
-        #[cfg(target_arch = "wasm32")]
-        let loaded = load(source);
+        let loaded = cfg_select! {
+            target_arch = "wasm32" => load(source),
+            _ => spawn_blocking(move || load(source))
+                .await
+                .unwrap_or_else(|error| Err(error.into())),
+        };
         match loaded {
             Ok(data) => queue.push(Patch::Image(id, Some(data))),
             Err(error) => {

@@ -1,18 +1,18 @@
-#[cfg(not(target_arch = "wasm32"))]
-mod native;
-#[cfg(target_arch = "wasm32")]
-pub mod web;
-
-#[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
-pub use native::{
-    PrimaryTouch, Wheel, WheelGesture, appearance, cursor_icon, logical_point, logical_size,
-    modifiers, named_key, pointer_button, scroll_delta,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use native::{log, run, warn};
-#[cfg(target_arch = "wasm32")]
-pub(crate) use web::{log, run, warn};
+cfg_select! {
+    target_arch = "wasm32" => {
+        pub mod web;
+        pub(crate) use web::{log, run, warn};
+    }
+    _ => {
+        mod native;
+        #[doc(hidden)]
+        pub use native::{
+            PrimaryTouch, Wheel, WheelGesture, appearance, cursor_icon, logical_point, logical_size,
+            modifiers, named_key, pointer_button, scroll_delta,
+        };
+        pub(crate) use native::{log, run, warn};
+    }
+}
 
 use crate::app::RootFn;
 #[cfg(target_os = "ios")]

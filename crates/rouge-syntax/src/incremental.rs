@@ -6,10 +6,14 @@ use crate::{
     symbols::TagsGrammar,
 };
 use arborium_theme::tag_for_capture;
-#[cfg(target_family = "wasm")]
-use std::rc::Rc as SharedGrammar;
-#[cfg(not(target_family = "wasm"))]
-use std::sync::Arc as SharedGrammar;
+cfg_select! {
+    target_arch = "wasm32" => {
+        use std::rc::Rc as SharedGrammar;
+    }
+    _ => {
+        use std::sync::Arc as SharedGrammar;
+    }
+}
 use std::{borrow::Cow, collections::HashSet, fmt, ops::Add, sync::OnceLock};
 use tree_sitter::{
     InputEdit, Language as TreeLanguage, Node, Parser, Point, Query, QueryCursor,
@@ -56,18 +60,21 @@ impl Add for SyntaxWorkStats {
 
 type Compiled = OnceLock<Option<SharedGrammar<Grammar>>>;
 
-#[cfg(not(target_family = "wasm"))]
-fn with_registry<T>(read: impl FnOnce(&[Compiled]) -> T) -> T {
-    static REGISTRY: [Compiled; LANGUAGES.len()] = [const { OnceLock::new() }; LANGUAGES.len()];
-    read(&REGISTRY)
-}
-
-#[cfg(target_family = "wasm")]
-fn with_registry<T>(read: impl FnOnce(&[Compiled]) -> T) -> T {
-    thread_local! {
-        static REGISTRY: [Compiled; LANGUAGES.len()] = const { [const { OnceLock::new() }; LANGUAGES.len()] };
+cfg_select! {
+    target_arch = "wasm32" => {
+        fn with_registry<T>(read: impl FnOnce(&[Compiled]) -> T) -> T {
+            thread_local! {
+                static REGISTRY: [Compiled; LANGUAGES.len()] = const { [const { OnceLock::new() }; LANGUAGES.len()] };
+            }
+            REGISTRY.with(|registry| read(registry))
+        }
     }
-    REGISTRY.with(|registry| read(registry))
+    _ => {
+        fn with_registry<T>(read: impl FnOnce(&[Compiled]) -> T) -> T {
+            static REGISTRY: [Compiled; LANGUAGES.len()] = [const { OnceLock::new() }; LANGUAGES.len()];
+            read(&REGISTRY)
+        }
+    }
 }
 
 pub(crate) fn grammar(language: LanguageId) -> Option<SharedGrammar<Grammar>> {
