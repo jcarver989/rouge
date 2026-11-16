@@ -4,8 +4,8 @@ use crate::typography::UiStyles;
 use rouge_core::Role;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, BuildCx, Div, Key, PointerEvent, Pose, Rect, Styled, Tween, View, div, overlay, show,
-    styled, text, window_size,
+    AnyView, BuildCx, DelegateStyle, Div, Key, PointerEvent, Pose, Rect, Styled, Tween, View, div,
+    overlay, show, text, window_size,
 };
 use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -152,7 +152,11 @@ impl Popover {
     }
 }
 
-styled!(Popover => root);
+impl DelegateStyle for Popover {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.root
+    }
+}
 
 impl View for Popover {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -212,7 +216,11 @@ impl Tooltip {
     }
 }
 
-styled!(Tooltip => root);
+impl DelegateStyle for Tooltip {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.root
+    }
+}
 
 impl View for Tooltip {
     fn build(self, cx: &mut BuildCx<'_>) {

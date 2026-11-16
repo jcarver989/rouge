@@ -7,8 +7,8 @@ use crate::{
 };
 use rouge_core::Role;
 use rouge_core::{
-    AnyView, BuildCx, Color, Div, IntoProp, Key, Length, Prop, RowKey, ScrollState, Scrollable,
-    StyleDelta, Styled, View, component, div, dynamic, editable, pct, px, scroll, show, styled,
+    AnyView, BuildCx, Color, DelegateStyle, Div, IntoProp, Key, Length, Prop, RowKey, ScrollState,
+    Scrollable, StyleDelta, Styled, View, component, div, dynamic, editable, pct, px, scroll, show,
     text, view, virtual_list, virtual_list_handle,
 };
 use rouge_picker::{PickerEntry, PickerRow, PickerState};
@@ -210,7 +210,11 @@ impl PickerList {
     }
 }
 
-styled!(PickerList => style);
+impl DelegateStyle for PickerList {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for PickerList {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -551,7 +555,11 @@ impl SearchPicker {
     }
 }
 
-styled!(SearchPicker => style);
+impl DelegateStyle for SearchPicker {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for SearchPicker {
     fn build(self, cx: &mut BuildCx<'_>) {

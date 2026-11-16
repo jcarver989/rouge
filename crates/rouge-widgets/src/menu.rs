@@ -8,8 +8,8 @@ use crate::typography::UiStyles;
 use crate::util::focus_ring;
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, Div, Key, Menu, Point, PointerButton, Rect, Styled, View, component, div, pct, styled,
-    text, view,
+    BuildCx, DelegateStyle, Div, Key, Menu, Point, PointerButton, Rect, Styled, View, component,
+    div, pct, text, view,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
@@ -192,7 +192,11 @@ impl ContextMenu {
     }
 }
 
-styled!(ContextMenu => root);
+impl DelegateStyle for ContextMenu {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.root
+    }
+}
 
 impl View for ContextMenu {
     fn build(self, cx: &mut BuildCx<'_>) {

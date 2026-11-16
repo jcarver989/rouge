@@ -2,8 +2,8 @@ use crate::icon::{Icon, IconName};
 use crate::tokens::Radius;
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, Div, Ease, IntoProp, Keyframes, StyleDelta, Styled, View, auto, component, div, pct,
-    styled, view,
+    BuildCx, DelegateStyle, Div, Ease, IntoProp, Keyframes, StyleDelta, Styled, View, auto,
+    component, div, pct, view,
 };
 
 pub struct Separator {
@@ -26,7 +26,11 @@ impl Separator {
     }
 }
 
-styled!(Separator => style);
+impl DelegateStyle for Separator {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for Separator {
     fn build(self, cx: &mut BuildCx<'_>) {

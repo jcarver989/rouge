@@ -5,8 +5,8 @@ use crate::{
     typography::UiStyles,
 };
 use rouge_core::{
-    AnyView, Apply, BuildCx, Div, Fill, FocusPolicy, IntoProp, Prop, Role, StyleDelta, Styled,
-    View, component, div, styled, text, view,
+    AnyView, Apply, BuildCx, DelegateStyle, Div, Fill, FocusPolicy, IntoProp, Prop, Role,
+    StyleDelta, Styled, View, component, div, text, view,
 };
 use rouge_reactive::Callback;
 use rouge_theme::SelectionState;
@@ -115,7 +115,11 @@ impl TreeRow {
     }
 }
 
-styled!(TreeRow => style);
+impl DelegateStyle for TreeRow {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for TreeRow {
     fn build(self, cx: &mut BuildCx<'_>) {

@@ -1,8 +1,8 @@
 use crate::typography::UiStyles;
 use rouge_core::Role;
 use rouge_core::{
-    AnyView, BuildCx, Color, Cursor, Div, Key, Styled, Theme, View, component, div, dynamic,
-    styled, text, view,
+    AnyView, BuildCx, Color, Cursor, DelegateStyle, Div, Key, Styled, Theme, View, component, div,
+    dynamic, text, view,
 };
 use rouge_reactive::Signal;
 use std::rc::Rc;
@@ -37,7 +37,11 @@ impl Tabs {
     }
 }
 
-styled!(Tabs => root);
+impl DelegateStyle for Tabs {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.root
+    }
+}
 
 impl View for Tabs {
     fn build(self, cx: &mut BuildCx<'_>) {

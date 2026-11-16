@@ -2,8 +2,8 @@ use crate::tokens::{GROUP_HEIGHT, Radius};
 use crate::typography::UiStyles;
 use rouge_core::Role;
 use rouge_core::{
-    Apply, BuildCx, Cursor, Editable, StyleDelta, Styled, Theme, View, component, div, editable,
-    focus_handle, styled, view,
+    Apply, BuildCx, Cursor, DelegateStyle, Editable, StyleDelta, Styled, Theme, View, component,
+    div, editable, focus_handle, view,
 };
 use rouge_reactive::{Callback, Signal};
 use std::ops::Range;
@@ -72,7 +72,11 @@ impl TextInput {
     }
 }
 
-styled!(TextInput => style);
+impl DelegateStyle for TextInput {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for TextInput {
     fn build(self, cx: &mut BuildCx<'_>) {

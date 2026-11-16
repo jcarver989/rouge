@@ -3,7 +3,8 @@ use crate::icon::IconName;
 use rouge_core::Role;
 use rouge_core::component;
 use rouge_core::{
-    BuildCx, Cursor, Div, DragPhase, Fill, IntoProp, Length, Prop, Styled, Theme, View, div, styled,
+    BuildCx, Cursor, DelegateStyle, Div, DragPhase, Fill, IntoProp, Length, Prop, Styled, Theme,
+    View, div,
 };
 use rouge_reactive::{Memo, Signal, effect, memo, signal};
 use std::cell::Cell;
@@ -90,7 +91,11 @@ impl ResizablePanel {
     }
 }
 
-styled!(ResizablePanel => root);
+impl DelegateStyle for ResizablePanel {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.root
+    }
+}
 
 impl View for ResizablePanel {
     fn build(self, cx: &mut BuildCx<'_>) {

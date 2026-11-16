@@ -1,8 +1,8 @@
 use crate::{tokens::Radius, typography::UiStyles};
 use rouge_core::Role;
 use rouge_core::{
-    Apply, BuildCx, Div, Key, Prop, StyleDelta, Styled, Theme, View, component, div, editable,
-    styled, switch, text,
+    Apply, BuildCx, DelegateStyle, Div, Key, Prop, StyleDelta, Styled, Theme, View, component, div,
+    editable, switch, text,
 };
 use rouge_reactive::{Callback, memo, signal};
 
@@ -56,7 +56,11 @@ impl InlineEdit {
     }
 }
 
-styled!(InlineEdit => style);
+impl DelegateStyle for InlineEdit {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for InlineEdit {
     fn build(self, cx: &mut BuildCx<'_>) {

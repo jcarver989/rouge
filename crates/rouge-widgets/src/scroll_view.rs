@@ -1,8 +1,8 @@
 use crate::tokens::{Radius, SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH};
 use rouge_core::component;
 use rouge_core::{
-    BuildCx, Div, DragPhase, Point, PointerButton, PointerEvent, ScrollLinked, ScrollState,
-    Scrollable, Styled, Theme, View, div, show, styled,
+    BuildCx, DelegateStyle, Div, DragPhase, Point, PointerButton, PointerEvent, ScrollLinked,
+    ScrollState, Scrollable, Styled, Theme, View, div, show,
 };
 use rouge_reactive::{Signal, memo, signal};
 use std::cell::Cell;
@@ -44,7 +44,11 @@ impl<T: Scrollable + Styled> Scrollable for ScrollView<T> {
     }
 }
 
-styled!(ScrollView<T> => root);
+impl<T> DelegateStyle for ScrollView<T> {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.root
+    }
+}
 
 impl<T: Scrollable + Styled> View for ScrollView<T> {
     fn build(self, cx: &mut BuildCx<'_>) {

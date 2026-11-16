@@ -3,8 +3,8 @@ use crate::typography::UiStyles;
 use crate::util::fade_when_disabled;
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, Color, IntoProp, Prop, Spring, StyleDelta, Styled, View, component, div, show, styled,
-    text, view,
+    BuildCx, Color, DelegateStyle, IntoProp, Prop, Spring, StyleDelta, Styled, View, component,
+    div, show, text, view,
 };
 use rouge_reactive::Signal;
 use std::rc::Rc;
@@ -31,7 +31,11 @@ impl Toggle {
     }
 }
 
-styled!(Toggle => style);
+impl DelegateStyle for Toggle {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for Toggle {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -86,7 +90,11 @@ impl<T> Radio<T> {
     }
 }
 
-styled!(Radio<T> => style);
+impl<T> DelegateStyle for Radio<T> {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl<T: Clone + PartialEq + 'static> View for Radio<T> {
     fn build(self, cx: &mut BuildCx<'_>) {

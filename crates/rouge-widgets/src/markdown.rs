@@ -5,9 +5,9 @@ use crate::typography::{CODE, READING, TITLE, preset};
 use crate::{IconName, UiStyles, icon_button};
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, Color, Corners, Cursor, Div, IntoProp, SpanStyle, StyleDelta, Styled, Text, TextAlign,
-    Theme, Typography, Underline, View, component, div, each, rich_text, styled, text, view,
-    window_handle,
+    BuildCx, Color, Corners, Cursor, DelegateStyle, Div, IntoProp, SpanStyle, StyleDelta, Styled,
+    Text, TextAlign, Theme, Typography, Underline, View, component, div, each, rich_text, text,
+    view, window_handle,
 };
 use rouge_markdown::{
     MarkdownBlock, MarkdownBlockKind as Block, MarkdownCodeBlock, MarkdownDocument,
@@ -154,7 +154,11 @@ impl Markdown {
     }
 }
 
-styled!(Markdown => style);
+impl DelegateStyle for Markdown {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for Markdown {
     fn build(self, cx: &mut BuildCx<'_>) {

@@ -2,8 +2,8 @@ use crate::tokens::Radius;
 use crate::util::focus_ring;
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, Color, Cursor, Div, Key, PointerButton, StyleDelta, Styled, View, component, div, pct,
-    styled, view,
+    BuildCx, Color, Cursor, DelegateStyle, Div, Key, PointerButton, StyleDelta, Styled, View,
+    component, div, pct, view,
 };
 use rouge_reactive::Signal;
 use std::cell::Cell;
@@ -41,7 +41,11 @@ impl Slider {
     }
 }
 
-styled!(Slider => style);
+impl DelegateStyle for Slider {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for Slider {
     fn build(self, cx: &mut BuildCx<'_>) {

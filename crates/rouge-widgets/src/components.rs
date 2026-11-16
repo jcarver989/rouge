@@ -9,9 +9,9 @@ use crate::{
 };
 use rouge_core::Role;
 use rouge_core::{
-    AnyView, Apply, BuildCx, Color, Div, Fill, FocusPolicy, IntoProp, Key, LayoutTransition,
-    Length, Path, Prop, Rect, Spring, StyleDelta, Styled, Text, Theme, View, canvas, component,
-    div, dynamic, overlay, pct, px, styled, text, view,
+    AnyView, Apply, BuildCx, Color, DelegateStyle, Div, Fill, FocusPolicy, IntoProp, Key,
+    LayoutTransition, Length, Path, Prop, Rect, Spring, StyleDelta, Styled, Text, Theme, View,
+    canvas, component, div, dynamic, overlay, pct, px, text, view,
 };
 use rouge_reactive::{Callback, Signal, effect, memo, signal, use_context};
 use rouge_theme::{
@@ -114,7 +114,11 @@ impl Button {
     }
 }
 
-styled!(Button => style);
+impl DelegateStyle for Button {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for Button {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -256,7 +260,11 @@ impl IconButton {
     }
 }
 
-styled!(IconButton => style);
+impl DelegateStyle for IconButton {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for IconButton {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -370,7 +378,11 @@ impl<T> Checkbox<T> {
     }
 }
 
-styled!(Checkbox<T> => style);
+impl<T> DelegateStyle for Checkbox<T> {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl<T: CheckModel> View for Checkbox<T> {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -467,7 +479,11 @@ impl SegmentedControl {
     }
 }
 
-styled!(SegmentedControl => root);
+impl DelegateStyle for SegmentedControl {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.root
+    }
+}
 
 impl View for SegmentedControl {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -569,7 +585,11 @@ impl Segment {
     }
 }
 
-styled!(Segment => style);
+impl DelegateStyle for Segment {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for Segment {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -775,7 +795,11 @@ impl SectionHeader {
     }
 }
 
-styled!(SectionHeader => style);
+impl DelegateStyle for SectionHeader {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for SectionHeader {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -869,7 +893,11 @@ impl ListRow {
     }
 }
 
-styled!(ListRow => style);
+impl DelegateStyle for ListRow {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.style
+    }
+}
 
 impl View for ListRow {
     fn build(self, cx: &mut BuildCx<'_>) {
