@@ -68,8 +68,8 @@ fn theme_at(elements: &SlotMap<ElementId, Element>, id: ElementId) -> Option<The
 
 pub(crate) type Exit = Option<(Pose, Timing)>;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Interaction {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interaction {
     Hover,
     Active,
     Selected,
@@ -151,6 +151,7 @@ pub(crate) struct Extras {
     pub scroll: Option<ScrollSpec>,
     pub group: Option<String>,
     pub test_id: Option<String>,
+    pub test_scope: bool,
     pub text_hover: Option<HitListener>,
     pub text_click: Option<HitListener>,
     pub theme: Option<Theme>,

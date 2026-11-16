@@ -68,6 +68,7 @@ pub struct TextStyle {
     pub size: f32,
     pub weight: f32,
     pub italic: bool,
+    pub strikethrough: bool,
     pub line_height: f32,
     pub align: TextAlign,
     pub wrap: bool,
@@ -92,6 +93,7 @@ impl Default for TextStyle {
             size: 14.0,
             weight: 400.0,
             italic: false,
+            strikethrough: false,
             line_height: 1.4,
             align: TextAlign::Start,
             wrap: true,
@@ -227,6 +229,7 @@ impl From<BoundingBox> for TextRect {
 pub struct TextLayout {
     shaped: Rc<Shaped>,
     paints: Rc<[SpanStyle]>,
+    strikethrough: bool,
 }
 
 #[derive(Clone)]
@@ -296,7 +299,7 @@ impl TextLayout {
                             Some(underline.color),
                         );
                     }
-                    if style.strikethrough == Some(true) {
+                    if style.strikethrough.unwrap_or(self.strikethrough) {
                         f(
                             rect(run.baseline() - run.run().font_size() * 0.3, 1.0),
                             style.color,
@@ -546,7 +549,11 @@ impl TextSystem {
             } else {
                 request.palette
             };
-            return TextLayout { shaped, paints };
+            return TextLayout {
+                shaped,
+                paints,
+                strikethrough: style.strikethrough,
+            };
         }
         self.stats.shapes += 1;
         let mut shaped = self.shape(&request);
@@ -554,7 +561,11 @@ impl TextSystem {
         let shaped = Rc::new(shaped);
         let paints = request.palette.clone();
         self.cache.insert(hash, request.into_entry(shaped.clone()));
-        TextLayout { shaped, paints }
+        TextLayout {
+            shaped,
+            paints,
+            strikethrough: style.strikethrough,
+        }
     }
 
     fn shape(&mut self, request: &Request<'_>) -> Shaped {

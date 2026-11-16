@@ -2,6 +2,7 @@ use crate::length::Length;
 use crate::prop::{IntoProp, Prop};
 use crate::text::TextStyle;
 use crate::theme::Fill;
+use crate::tree::Interaction;
 use rouge_render::{Color, Corners, Point};
 use std::borrow::Cow;
 use std::mem::replace;
@@ -124,6 +125,7 @@ pub enum Declaration {
     Font(Cow<'static, str>),
     FontWeight(f32),
     Italic(bool),
+    Strikethrough(bool),
     LineHeight(f32),
     Background(Fill),
     BorderColor(Fill),
@@ -141,6 +143,7 @@ impl Declaration {
                 | Declaration::Font(_)
                 | Declaration::FontWeight(_)
                 | Declaration::Italic(_)
+                | Declaration::Strikethrough(_)
                 | Declaration::LineHeight(_)
                 | Declaration::Background(_)
                 | Declaration::BorderColor(_)
@@ -184,6 +187,7 @@ pub(crate) struct Style {
     pub text_font: Option<Cow<'static, str>>,
     pub text_weight: Option<f32>,
     pub text_italic: Option<bool>,
+    pub text_strikethrough: Option<bool>,
     pub text_line_height: Option<f32>,
     pub background: Option<Fill>,
     pub border_color: Fill,
@@ -202,6 +206,7 @@ impl Default for Style {
             text_font: None,
             text_weight: None,
             text_italic: None,
+            text_strikethrough: None,
             text_line_height: None,
             background: None,
             border_color: Fill::Color(Color::BLACK),
@@ -224,6 +229,7 @@ impl Style {
             Declaration::Font(font) => self.text_font = Some(font.clone()),
             Declaration::FontWeight(weight) => self.text_weight = Some(*weight),
             Declaration::Italic(italic) => self.text_italic = Some(*italic),
+            Declaration::Strikethrough(struck) => self.text_strikethrough = Some(*struck),
             Declaration::LineHeight(height) => self.text_line_height = Some(*height),
             Declaration::Background(color) => self.background = Some(*color),
             Declaration::BorderColor(color) => self.border_color = *color,
@@ -283,6 +289,7 @@ text_properties! {
     text_font: Cow<'static, str>,
     text_weight: f32,
     text_italic: bool,
+    text_strikethrough: bool,
     text_line_height: f32,
 }
 
@@ -316,12 +323,49 @@ macro_rules! styled {
                 self.$field = $crate::Styled::declare(self.$field, declaration);
                 self
             }
+
+            fn restyle(mut self, state: $crate::StyleState, delta: $crate::StyleDelta) -> Self {
+                self.$field = $crate::Styled::restyle(self.$field, state, delta);
+                self
+            }
         }
     };
 }
 
+macro_rules! states {
+    ($($name:ident: $state:ident;)*) => {$(
+        fn $name(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+            self.restyle(StyleState::Interaction(Interaction::$state), f(StyleDelta::default()))
+        }
+    )*};
+}
+
 pub trait Styled: Sized {
     fn declare(self, declaration: Prop<Declaration>) -> Self;
+
+    #[must_use]
+    fn restyle(self, state: StyleState, delta: StyleDelta) -> Self;
+
+    states! {
+        hover: Hover;
+        active: Active;
+        selected: Selected;
+        checked: Checked;
+        focus: Focus;
+        focus_visible: FocusVisible;
+        disabled: Disabled;
+    }
+
+    fn group_hover(
+        self,
+        name: impl Into<String>,
+        f: impl FnOnce(StyleDelta) -> StyleDelta,
+    ) -> Self {
+        self.restyle(
+            StyleState::GroupHover(name.into()),
+            f(StyleDelta::default()),
+        )
+    }
 
     flags! {
         flex => Declaration::Display(Display::Flex);
@@ -377,6 +421,7 @@ pub trait Styled: Sized {
         font(Cow<'static, str>) => Declaration::Font;
         font_weight(f32) => Declaration::FontWeight;
         line_height(f32) => Declaration::LineHeight;
+        strikethrough(bool) => Declaration::Strikethrough;
         aspect_ratio(f32) => Declaration::AspectRatio;
         flex_grow(f32) => Declaration::FlexGrow;
         flex_shrink(f32) => Declaration::FlexShrink;
@@ -426,19 +471,38 @@ pub trait Styled: Sized {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StyleState {
+    Interaction(Interaction),
+    GroupHover(String),
+}
+
 #[derive(Default)]
-pub struct StyleDelta(pub(crate) Vec<Prop<Declaration>>);
+pub struct StyleDelta {
+    pub(crate) declarations: Vec<Prop<Declaration>>,
+    pub(crate) states: Vec<(StyleState, StyleDelta)>,
+}
 
 impl Styled for StyleDelta {
     fn declare(mut self, declaration: Prop<Declaration>) -> Self {
-        self.0.push(declaration);
+        self.declarations.push(declaration);
+        self
+    }
+
+    fn restyle(mut self, state: StyleState, delta: StyleDelta) -> Self {
+        self.states.push((state, delta));
         self
     }
 }
 
 impl StyleDelta {
     pub fn apply<T: Styled>(self, target: T) -> T {
-        self.0.into_iter().fold(target, Styled::declare)
+        let target = self.declarations.into_iter().fold(target, Styled::declare);
+        self.states
+            .into_iter()
+            .fold(target, |target, (state, delta)| {
+                target.restyle(state, delta)
+            })
     }
 }
 

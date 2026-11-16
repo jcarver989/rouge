@@ -3,7 +3,8 @@ use super::{ElementId, Tree};
 use crate::canvas::{PaintOp, TextHit};
 use rouge_reactive::batch;
 use rouge_render::{Affine, Point, Rect, Size};
-use std::iter::from_fn;
+use std::borrow::Cow;
+use std::iter::{from_fn, successors};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaintRegion {
@@ -32,7 +33,7 @@ impl Tree {
         let mut bounds = Vec::new();
         for id in self.visible_preorder(self.root) {
             let element = &self.elements[id];
-            if self.test_id(id) == Some(name) {
+            if self.test_id(id).as_deref() == Some(name) {
                 bounds.push(self.window_bounds(id));
             }
             let ops = element
@@ -56,7 +57,7 @@ impl Tree {
     pub(crate) fn text_of(&self, name: &str) -> Option<String> {
         let found = self
             .visible_preorder(self.root)
-            .find(|id| self.test_id(*id) == Some(name))?;
+            .find(|id| self.test_id(*id).as_deref() == Some(name))?;
         Some(
             self.visible_preorder(found)
                 .filter_map(|id| self.elements[id].kind.text())
@@ -166,8 +167,23 @@ impl Tree {
             .fold(rect, |rect, transform| transform.apply_rect(&rect))
     }
 
-    fn test_id(&self, id: ElementId) -> Option<&str> {
-        self.elements[id].extras()?.test_id.as_deref()
+    fn test_id(&self, id: ElementId) -> Option<Cow<'_, str>> {
+        let own = self.elements[id].extras()?.test_id.as_deref()?;
+        let mut parts: Vec<&str> =
+            successors(self.elements[id].parent, |id| self.elements[*id].parent)
+                .filter_map(|id| {
+                    self.elements[id]
+                        .extras()
+                        .filter(|extras| extras.test_scope)
+                })
+                .filter_map(|extras| extras.test_id.as_deref())
+                .collect();
+        if parts.is_empty() {
+            return Some(Cow::Borrowed(own));
+        }
+        parts.reverse();
+        parts.push(own);
+        Some(Cow::Owned(parts.join("-")))
     }
 
     fn enter(&self, id: ElementId, slot: Slot) -> Option<Affine> {

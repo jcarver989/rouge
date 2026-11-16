@@ -10,7 +10,7 @@ use crate::focus::FocusHandle;
 use crate::motion::{MotionOp, MotionProp};
 use crate::prop::{AnyEffect, IntoProp, Prop, PropFrom};
 use crate::scroll::{Scrollable, scroll_key};
-use crate::style::{Declaration, StyleDelta, Styled};
+use crate::style::{Declaration, StyleDelta, StyleState, Styled};
 use crate::styled;
 use crate::text::{SpanStyle, TextAlign, TextStyle, TextSystem, WrapIndent};
 use crate::theme::{Fill, Theme};
@@ -20,7 +20,7 @@ use crate::tree::{
 };
 use crate::window::Sent;
 use rouge_macros::component;
-use rouge_reactive::{Scope, Signal, effect, run_in, use_context};
+use rouge_reactive::{Scope, Signal, effect, provide_context, run_in, use_context};
 use rouge_render::{BlendMode, EffectInstance, ImageData, Mask, Point, Rect, Size};
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
@@ -238,6 +238,7 @@ pub struct Div {
     pub(crate) spec: ElementSpec,
     writes: Vec<Write>,
     children: Vec<AnyView>,
+    provided: Vec<Box<dyn FnOnce()>>,
     effects: usize,
     autofocus: bool,
     focus_policy: FocusPolicy,
@@ -246,14 +247,6 @@ pub struct Div {
 #[component]
 pub fn div() -> Div {
     Div::default()
-}
-
-macro_rules! variants {
-    ($($name:ident: $which:ident;)*) => {$(
-        pub fn $name(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
-            self.variant(Interaction::$which as usize, f(StyleDelta::default()))
-        }
-    )*};
 }
 
 macro_rules! listeners {
@@ -296,17 +289,6 @@ impl Div {
         self
     }
 
-    pub fn group_hover(
-        mut self,
-        name: impl Into<String>,
-        f: impl FnOnce(StyleDelta) -> StyleDelta,
-    ) -> Self {
-        let triggers = &mut self.spec.extras().triggers;
-        triggers.push((Trigger::GroupHover(name.into()), Vec::new()));
-        let slot = STATES + triggers.len() - 1;
-        self.variant(slot, f(StyleDelta::default()))
-    }
-
     pub fn when<U>(
         mut self,
         condition: impl IntoProp<bool, U>,
@@ -320,8 +302,17 @@ impl Div {
     }
 
     fn variant(mut self, slot: usize, delta: StyleDelta) -> Self {
-        let mut declarations = Vec::with_capacity(delta.0.len());
-        for (index, declaration) in delta.0.into_iter().enumerate() {
+        assert!(
+            delta.states.is_empty(),
+            "rouge-core: a state or condition style cannot nest another state style"
+        );
+        let offset = self
+            .spec
+            .extras()
+            .variant_mut(slot)
+            .map_or(0, |variant| variant.len());
+        let mut declarations = Vec::with_capacity(delta.declarations.len());
+        for (index, declaration) in (offset..).zip(delta.declarations) {
             let compute = match declaration {
                 Prop::Static(declaration) => {
                     declarations.push(declaration);
@@ -335,13 +326,20 @@ impl Div {
             });
         }
         if let Some(variant) = self.spec.extras().variant_mut(slot) {
-            *variant = declarations;
+            variant.extend(declarations);
         }
         self
     }
 
     pub fn test_id(mut self, name: impl Into<String>) -> Self {
         self.spec.extras().test_id = Some(name.into());
+        self
+    }
+
+    pub fn test_scope(mut self, name: impl ToString) -> Self {
+        let extras = self.spec.extras();
+        extras.test_id = Some(name.to_string());
+        extras.test_scope = true;
         self
     }
 
@@ -401,6 +399,11 @@ impl Div {
         self
     }
 
+    pub fn provide<T: Clone + 'static>(mut self, value: T) -> Self {
+        self.provided.push(Box::new(move || provide_context(value)));
+        self
+    }
+
     pub fn child(mut self, child: impl View) -> Self {
         self.children.push(child.into_any());
         self
@@ -410,16 +413,6 @@ impl Div {
         self.children
             .extend(children.into_iter().map(View::into_any));
         self
-    }
-
-    variants! {
-        hover: Hover;
-        active: Active;
-        selected: Selected;
-        checked: Checked;
-        focus: Focus;
-        focus_visible: FocusVisible;
-        disabled: Disabled;
     }
 
     listeners! {
@@ -462,6 +455,15 @@ impl Div {
                 }
             })
             .focus_policy(focus)
+    }
+
+    #[track_caller]
+    pub fn on_double_click(self, f: impl Fn(&PointerEvent) + 'static) -> Self {
+        self.on_click(move |event| {
+            if event.click_count == 2 {
+                f(event);
+            }
+        })
     }
 
     pub fn focus_policy(mut self, policy: FocusPolicy) -> Self {
@@ -627,6 +629,18 @@ impl Styled for Div {
     fn declare(self, declaration: Prop<Declaration>) -> Self {
         self.write(declaration, |declaration| Some(Op::Style(declaration)))
     }
+
+    fn restyle(mut self, state: StyleState, delta: StyleDelta) -> Self {
+        let slot = match state {
+            StyleState::Interaction(interaction) => interaction as usize,
+            StyleState::GroupHover(name) => {
+                let triggers = &mut self.spec.extras().triggers;
+                triggers.push((Trigger::GroupHover(name), Vec::new()));
+                STATES + triggers.len() - 1
+            }
+        };
+        self.variant(slot, delta)
+    }
 }
 
 impl View for Div {
@@ -676,9 +690,22 @@ impl Div {
             cx.queue.push(Patch::Autofocus(id));
         }
         let outer = cx.theme;
+        let (children, provided) = (self.children, self.provided);
         cx.within(Node::Element(id), |cx| {
-            for child in self.children {
-                child.build(cx);
+            let build = |cx: &mut BuildCx<'_>| {
+                for child in children {
+                    child.build(cx);
+                }
+            };
+            if provided.is_empty() {
+                build(cx);
+            } else {
+                Scope::new().run(|| {
+                    for provide in provided {
+                        provide();
+                    }
+                    build(cx);
+                });
             }
         });
         cx.theme = outer;
@@ -705,6 +732,10 @@ pub fn rich_text<T, U>(
 }
 
 impl Text {
+    pub fn test_id(self, name: impl Into<String>) -> Self {
+        Text(self.0.test_id(name))
+    }
+
     pub fn spans<U>(self, spans: impl IntoProp<Vec<(Range<usize>, SpanStyle)>, U>) -> Self {
         self.text_prop(spans, TextOp::Spans)
     }

@@ -6,10 +6,10 @@ use rouge_core::testing::{
 };
 use rouge_core::{
     BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Cursor, Div, FocusPolicy, Keyframes,
-    LayoutTransition, Mask, Point, Pose, Rect, SpanStyle, Spring, Styled, Timing, Underline, View,
-    div, dynamic, rich_text, show, text,
+    LayoutTransition, Mask, Point, Pose, Rect, SpanStyle, Spring, StyleDelta, Styled, Timing,
+    Underline, View, div, dynamic, rich_text, show, text,
 };
-use rouge_reactive::{Runtime, Signal, signal, stored};
+use rouge_reactive::{Runtime, Signal, signal, stored, use_context};
 use rouge_render::headless::Image;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -1018,6 +1018,132 @@ fn handlers_run_in_the_scope_that_registered_them() -> TestResult {
         !created.is_alive(),
         "the signal was owned by the button's branch"
     );
+    Ok(())
+}
+
+#[test]
+fn double_clicks_reach_on_double_click_and_single_clicks_do_not() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (doubles, record) = counter();
+    let mut ui = TestUi::new(move || {
+        div()
+            .size(40.0)
+            .test_id("target")
+            .on_double_click(move |_| record())
+    });
+    ui.click_on("target")?;
+    assert_eq!(doubles.get(), 0);
+    ui.double_click_on("target")?;
+    assert_eq!(doubles.get(), 1);
+    Ok(())
+}
+
+#[test]
+fn a_test_scope_prefixes_the_test_ids_inside_it() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::new(|| {
+        div().flex().child(
+            div()
+                .test_scope("row-3")
+                .w(40.0)
+                .child(
+                    div()
+                        .test_scope("actions")
+                        .child(div().test_id("delete").size(10.0)),
+                )
+                .child(text("title").test_id("title")),
+        )
+    });
+    assert_eq!(ui.rect_of("row-3")?.size.width, 40.0);
+    assert!(ui.bounds_of("row-3-actions").is_some());
+    assert_eq!(ui.rect_of("row-3-actions-delete")?.size.width, 10.0);
+    assert_eq!(ui.text_of("row-3-title").as_deref(), Some("title"));
+    assert!(ui.bounds_of("delete").is_none());
+    Ok(())
+}
+
+#[test]
+fn provided_context_reaches_children_as_they_build() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::new(|| {
+        let width = || {
+            dynamic(|| {
+                div()
+                    .test_id("child")
+                    .w(use_context::<f32>().unwrap_or(0.0))
+            })
+        };
+        div()
+            .flex()
+            .col()
+            .child(div().provide(30.0_f32).child(width()))
+            .child(width())
+    });
+    assert_eq!(ui.rect_of("child")?.size.width, 30.0);
+    let widths: Vec<f32> = ui
+        .bounds_of_all("child")
+        .iter()
+        .map(|rect| rect.size.width)
+        .collect();
+    assert_eq!(widths, vec![30.0, 0.0]);
+    Ok(())
+}
+
+#[test]
+fn every_style_added_for_a_state_applies_in_order() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let checked = signal(false);
+    let mut ui = TestUiBuilder::default().size(60.0, 20.0).build(move || {
+        div().flex().child(
+            div()
+                .test_id("cell")
+                .size(20.0)
+                .bg(Color::WHITE)
+                .checked(|s| s.bg(Color::BLUE).w(40.0))
+                .checked(|s| s.bg(Color::RED))
+                .is_checked(checked),
+        )
+    });
+    checked.set(true);
+    ui.advance(0.0);
+    assert_eq!(ui.rect_of("cell")?.size.width, 40.0);
+    assert_eq!(ui.pixel(10, 10)?, RED);
+    Ok(())
+}
+
+#[test]
+fn a_style_delta_replays_its_states_onto_the_element() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let checked = signal(false);
+    let mut ui = TestUiBuilder::default().size(20.0, 20.0).build(move || {
+        let delta = StyleDelta::default()
+            .bg(Color::WHITE)
+            .checked(|s| s.bg(Color::BLUE));
+        delta.apply(div().size(20.0)).is_checked(checked)
+    });
+    assert_eq!(ui.pixel(10, 10)?, WHITE);
+    checked.set(true);
+    ui.advance(0.0);
+    assert_eq!(ui.pixel(10, 10)?, BLUE);
+    Ok(())
+}
+
+#[test]
+fn strikethrough_cascades_to_the_text_inside() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let struck = signal(false);
+    let mut ui = build(1.0, move || {
+        div()
+            .text_color(Color::RED)
+            .strikethrough(struck)
+            .child(text("        ").test_id("gap"))
+    });
+    ui.advance(0.0);
+    let area = ui.rect_of("gap")?;
+    assert_eq!(inked(&ui.render()?, area), 0);
+    struck.set(true);
+    ui.advance(0.0);
+    assert!(inked(&ui.render()?, area) > 0);
     Ok(())
 }
 

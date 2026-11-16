@@ -276,6 +276,9 @@ impl Tree {
             style.family = properties.text_font.clone().unwrap_or(default.family);
             style.weight = properties.text_weight.unwrap_or(default.weight);
             style.italic = properties.text_italic.unwrap_or(default.italic);
+            style.strikethrough = properties
+                .text_strikethrough
+                .unwrap_or(default.strikethrough);
             style.line_height = properties.text_line_height.unwrap_or(default.line_height);
             let color = properties.text_color.unwrap_or(Fill::Role(Role::Text));
             let dirty = if style != text.style {

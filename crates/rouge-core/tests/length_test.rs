@@ -1,5 +1,7 @@
 use rouge_core::testing::{TestResult, TestUi};
-use rouge_core::{Declaration, Length, Prop, Rect, Slot, Styled, auto, div, pct, px};
+use rouge_core::{
+    Declaration, Length, Prop, Rect, Slot, StyleDelta, StyleState, Styled, auto, div, pct, px,
+};
 use rouge_reactive::Runtime;
 
 #[test]
@@ -85,6 +87,10 @@ struct Recorder(Vec<Declaration>);
 impl Styled for Recorder {
     fn declare(mut self, declaration: Prop<Declaration>) -> Self {
         self.0.push(declaration.get());
+        self
+    }
+
+    fn restyle(self, _: StyleState, _: StyleDelta) -> Self {
         self
     }
 }
