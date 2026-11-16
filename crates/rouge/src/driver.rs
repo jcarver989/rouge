@@ -46,6 +46,7 @@ pub(crate) struct Setup<'a> {
     pub(crate) pixels: (u32, u32),
     pub(crate) scale: f32,
     pub(crate) interval: Duration,
+    pub(crate) epoch: Instant,
     pub(crate) appearance: Appearance,
     pub(crate) menus: &'a [Menu],
     pub(crate) fonts: &'a [Cow<'static, [u8]>],
@@ -62,13 +63,14 @@ impl Inline {
     pub(crate) fn new(
         gpu: &Gpu,
         mailbox: Mailbox,
+        epoch: Instant,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         let surfaces = Surfaces::new(gpu).with_waker(wake);
         Inline {
             actor: CompositorActor::new(gpu.clone(), surfaces),
             mailbox,
-            epoch: Instant::now(),
+            epoch,
         }
     }
 
@@ -114,6 +116,7 @@ impl Driver {
             pixels: (width, height),
             scale,
             interval,
+            epoch,
             appearance,
             menus,
             fonts,
@@ -121,6 +124,7 @@ impl Driver {
         } = setup;
         let logical = Size::new(width as f32 / scale, height as f32 / scale);
         let mut ui = Ui::with_fonts(logical, fonts.iter().cloned(), root);
+        ui.set_epoch(epoch);
         ui.set_device_scale(scale);
         ui.set_appearance(appearance);
         ui.set_clipboard(clipboard);
@@ -172,7 +176,6 @@ impl Driver {
             config: WindowConfig {
                 width: config.width,
                 height: config.height,
-                scale,
                 interval,
                 visible: true,
             },
@@ -233,7 +236,7 @@ impl Driver {
         self.ui
             .set_size(Size::new(width as f32 / scale, height as f32 / scale));
         self.configure(|config| {
-            (config.width, config.height, config.scale) = (width, height, scale);
+            (config.width, config.height) = (width, height);
         });
         Some((width, height))
     }
@@ -258,12 +261,7 @@ impl Driver {
             return;
         }
         if let Some(profile) = &mut self.profile {
-            let WindowConfig {
-                width,
-                height,
-                scale,
-                ..
-            } = self.config;
+            let (WindowConfig { width, height, .. }, scale) = (self.config, self.ui.scale());
             let center = Point::new(width as f32 / scale / 2.0, height as f32 / scale / 2.0);
             profile.before_update(&mut self.ui, center);
         }

@@ -20,7 +20,6 @@ fn commits_cross_to_the_compositor_thread_and_are_acknowledged() -> Result<(), B
     let config = WindowConfig {
         width: 32,
         height: 32,
-        scale: 1.0,
         interval: Duration::from_millis(8),
         visible: true,
     };

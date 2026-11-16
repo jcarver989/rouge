@@ -22,7 +22,6 @@ pub(crate) const WINDOW: WindowId = WindowId(0);
 const CONFIG: WindowConfig = WindowConfig {
     width: 100,
     height: 100,
-    scale: 1.0,
     interval: Duration::from_millis(10),
     visible: true,
 };

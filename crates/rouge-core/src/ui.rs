@@ -138,9 +138,10 @@ pub struct Ui {
     touch: Option<Touch>,
     modifiers: Signal<Modifiers>,
     clicks: Option<(f64, Point, u32)>,
-    started: Instant,
+    epoch: Instant,
     clock: Option<f64>,
     committed_clear: Option<Color>,
+    committed_scale: Option<f32>,
     shortcuts: Vec<(Chord, MenuItem)>,
 }
 
@@ -235,16 +236,17 @@ impl Ui {
             touch: None,
             modifiers,
             clicks: None,
-            started: Instant::now(),
+            epoch: Instant::now(),
             clock: None,
             committed_clear: None,
+            committed_scale: None,
             shortcuts: Vec::new(),
         }
     }
 
     pub fn update(&mut self) -> bool {
         self.clock = None;
-        self.step(self.started.elapsed().as_secs_f64())
+        self.step(self.epoch.elapsed().as_secs_f64())
     }
 
     pub fn update_at(&mut self, now: f64) -> bool {
@@ -461,13 +463,19 @@ impl Ui {
 
     pub fn time(&self) -> f64 {
         self.clock
-            .unwrap_or_else(|| self.started.elapsed().as_secs_f64())
+            .unwrap_or_else(|| self.epoch.elapsed().as_secs_f64())
+    }
+
+    pub fn set_epoch(&mut self, epoch: Instant) {
+        self.epoch = epoch;
     }
 
     pub fn commit(&mut self) -> Commit {
         let _commit = trace_span!("commit").entered();
         let clear = self.clear_color();
+        let scale = self.cache.scale;
         Commit {
+            scale: (self.committed_scale.replace(scale) != Some(scale)).then_some(scale),
             clear: (self.committed_clear.replace(clear) != Some(clear)).then_some(clear),
             atlas: self.cache.atlas.take_uploads(),
             surfaces: self.tree.take_surface_ops(),

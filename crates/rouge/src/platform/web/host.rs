@@ -316,7 +316,8 @@ impl Host {
         NEXT_HOST.set(id + 1);
         let runtime = Runtime::with_waker(move || wake(id));
         let (messages, mailbox, events) = mailbox();
-        let compositor = Inline::new(&gpu, mailbox, move || wake(id));
+        let epoch = Instant::now();
+        let compositor = Inline::new(&gpu, mailbox, epoch, move || wake(id));
         let driver = {
             let _entered = runtime.enter();
             let title = options.title;
@@ -325,6 +326,7 @@ impl Host {
                 pixels,
                 scale: scale as f32,
                 interval: Duration::from_secs_f64(1.0 / 60.0),
+                epoch,
                 appearance: appearance(&window),
                 menus,
                 fonts,

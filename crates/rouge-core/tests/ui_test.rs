@@ -9,7 +9,7 @@ use rouge_core::{
     modifiers, pct, safe_area, scroll, show, text, window_size, zoom,
 };
 use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[test]
 fn a_hovered_view_replaced_while_patches_apply_gets_no_events_after_it_is_disposed() -> TestResult {
@@ -1004,5 +1004,32 @@ fn a_size_observer_sees_the_new_size_in_the_same_frame_with_one_relayout() -> Te
         (2, 1),
         "feedback is bounded to one relayout"
     );
+    Ok(())
+}
+
+#[test]
+fn a_commit_carries_the_scale_its_content_was_painted_at_whenever_it_changes() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, zoom) = TestUiBuilder::default()
+        .scale(2.0)
+        .build_with(|| (div().size_full().bg(Color::RED), zoom()));
+    assert_eq!(ui.commit().scale, Some(2.0));
+    ui.advance(0.0);
+    assert_eq!(ui.commit().scale, None, "an unchanged scale is not resent");
+    zoom.set(0.75);
+    ui.advance(0.0);
+    assert_eq!(ui.commit().scale, Some(1.5), "zoom reaches the compositor");
+    Ok(())
+}
+
+#[test]
+fn the_clock_counts_from_the_epoch_the_host_shares_with_the_compositor() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = Ui::new(Size::new(10.0, 10.0), div);
+    let epoch = Instant::now()
+        .checked_sub(Duration::from_secs(5))
+        .ok_or("the epoch underflowed")?;
+    ui.set_epoch(epoch);
+    assert!(ui.time() >= 5.0, "time is measured from the shared epoch");
     Ok(())
 }

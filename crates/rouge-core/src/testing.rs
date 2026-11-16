@@ -161,7 +161,6 @@ impl TestUi {
         let config = WindowConfig {
             width: (self.size.width * self.scale) as u32,
             height: (self.size.height * self.scale) as u32,
-            scale: self.ui.scale(),
             interval: Duration::from_secs_f64(STEP),
             visible: true,
         };

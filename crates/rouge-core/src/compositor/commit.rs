@@ -16,6 +16,7 @@ pub struct Commit {
     pub atlas: AtlasUploads,
     pub surfaces: Vec<SurfaceOp>,
     pub clear: Option<Color>,
+    pub scale: Option<f32>,
 }
 
 impl Commit {
@@ -25,6 +26,7 @@ impl Commit {
             && self.atlas.is_empty()
             && self.surfaces.is_empty()
             && self.clear.is_none()
+            && self.scale.is_none()
     }
 }
 

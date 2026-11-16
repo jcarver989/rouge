@@ -152,6 +152,7 @@ impl Runner {
             pixels: (physical.width, physical.height),
             scale: window.scale_factor() as f32,
             interval: refresh_interval(&window),
+            epoch: compositor.epoch,
             appearance: appearance(window.theme()),
             menus: &self.menus,
             fonts: &self.fonts,
@@ -534,6 +535,7 @@ enum Host {
 struct Compositing {
     messages: Sender<Message>,
     events: Events,
+    epoch: Instant,
     host: Host,
 }
 
@@ -543,15 +545,16 @@ impl Compositing {
             let _ = waker.send_event(());
         };
         let (messages, mailbox, events) = mailbox();
+        let epoch = Instant::now();
         let host = if var("ROUGE_COMPOSITOR").is_ok_and(|mode| mode == "thread") {
-            let epoch = Instant::now();
             Host::Thread(spawn(gpu.clone(), messages.clone(), mailbox, epoch, wake)?)
         } else {
-            Host::Inline(Box::new(Inline::new(gpu, mailbox, wake)))
+            Host::Inline(Box::new(Inline::new(gpu, mailbox, epoch, wake)))
         };
         Ok(Compositing {
             messages,
             events,
+            epoch,
             host,
         })
     }

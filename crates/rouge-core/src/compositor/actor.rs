@@ -23,7 +23,6 @@ pub struct WindowId(pub u64);
 pub struct WindowConfig {
     pub width: u32,
     pub height: u32,
-    pub scale: f32,
     pub interval: Duration,
     pub visible: bool,
 }
@@ -44,6 +43,7 @@ struct Window {
     target: Target,
     config: WindowConfig,
     clear: Color,
+    scale: f32,
     presented: Option<f64>,
     owed: bool,
     surfaced: bool,
@@ -119,7 +119,7 @@ impl CompositorActor {
 
     pub fn commands(&mut self, window: WindowId, now: f64) -> Option<Vec<Command>> {
         let open = find(&mut self.windows, window)?;
-        let scene = (open.compositor).scene(open.config.scale, &self.surfaces, now);
+        let scene = (open.compositor).scene(open.scale, &self.surfaces, now);
         Some(scene.commands.to_vec())
     }
 
@@ -135,6 +135,7 @@ impl CompositorActor {
                     target,
                     config,
                     clear: Color::TRANSPARENT,
+                    scale: 1.0,
                     presented: None,
                     owed: false,
                     surfaced: false,
@@ -183,6 +184,7 @@ impl CompositorActor {
         }
         (window.compositor).apply(commit.layers, commit.content, &mut self.surfaces);
         window.clear = commit.clear.unwrap_or(window.clear);
+        window.scale = commit.scale.unwrap_or(window.scale);
         window.owed = true;
         if !window.config.visible && !held {
             self.events.extend(window.acknowledge());
@@ -255,7 +257,7 @@ impl CompositorActor {
             }
         };
         let (width, height) = window.target.size();
-        let scale = window.config.scale;
+        let scale = window.scale;
         let scene = window.compositor.scene(scale, &self.surfaces, now);
         {
             let _encode = trace_span!("encode").entered();
