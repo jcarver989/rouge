@@ -1,6 +1,7 @@
 use crate::platform;
 use rouge_core::{AnyView, Decorations, Menu, View};
 use rouge_render::{GpuError, Size};
+use rouge_widgets::bundled_fonts;
 use std::borrow::Cow;
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
@@ -95,13 +96,24 @@ pub enum AppError {
 
 pub(crate) type RootFn = Box<dyn FnOnce() -> AnyView>;
 
-#[derive(Default)]
 pub struct App {
     pub(crate) windows: Vec<(WindowOptions, RootFn)>,
     pub(crate) menus: Vec<Menu>,
     pub(crate) fonts: Vec<Cow<'static, [u8]>>,
     #[cfg(feature = "tokio-rt")]
     pub(crate) tokio: Option<Handle>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        App {
+            windows: Vec::new(),
+            menus: Vec::new(),
+            fonts: bundled_fonts().map(Cow::Borrowed).collect(),
+            #[cfg(feature = "tokio-rt")]
+            tokio: None,
+        }
+    }
 }
 
 impl App {

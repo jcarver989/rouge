@@ -4,14 +4,12 @@ use rouge_reactive::{Signal, signal};
 use rouge_theme::UiPalette;
 use rouge_widgets::{
     ButtonVariant, IconName, InterfaceSize, Material, MaterialExt, MenuItem, NoticeTone,
-    SelectionState, Side, UiStyles, action_bar, bundled_fonts, button, context_menu, empty_state,
-    inline_edit, notification, resizable_panel, section_header, segment, segmented_control,
-    tree_row,
+    SelectionState, Side, UiStyles, action_bar, button, context_menu, empty_state, inline_edit,
+    notification, resizable_panel, section_header, segment, segmented_control, tree_row,
 };
 
 fn main() -> Result<(), AppError> {
     App::new()
-        .fonts(bundled_fonts())
         .window(
             WindowOptions::default()
                 .title("Rouge kit component gallery")
