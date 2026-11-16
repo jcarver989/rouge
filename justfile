@@ -47,9 +47,15 @@ web-check:
     cargo check --locked --target wasm32-unknown-unknown -p rouge --tests --all-features
     cargo check --locked --target wasm32-unknown-unknown -p rouge-widgets --example component_gallery
 
+# Run Clippy on the browser target, failing on any warning
+web-lint:
+    cargo clippy --locked --target wasm32-unknown-unknown --workspace --lib --all-features -- -D warnings
+    cargo clippy --locked --target wasm32-unknown-unknown -p rouge --tests --all-features -- -D warnings
+    cargo clippy --locked --target wasm32-unknown-unknown -p rouge-widgets --example component_gallery -- -D warnings
+
 # Run the browser tests in headless Chrome (needs wasm-bindgen-test-runner matching Cargo.lock and a matching chromedriver)
 web-test:
-    CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner cargo test --locked --target wasm32-unknown-unknown -p rouge --test platform_web_test --test platform_web_runtime_test --test platform_web_host_test
+    CHROMEDRIVER="$(command -v chromedriver)" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner cargo test --locked --target wasm32-unknown-unknown -p rouge --test platform_web_test --test platform_web_host_test
 
 # Build an example for the browser into target/web/<example> (needs wasm-bindgen; uses wasm-opt when installed)
 web-build example="component_gallery" package="rouge-widgets":
