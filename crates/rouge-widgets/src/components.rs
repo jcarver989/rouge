@@ -9,14 +9,15 @@ use crate::{
 };
 use rouge_core::Role;
 use rouge_core::{
-    AnyView, Apply, BuildCx, Color, Div, FocusPolicy, IntoProp, Key, Length, Path, Prop, Rect,
-    StyleDelta, Styled, Text, Theme, View, canvas, component, div, overlay, pct, px, styled, text,
-    view,
+    AnyView, Apply, BuildCx, Color, Div, Fill, FocusPolicy, IntoProp, Key, LayoutTransition,
+    Length, Path, Prop, Rect, Spring, StyleDelta, Styled, Text, Theme, View, canvas, component,
+    div, dynamic, overlay, pct, px, styled, text, view,
 };
-use rouge_reactive::{Callback, Signal, signal};
+use rouge_reactive::{Callback, Signal, effect, memo, signal, use_context};
 use rouge_theme::{
     ButtonVariant, ControlState, InteractionState, ModalSize, NoticeTone, SelectionState,
 };
+use std::cell::Cell;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ControlSize {
@@ -193,6 +194,7 @@ pub struct IconButton {
     icon: IconName,
     label: String,
     icon_size: f32,
+    color: Option<Prop<Fill>>,
     disabled: Prop<bool>,
     selected: Prop<bool>,
     focus: FocusPolicy,
@@ -207,6 +209,7 @@ pub fn icon_button(icon: IconName, #[prop(into)] label: String) -> IconButton {
         icon,
         label,
         icon_size: tokens::ICON_SIZE,
+        color: None,
         disabled: Prop::Static(false),
         selected: Prop::Static(false),
         focus: FocusPolicy::Tab,
@@ -219,6 +222,11 @@ pub fn icon_button(icon: IconName, #[prop(into)] label: String) -> IconButton {
 impl IconButton {
     pub fn icon_size(mut self, size: f32) -> Self {
         self.icon_size = size;
+        self
+    }
+
+    pub fn color<T>(mut self, color: impl IntoProp<Fill, T>) -> Self {
+        self.color = Some(color.into_prop());
         self
     }
 
@@ -252,18 +260,17 @@ styled!(IconButton => style);
 
 impl View for IconButton {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let theme = Theme::current();
         let disabled = Rc::new(self.disabled);
         let selected = Rc::new(self.selected);
         let hovered = signal(false);
         let foreground = {
-            let (disabled, selected) = (disabled.clone(), selected.clone());
-            move || {
-                if selected.get() || (!disabled.get() && hovered.get()) {
-                    theme.get().text
-                } else {
-                    theme.get().text_muted
+            let (disabled, selected, color) = (disabled.clone(), selected.clone(), self.color);
+            move || match &color {
+                Some(color) => color.get(),
+                None if selected.get() || (!disabled.get() && hovered.get()) => {
+                    Fill::Role(Role::Text)
                 }
+                None => Fill::Role(Role::TextMuted),
             }
         };
         let root = view! {
@@ -322,6 +329,7 @@ impl CheckModel for Signal<CheckState> {
 
 pub struct Checkbox<T> {
     model: T,
+    mark_color: Option<Color>,
     tooltip: Option<String>,
     disabled: Prop<bool>,
     test_id: Option<String>,
@@ -332,6 +340,7 @@ pub struct Checkbox<T> {
 pub fn checkbox<T: CheckModel>(checked: T) -> Checkbox<T> {
     Checkbox {
         model: checked,
+        mark_color: None,
         tooltip: None,
         disabled: Prop::Static(false),
         test_id: None,
@@ -340,6 +349,11 @@ pub fn checkbox<T: CheckModel>(checked: T) -> Checkbox<T> {
 }
 
 impl<T> Checkbox<T> {
+    pub fn mark_color(mut self, color: Color) -> Self {
+        self.mark_color = Some(color);
+        self
+    }
+
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
@@ -361,7 +375,7 @@ styled!(Checkbox<T> => style);
 impl<T: CheckModel> View for Checkbox<T> {
     fn build(self, cx: &mut BuildCx<'_>) {
         let theme = Theme::current();
-        let model = self.model;
+        let (model, mark_color) = (self.model, self.mark_color);
         let mark = canvas(move |painter| {
             let size = painter.size();
             let at = |x: f32, y: f32| (size.width * x, size.height * y);
@@ -381,7 +395,8 @@ impl<T: CheckModel> View for Checkbox<T> {
                     Path::builder().move_to(ax, ay).line_to(bx, by).build()
                 }
             };
-            painter.stroke_round(&path, size.width / 6.0, theme.get().text);
+            let color = mark_color.unwrap_or_else(|| theme.get().text);
+            painter.stroke_round(&path, (size.width / 6.0).min(2.0), color);
         })
         .size_full();
         let disabled = Rc::new(self.disabled);
@@ -395,6 +410,7 @@ impl<T: CheckModel> View for Checkbox<T> {
         .focus_visible(|style| style.border_color(Role::Accent));
         let root = fade_when_disabled(root, &disabled)
             .enabled(move || !disabled.get())
+            .is_checked(move || model.state() == CheckState::Checked)
             .on_activate(move || model.toggle());
         let tooltip = self.tooltip;
         self.style
@@ -404,10 +420,95 @@ impl<T: CheckModel> View for Checkbox<T> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SegmentIndicator(Signal<Option<(u64, Rect)>>);
+
+pub struct SegmentedControl {
+    root: Div,
+    indicator: StyleDelta,
+    segments: Vec<AnyView>,
+    test_id: Option<String>,
+}
+
 #[component]
-pub fn segmented_control() -> Div {
-    view! {
-        <div flex items_center gap=4.0 p=4.0 rounded=tokens::Radius::Control bg=Role::Chrome/>
+pub fn segmented_control() -> SegmentedControl {
+    SegmentedControl {
+        root: view! {
+            <div relative flex items_center gap=4.0 p=4.0 rounded=tokens::Radius::Control bg=Role::Chrome/>
+        },
+        indicator: StyleDelta::default()
+            .rounded(tokens::Radius::Inner)
+            .bg(Role::SurfaceSelected),
+        segments: Vec::new(),
+        test_id: None,
+    }
+}
+
+impl SegmentedControl {
+    pub fn test_id(mut self, id: impl Into<String>) -> Self {
+        self.test_id = Some(id.into());
+        self
+    }
+
+    pub fn indicator(mut self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.indicator = f(self.indicator);
+        self
+    }
+
+    pub fn child(mut self, child: impl View) -> Self {
+        self.segments.push(child.into_any());
+        self
+    }
+
+    pub fn children<T: View>(mut self, children: impl IntoIterator<Item = T>) -> Self {
+        self.segments
+            .extend(children.into_iter().map(View::into_any));
+        self
+    }
+}
+
+styled!(SegmentedControl => root);
+
+impl View for SegmentedControl {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let (control, selected) = (signal(Rect::ZERO), signal(None::<(u64, Rect)>));
+        let placed = signal(None::<Rect>);
+        effect(move || {
+            if let Some((_, at)) = selected.get() {
+                let origin = control.get().origin;
+                let at = Rect::new(
+                    at.origin.x - origin.x,
+                    at.origin.y - origin.y,
+                    at.size.width,
+                    at.size.height,
+                );
+                placed.set_if_changed(Some(at));
+            }
+        });
+        let ready = memo(move || placed.with(Option::is_some));
+        let indicator = Cell::new(Some((
+            self.indicator,
+            self.test_id.as_ref().map(|id| format!("{id}-indicator")),
+        )));
+        let indicator = dynamic(move || {
+            let (style, test_id) = ready.get().then(|| indicator.take()).flatten()?;
+            let geometry = move |f: fn(Rect) -> f32| move || placed.get().map_or(0.0, f);
+            let pill = view! {
+                <div absolute left={geometry(|at| at.origin.x)} top={geometry(|at| at.origin.y)}
+                     w={geometry(|at| at.size.width)} h={geometry(|at| at.size.height)}
+                     layout_transition={LayoutTransition::new(Spring::snappy()).size()}/>
+            }
+            .when(move || selected.with(Option::is_none), Styled::invisible)
+            .when_some(test_id, Div::test_id);
+            Some(style.apply(pill))
+        });
+        self.root
+            .when_some(self.test_id, Div::test_id)
+            .track_bounds(control)
+            .provide(SegmentIndicator(selected))
+            .child(indicator)
+            .children(self.segments)
+            .build(cx);
     }
 }
 
@@ -497,7 +598,7 @@ impl View for Segment {
             (Some(label), None)
         };
         let root = view! {
-            <div h=24.0 flex items_center gap=4.0 px=padding rounded=tokens::Radius::Inner
+            <div h=24.0 flex items_center justify_center gap=4.0 px=padding rounded=tokens::Radius::Inner
                  text_color=Role::TextMuted>
                 {icon.map(|icon| Icon::new(icon, Role::TextMuted))}
                 {detail}
@@ -505,7 +606,26 @@ impl View for Segment {
             </div>
         }
         .hover(|style| style.text_color(Role::Text))
-        .selected(|style| style.bg(Role::SurfaceSelected).text_color(Role::Text))
+        .selected(|style| style.text_color(Role::Text));
+        let selected = Rc::new(selected);
+        let root = match use_context::<SegmentIndicator>() {
+            Some(SegmentIndicator(indicator)) => {
+                let bounds = signal(Rect::ZERO);
+                let (key, on) = (bounds.id(), selected.clone());
+                effect(move || {
+                    let at = bounds.get();
+                    if on.get() && at.size.width > 0.0 {
+                        indicator.set_if_changed(Some((key, at)));
+                    } else if indicator
+                        .with_untracked(|held| held.is_some_and(|(held, _)| held == key))
+                    {
+                        indicator.set(None);
+                    }
+                });
+                root.track_bounds(bounds)
+            }
+            None => root.selected(|style| style.bg(Role::SurfaceSelected)),
+        }
         .is_selected(move || selected.get());
         let disabled = Rc::new(disabled);
         let root = fade_when_disabled(root, &disabled).enabled(move || !disabled.get());

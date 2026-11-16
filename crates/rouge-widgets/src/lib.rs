@@ -31,9 +31,9 @@ mod window_chrome;
 pub use choice::{Radio, Toggle, radio, toggle};
 pub use components::{
     Backdrop, Button, CheckModel, CheckState, Checkbox, ControlSize, Disclosure, IconButton,
-    ListRow, Modal, SectionHeader, Segment, action_bar, backdrop, button, checkbox, disclosure,
-    empty_state, icon_button, list_row, modal, muted_text, notification, section_header, segment,
-    segmented_control,
+    ListRow, Modal, SectionHeader, Segment, SegmentedControl, action_bar, backdrop, button,
+    checkbox, disclosure, empty_state, icon_button, list_row, modal, muted_text, notification,
+    section_header, segment, segmented_control,
 };
 pub use fonts::{CODE_FONT, UI_FONT, bundled_fonts};
 pub use icon::{Icon, IconName};

@@ -1,5 +1,5 @@
 use rouge_core::testing::TestResult;
-use rouge_core::{Styled, View, div, text, view};
+use rouge_core::{Color, Styled, View, div, text, view};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::*;
@@ -68,6 +68,84 @@ fn section_action_and_disclosure_do_not_trigger_each_other() -> TestResult {
 }
 
 #[test]
+fn checked_styles_apply_while_a_checkbox_is_checked() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let checked = signal(false);
+    let mut ui = component_test().size(120.0, 120.0).build(move || {
+        view! { <checkbox test_id="check" checked size=12.0 checked:size=20.0/> }
+    });
+    assert_eq!(ui.rect_of("check")?.size.width, 12.0);
+    ui.click_on("check")?;
+    assert!(checked.get());
+    assert_eq!(ui.rect_of("check")?.size.width, 20.0);
+    Ok(())
+}
+
+#[test]
+fn an_icon_button_paints_its_icon_in_the_given_color() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test().size(64.0, 64.0).build(|| {
+        view! {
+            <icon_button icon=IconName::Plus label="Add" color=Color::RED size=64.0 icon_size=64.0/>
+        }
+    });
+    ui.advance(0.0);
+    let [red, green, blue, _] = ui.pixel(32, 32)?;
+    assert!(
+        red > 200 && green < 60 && blue < 60,
+        "got {red} {green} {blue}"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_segment_indicator_slides_to_the_selected_segment() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let selected = signal(0);
+    let mut ui = component_test().size(320.0, 120.0).build(move || {
+        view! {
+            <segmented_control test_id="segments">
+                <segment test_id="first" label="First" w=80.0 selected={move || selected.get() == 0}/>
+                <segment test_id="second" label="Second" w=80.0 selected={move || selected.get() == 1}/>
+            </segmented_control>
+        }
+    });
+    ui.run(0.5);
+    assert_eq!(ui.rect_of("segments-indicator")?, ui.rect_of("first")?);
+    selected.set(1);
+    ui.run(1.0);
+    assert_eq!(ui.rect_of("segments-indicator")?, ui.rect_of("second")?);
+    Ok(())
+}
+
+#[test]
+fn the_segment_indicator_hides_without_a_selection_and_returns_with_one() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let selected = signal(Some(0));
+    let mut ui = component_test().size(320.0, 120.0).build(move || {
+        view! {
+            <segmented_control test_id="segments" indicator:bg=Color::RED>
+                <segment test_id="first" label="First" w=80.0 selected={move || selected.get() == Some(0)}/>
+                <segment test_id="second" label="Second" w=80.0 selected={move || selected.get() == Some(1)}/>
+            </segmented_control>
+        }
+    });
+    ui.run(0.5);
+    let first = ui.rect_of("first")?;
+    let (x, y) = (first.origin.x as u32 + 6, first.center().y as u32);
+    assert_eq!(ui.rect_of("segments-indicator")?, first);
+    assert!(is_red(ui.pixel(x, y)?));
+    selected.set(None);
+    ui.run(0.5);
+    assert!(!is_red(ui.pixel(x, y)?));
+    selected.set(Some(1));
+    ui.run(1.0);
+    assert_eq!(ui.rect_of("segments-indicator")?, ui.rect_of("second")?);
+    assert!(!is_red(ui.pixel(x, y)?));
+    Ok(())
+}
+
+#[test]
 fn checkboxes_keep_their_size_and_toggle_without_activating_their_row() -> TestResult {
     let _entered = Runtime::new().enter();
     let (state, plain, disabled, rows) = (
@@ -102,4 +180,8 @@ fn checkboxes_keep_their_size_and_toggle_without_activating_their_row() -> TestR
     ui.click_on("disabled")?;
     assert_eq!((plain.get(), rows.get()), (true, 1));
     Ok(())
+}
+
+fn is_red([red, green, blue, _]: [u8; 4]) -> bool {
+    red > 200 && green < 60 && blue < 60
 }
