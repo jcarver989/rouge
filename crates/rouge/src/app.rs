@@ -1,4 +1,6 @@
 use crate::platform;
+#[cfg(not(target_arch = "wasm32"))]
+use rouge_core::ThreadError;
 use rouge_core::{AnyView, Decorations, Menu, View};
 use rouge_render::{GpuError, Size};
 use rouge_widgets::bundled_fonts;
@@ -92,6 +94,9 @@ pub enum AppError {
     Menu(#[from] muda::Error),
     #[error(transparent)]
     Gpu(#[from] GpuError),
+    #[cfg(not(target_arch = "wasm32"))]
+    #[error(transparent)]
+    Compositor(#[from] ThreadError),
 }
 
 pub(crate) type RootFn = Box<dyn FnOnce() -> AnyView>;

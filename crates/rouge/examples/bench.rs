@@ -195,7 +195,7 @@ fn layers_bench(layers: usize) -> Result<(), TestError> {
     let (mut update, mut cpu, mut uploaded) = (Timer::default(), Timer::default(), 0);
     for toggle in 0..6 {
         on.set(toggle % 2 == 0);
-        while ui.next_frame() == Wake::Now {
+        while ui.next_frame() == Wake::Now || ui.is_animating() {
             let start = Instant::now();
             ui.advance(FRAME);
             update.record(start.elapsed());
@@ -549,7 +549,7 @@ fn scroll_fling() -> Result<Report, TestError> {
         }
         ui.scroll_release();
         let (mut frames, mut passes) = (0, 0);
-        while ui.next_frame() == Wake::Now && frames < 1200 {
+        while (ui.next_frame() == Wake::Now || ui.is_animating()) && frames < 1200 {
             passes += frame(ui)?;
             frames += 1;
         }

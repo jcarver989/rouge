@@ -7,23 +7,26 @@ use super::{
     named_key, pointer_button, window_command,
 };
 use crate::app::{App, AppError, RootFn, WindowOptions};
-use crate::driver::{Driver, Setup, TextInput, connect, latch};
+use crate::driver::{Driver, Inline, Setup, TextInput, connect};
 use crate::platform::{default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use pollster::block_on;
 use rouge_core::{
-    Decorations, FileDropPhase, ImeEvent, Key, KeyEvent, Menu, Modifiers, WindowCommand,
+    CompositorEvent, Decorations, Events, FileDropPhase, ImeEvent, Key, KeyEvent, Menu, Message,
+    Modifiers, ThreadError, WindowCommand, WindowId as LinkWindow, mailbox, spawn,
 };
 use rouge_reactive::Runtime;
 #[cfg(feature = "tokio-rt")]
 use rouge_reactive::set_tokio;
 #[cfg(target_os = "ios")]
 use rouge_render::Edges;
-use rouge_render::{Gpu, Point, Surfaces};
+use rouge_render::{Gpu, Point, Target};
 use std::borrow::Cow;
 use std::env::var;
 use std::mem::take;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tracing::level_filters::LevelFilter;
 use tracing::trace_span;
@@ -66,7 +69,9 @@ pub(crate) fn run(app: App) -> Result<(), AppError> {
         _trace: trace(&profile),
         waker,
         gpu: None,
-        surfaces: None,
+        compositor: None,
+        next_window: 0,
+        closing: Vec::new(),
         pending: app.windows,
         menus,
         bar,
@@ -77,7 +82,10 @@ pub(crate) fn run(app: App) -> Result<(), AppError> {
         error: None,
     };
     event_loop.run_app(&mut runner)?;
-    runner.error.map_or(Ok(()), Err)
+    let closed = runner.compositor.take().map_or(Ok(()), Compositing::close);
+    runner.windows.clear();
+    runner.closing.clear();
+    runner.error.map_or(closed, Err)
 }
 
 struct Runner {
@@ -86,7 +94,9 @@ struct Runner {
     _trace: Option<FlushGuard>,
     waker: EventLoopProxy<()>,
     gpu: Option<(Instance, Gpu)>,
-    surfaces: Option<Surfaces>,
+    compositor: Option<Compositing>,
+    next_window: u64,
+    closing: Vec<(LinkWindow, Arc<Window>)>,
     pending: Vec<(WindowOptions, RootFn)>,
     menus: Vec<Menu>,
     bar: bool,
@@ -125,12 +135,10 @@ impl Runner {
             ))
         };
         let (gpu, surface) = block_on(connect(&mut self.gpu, instance, window.clone()))?;
-        let waker = self.waker.clone();
-        self.surfaces.get_or_insert_with(|| {
-            Surfaces::new(&gpu).with_waker(move || {
-                let _ = waker.send_event(());
-            })
-        });
+        let compositor = match &self.compositor {
+            Some(compositor) => compositor,
+            None => (self.compositor).insert(Compositing::open(&gpu, self.waker.clone())?),
+        };
         let physical = surface_size(&window);
         let chrome = !cfg!(target_os = "ios")
             && (options.decorations == Decorations::Client || !window.is_decorated());
@@ -143,19 +151,31 @@ impl Runner {
         let setup = Setup {
             pixels: (physical.width, physical.height),
             scale: window.scale_factor() as f32,
+            interval: refresh_interval(&window),
             appearance: appearance(window.theme()),
             menus: &self.menus,
             fonts: &self.fonts,
             profile: &self.profile,
         };
-        let driver = Driver::open(gpu, surface, setup, NativeClipboard::new(), move || {
-            window_root(title, bar, chrome, root)
-        })?;
-        let interval = refresh_interval(&window);
+        let id = LinkWindow(self.next_window);
+        self.next_window += 1;
+        let (driver, target) = Driver::open(
+            id,
+            &gpu,
+            surface,
+            setup,
+            compositor.messages.clone(),
+            NativeClipboard::new(),
+            move || window_root(title, bar, chrome, root),
+        )?;
+        let notify = window.clone();
+        driver.attach(match compositor.host {
+            Host::Thread(_) => target,
+            Host::Inline(_) => target.before_present(move || notify.pre_present_notify()),
+        });
         self.windows.push(WindowState {
             window,
             driver,
-            interval,
             occluded: false,
             wheel: Wheel::default(),
             #[cfg(target_os = "ios")]
@@ -169,9 +189,34 @@ impl Runner {
         Ok(())
     }
 
+    fn pump(&mut self) {
+        let events = self.compositor.iter().flat_map(|c| c.events.try_iter());
+        events.for_each(|event| deliver(&mut self.windows, &mut self.closing, event));
+    }
+
+    fn settle(&mut self, window: LinkWindow, timeout: Duration) {
+        let Some(compositor) = &mut self.compositor else {
+            return;
+        };
+        compositor.turn();
+        let deadline = Instant::now() + timeout;
+        while let Host::Thread(_) = compositor.host
+            && let Some(left) = deadline.checked_duration_since(Instant::now())
+            && let Ok(event) = compositor.events.recv_timeout(left)
+        {
+            let presented = event == (window, CompositorEvent::Presented);
+            deliver(&mut self.windows, &mut self.closing, event);
+            if presented {
+                break;
+            }
+        }
+        self.pump();
+    }
+
     fn process_window_commands(&mut self, event_loop: &ActiveEventLoop, only: Option<WindowId>) {
         let mut quit = false;
         let commands = &mut self.commands;
+        let closing = &mut self.closing;
         self.windows.retain_mut(|state| {
             if only.is_some_and(|id| id != state.window.id()) {
                 return true;
@@ -184,6 +229,9 @@ impl Runner {
                     WindowCommand::Quit => quit = true,
                     command => window_command(&state.window, command),
                 }
+            }
+            if !open {
+                state.close(closing);
             }
             open
         });
@@ -207,16 +255,11 @@ impl ApplicationHandler for Runner {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.windows.retain(|state| !state.driver.finished());
-        let surfaced = self.surfaces.as_mut().is_some_and(|surfaces| {
-            latch(
-                surfaces,
-                self.windows.iter_mut().map(|state| &mut state.driver),
-            )
-        });
+        let mut deadline = self.compositor.as_mut().and_then(Compositing::turn);
+        self.pump();
         let now = Instant::now();
-        let mut deadline = self.surfaces.as_ref().and_then(Surfaces::next_deadline);
         for state in self.windows.iter_mut().filter(|state| !state.occluded) {
-            match state.driver.frame_due(surfaced, now) {
+            match state.driver.frame_due(now) {
                 Some(due) if due <= now => state.window.request_redraw(),
                 Some(due) => deadline = Some(deadline.map_or(due, |at| at.min(due))),
                 None => {}
@@ -252,19 +295,28 @@ impl ApplicationHandler for Runner {
         let _event = trace_span!("event", ?event).entered();
         match event {
             WindowEvent::CloseRequested => {
+                state.close(&mut self.closing);
                 self.windows.retain(|state| state.window.id() != id);
             }
             WindowEvent::RedrawRequested => {
-                if !state.occluded
-                    && let Some(surfaces) = &mut self.surfaces
-                {
-                    state.redraw(surfaces);
+                if !state.occluded {
+                    state.driver.step();
                 }
                 if state.driver.finished() {
                     self.windows.clear();
                 }
             }
-            event => state.event(event),
+            event => {
+                let resized = matches!(
+                    event,
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
+                );
+                state.event(event);
+                if resized && !state.occluded {
+                    let (window, timeout) = (state.driver.window(), state.driver.interval() * 2);
+                    self.settle(window, timeout);
+                }
+            }
         }
         if let Some(state) = self
             .windows
@@ -280,7 +332,6 @@ impl ApplicationHandler for Runner {
 struct WindowState {
     window: Arc<Window>,
     driver: Driver,
-    interval: Duration,
     occluded: bool,
     wheel: Wheel,
     #[cfg(target_os = "ios")]
@@ -289,6 +340,11 @@ struct WindowState {
 }
 
 impl WindowState {
+    fn close(&self, closing: &mut Vec<(LinkWindow, Arc<Window>)>) {
+        self.driver.close();
+        closing.push((self.driver.window(), self.window.clone()));
+    }
+
     fn event(&mut self, event: WindowEvent) {
         let ui = self.driver.ui();
         match event {
@@ -305,10 +361,10 @@ impl WindowState {
             }
             WindowEvent::Resized(size) => self.resize(size, self.window.scale_factor()),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.interval = refresh_interval(&self.window);
+                self.refresh_interval();
                 self.resize(surface_size(&self.window), scale_factor);
             }
-            WindowEvent::Moved(_) => self.interval = refresh_interval(&self.window),
+            WindowEvent::Moved(_) => self.refresh_interval(),
             WindowEvent::CursorMoved { position, .. } => {
                 let position = logical_point(position, ui.scale());
                 ui.pointer_moved(position);
@@ -348,6 +404,7 @@ impl WindowState {
             WindowEvent::Occluded(occluded) => {
                 self.occluded = occluded;
                 ui.set_visible(!occluded);
+                (self.driver).configure(|config| config.visible = !occluded);
                 if !occluded {
                     self.window.request_redraw();
                 }
@@ -389,9 +446,18 @@ impl WindowState {
         }
     }
 
+    fn refresh_interval(&mut self) {
+        let interval = refresh_interval(&self.window);
+        self.driver.configure(|config| config.interval = interval);
+    }
+
     fn resize(&mut self, physical: PhysicalSize<u32>, scale: f64) {
-        self.driver
+        let resized = self
+            .driver
             .resize((physical.width, physical.height), scale as f32);
+        if resized.is_some() && !self.occluded {
+            self.driver.step();
+        }
         #[cfg(target_os = "ios")]
         self.sync_safe_area();
         self.window.request_redraw();
@@ -417,16 +483,6 @@ impl WindowState {
                 ui.scroll_release();
             }
             WheelGesture::Coast => {}
-        }
-    }
-
-    fn redraw(&mut self, surfaces: &mut Surfaces) {
-        let window = &self.window;
-        if self
-            .driver
-            .draw(surfaces, self.interval, || window.pre_present_notify())
-        {
-            window.request_redraw();
         }
     }
 }
@@ -468,6 +524,68 @@ fn unmodified_key(event: &WinitKeyEvent) -> WinitKey {
 #[cfg(target_os = "ios")]
 fn unmodified_key(event: &WinitKeyEvent) -> WinitKey {
     event.logical_key.clone()
+}
+
+enum Host {
+    Inline(Box<Inline>),
+    Thread(JoinHandle<Vec<Target>>),
+}
+
+struct Compositing {
+    messages: Sender<Message>,
+    events: Events,
+    host: Host,
+}
+
+impl Compositing {
+    fn open(gpu: &Gpu, waker: EventLoopProxy<()>) -> Result<Self, AppError> {
+        let wake = move || {
+            let _ = waker.send_event(());
+        };
+        let (messages, mailbox, events) = mailbox();
+        let host = if var("ROUGE_COMPOSITOR").is_ok_and(|mode| mode == "thread") {
+            let epoch = Instant::now();
+            Host::Thread(spawn(gpu.clone(), messages.clone(), mailbox, epoch, wake)?)
+        } else {
+            Host::Inline(Box::new(Inline::new(gpu, mailbox, wake)))
+        };
+        Ok(Compositing {
+            messages,
+            events,
+            host,
+        })
+    }
+
+    fn turn(&mut self) -> Option<Instant> {
+        match &mut self.host {
+            Host::Inline(inline) => inline.turn(),
+            Host::Thread(_) => None,
+        }
+    }
+
+    fn close(self) -> Result<(), AppError> {
+        if let Host::Thread(thread) = self.host {
+            let _ = self.messages.send(Message::Shutdown);
+            drop(thread.join().map_err(|_| ThreadError::Panicked)?);
+        }
+        Ok(())
+    }
+}
+
+fn deliver(
+    windows: &mut [WindowState],
+    closing: &mut Vec<(LinkWindow, Arc<Window>)>,
+    (id, event): (LinkWindow, CompositorEvent),
+) {
+    if event == CompositorEvent::Closed {
+        return closing.retain(|(window, _)| *window != id);
+    }
+    if let Some(state) = windows.iter_mut().find(|state| state.driver.window() == id) {
+        state.driver.handle(event);
+        if state.driver.frame_due(Instant::now()).is_some() {
+            state.window.request_redraw();
+        }
+    }
 }
 
 fn refresh_interval(window: &Window) -> Duration {

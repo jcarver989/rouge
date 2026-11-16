@@ -2,16 +2,16 @@ use super::clipboard::WebClipboard;
 use super::dom_key;
 use super::trace::PerformanceLayer;
 use crate::app::{App, AppError, RootFn, WindowOptions};
-use crate::driver::{Driver, Setup, TextInput, connect, latch};
+use crate::driver::{Driver, Inline, Setup, TextInput, connect};
 use crate::platform::{LINE_SCROLL, css_cursor, default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use js_sys::{Array, Error as JsError, Function, Reflect};
 use rouge_core::{
-    Appearance, EditAction, ImeEvent, KeyEvent, Menu, Modifiers, Point, PointerButton, TouchPhase,
-    Ui, WindowCommand,
+    Appearance, EditAction, Events, ImeEvent, KeyEvent, Menu, Modifiers, Point, PointerButton,
+    TouchPhase, Ui, WindowCommand, WindowId, mailbox,
 };
 use rouge_reactive::Runtime;
-use rouge_render::{Gpu, Surfaces};
+use rouge_render::Gpu;
 use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::mem::{forget, replace, take};
@@ -228,7 +228,8 @@ impl Drop for Listener {
 
 struct State {
     driver: Driver,
-    surfaces: Surfaces,
+    compositor: Inline,
+    events: Events,
     pressed: bool,
     composing: bool,
     touch: Option<i32>,
@@ -314,7 +315,8 @@ impl Host {
         let id = NEXT_HOST.get();
         NEXT_HOST.set(id + 1);
         let runtime = Runtime::with_waker(move || wake(id));
-        let surfaces = Surfaces::new(&gpu).with_waker(move || wake(id));
+        let (messages, mailbox, events) = mailbox();
+        let compositor = Inline::new(&gpu, mailbox, move || wake(id));
         let driver = {
             let _entered = runtime.enter();
             let title = options.title;
@@ -322,14 +324,22 @@ impl Host {
             let setup = Setup {
                 pixels,
                 scale: scale as f32,
+                interval: Duration::from_secs_f64(1.0 / 60.0),
                 appearance: appearance(&window),
                 menus,
                 fonts,
                 profile: settings,
             };
-            let mut driver = Driver::open(gpu, surface, setup, clipboard.clone(), move || {
-                window_root(title, bar, false, root)
-            })?;
+            let (mut driver, target) = Driver::open(
+                WindowId(0),
+                &gpu,
+                surface,
+                setup,
+                messages,
+                clipboard.clone(),
+                move || window_root(title, bar, false, root),
+            )?;
+            driver.attach(target);
             driver.ui().set_route(route(&window));
             driver
         };
@@ -353,7 +363,8 @@ impl Host {
             input,
             state: RefCell::new(State {
                 driver,
-                surfaces,
+                compositor,
+                events,
                 pressed: false,
                 composing: false,
                 touch: None,
@@ -448,11 +459,16 @@ impl Host {
     }
 
     fn due(&self, state: &mut State) -> Option<Instant> {
+        let now = Instant::now();
         if self.resized.get() {
-            return Some(Instant::now());
+            return Some(now);
         }
-        let surfaced = latch(&mut state.surfaces, [&mut state.driver]);
-        state.driver.frame_due(surfaced, Instant::now())
+        pump(state);
+        let composite = state.compositor.next_wake();
+        [state.driver.frame_due(now), composite]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     fn invalidate_rect(&self) {
@@ -513,6 +529,7 @@ impl Host {
             return;
         };
         let interval = state.tick(time);
+        state.driver.configure(|config| config.interval = interval);
         if self.resized.take() {
             let scale = self.window.device_pixel_ratio() as f32;
             if let Some((width, height)) = state.driver.resize(self.pixels.get(), scale) {
@@ -525,12 +542,12 @@ impl Host {
             }
         }
         self.commands(&mut state);
-        let State {
-            driver, surfaces, ..
-        } = &mut *state;
-        if driver.draw(surfaces, interval, || {}) {
-            self.resized.set(true);
+        pump(&mut state);
+        if state.driver.frame_due(Instant::now()).is_some() {
+            state.driver.step();
         }
+        state.compositor.turn();
+        pump(&mut state);
         let due = self.due(&mut state);
         let input = self.sync(&mut state);
         drop(state);
@@ -867,6 +884,12 @@ fn listeners(
         .into_iter()
         .map(|(target, source, names)| Listener::new(slot, target, source, names))
         .collect()
+}
+
+fn pump(state: &mut State) {
+    for (_, event) in state.events.try_iter() {
+        state.driver.handle(event);
+    }
 }
 
 fn route(window: &Window) -> String {
