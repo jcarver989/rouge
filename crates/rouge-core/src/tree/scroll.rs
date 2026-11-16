@@ -25,11 +25,20 @@ impl Element {
 }
 
 impl Tree {
-    pub(crate) fn scroll_to(&mut self, id: ElementId, offset: Point) {
+    pub(crate) fn scroll_to(&mut self, id: ElementId, offset: Point, anchored: bool) {
+        let layer = self.layer_id(id, Slot::Content);
         let Some(scroll) = self.elements.get_mut(id).and_then(Element::scroll_mut) else {
             return;
         };
         if scroll.published == offset {
+            return;
+        }
+        if anchored
+            && let Some(layer) = layer
+            && (self.layers).scroll_carry(layer, offset - scroll.published)
+        {
+            scroll.published = offset;
+            self.mark(Dirty::Composite);
             return;
         }
         scroll.target = Some(offset);

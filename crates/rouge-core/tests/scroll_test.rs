@@ -1196,6 +1196,40 @@ fn a_following_list_sticks_to_its_end_until_scrolled_up_and_resumes_at_the_botto
 
 const FRAME: f64 = 1.0 / 60.0;
 
+#[test]
+fn a_fling_keeps_its_momentum_when_rows_measured_above_it_reanchor_the_list() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, handle) = TestUiBuilder::default().build_with(|| {
+        let handle = virtual_list_handle();
+        (
+            virtual_list(|| 400, 20.0, |_| div().h(50.0))
+                .measure_rows(|| 0)
+                .handle(handle)
+                .w(100.0)
+                .h(100.0),
+            handle,
+        )
+    });
+    handle.scroll_to_row(200, Align::Top);
+    ui.run(0.1);
+    ui.pointer_moved(Point::new(50.0, 50.0));
+    ui.scroll_drag(Point::new(0.0, 10.0));
+    ui.advance(0.05);
+    ui.scroll_drag(Point::new(0.0, 50.0));
+    ui.scroll_release();
+    ui.run(0.25);
+    let coasting = handle.top_row().get_untracked();
+    assert!(coasting < 199, "the flick moved up the list: {coasting}");
+    ui.run(4.0);
+    let rest = handle.top_row().get_untracked();
+    assert!(
+        rest + 4 <= coasting,
+        "1000px/s coasts 500px in all, past the rows measured on the way: {coasting} then {rest}"
+    );
+    assert_eq!(ui.next_frame(), Wake::Idle);
+    Ok(())
+}
+
 fn flick(ui: &mut TestUi, speed: f32, over: f64) {
     ui.scroll_drag(Point::new(0.0, -10.0));
     ui.advance(over);

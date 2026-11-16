@@ -23,11 +23,18 @@ pub struct ScrollState {
     pub offset: Point,
     pub viewport: Size,
     pub content: Size,
+    pub anchored: bool,
 }
 
 impl ScrollState {
     pub fn scroll_to(&mut self, offset: Point) {
         self.offset = offset;
+        self.anchored = false;
+    }
+
+    pub fn anchor_to(&mut self, offset: Point) {
+        self.offset = offset;
+        self.anchored = true;
     }
 
     pub fn max_offset(&self) -> Point {
@@ -199,22 +206,39 @@ impl Fling {
     }
 
     fn release(offset: f32, velocity: f32, max: f32, at: f64) -> Self {
-        let mut fling = Fling::rest(offset);
         if offset < 0.0 || offset > max {
+            let mut fling = Fling::rest(offset);
             fling
                 .glide
                 .fling(velocity, offset.clamp(0.0, max), BOUNCE, at);
+            fling
         } else if max > 0.0 {
-            fling.glide.decay(velocity, Decay::new(), at);
-            let limit = if velocity > 0.0 { max } else { 0.0 };
-            fling.bounce = fling.glide.crossing(limit).map(|crossed| {
-                let speed = fling.glide.state(crossed).1;
-                let mut bounce = Animated::new(limit);
-                bounce.fling(speed, limit, BOUNCE, crossed);
-                bounce
-            });
+            Fling::coast(offset, velocity, max, at)
+        } else {
+            Fling::rest(offset)
         }
+    }
+
+    fn coast(offset: f32, velocity: f32, max: f32, at: f64) -> Self {
+        let mut fling = Fling::rest(offset);
+        fling.glide.decay(velocity, Decay::new(), at);
+        let limit = if velocity > 0.0 { max } else { 0.0 };
+        fling.bounce = fling.glide.crossing(limit).map(|crossed| {
+            let speed = fling.glide.state(crossed).1;
+            let mut bounce = Animated::new(limit);
+            bounce.fling(speed, limit, BOUNCE, crossed);
+            bounce
+        });
         fling
+    }
+
+    fn carry(&self, delta: f32, max: f32, at: f64) -> Self {
+        let (offset, velocity) = self.state(at);
+        if self.is_gliding(at) {
+            Fling::coast(offset + delta, velocity, max, at)
+        } else {
+            Fling::release(offset + delta, velocity, max, at)
+        }
     }
 
     fn current(&self, at: f64) -> &Animated {
@@ -452,6 +476,29 @@ impl Layer {
             scroll.offset = scroll.clamp(target(scroll.offset));
             self.fling = scroll.offset.to_array().map(Fling::rest);
         }
+    }
+
+    fn carry(&mut self, delta: Point, at: f64) -> bool {
+        let Some(offset) = self.offset(at) else {
+            return false;
+        };
+        if !self.fling.iter().any(Fling::is_animating) {
+            return false;
+        }
+        let Some(scroll) = &mut self.scroll else {
+            return false;
+        };
+        scroll.offset = offset + delta;
+        let (rest, max) = (scroll.offset.to_array(), scroll.max_offset().to_array());
+        let axes = rest.into_iter().zip(delta.to_array()).zip(max);
+        for (fling, ((rest, delta), max)) in self.fling.iter_mut().zip(axes) {
+            *fling = if fling.is_animating() {
+                fling.carry(delta, max, at)
+            } else {
+                Fling::rest(rest)
+            };
+        }
+        true
     }
 
     fn release(&mut self, velocity: Point, at: f64) -> bool {
@@ -948,6 +995,15 @@ impl LayerModel {
 
     pub fn scroll_to(&mut self, id: LayerId, offset: Point) {
         self.set(id, |layer, at| layer.scroll_to(|_| offset, at));
+    }
+
+    pub fn scroll_carry(&mut self, id: LayerId, delta: Point) -> bool {
+        let mut carried = false;
+        self.update(id, |layer, _, at| {
+            carried = layer.carry(delta, at);
+            carried
+        });
+        carried
     }
 
     pub fn scroll_drag(&mut self, id: LayerId, delta: Point) {

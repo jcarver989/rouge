@@ -591,7 +591,7 @@ fn attach_handle<T: Clone + Eq + Hash + 'static>(
             handle.request.set(None);
         }
         if current.offset.y != y {
-            state.update(|state| state.offset.y = y);
+            state.update(|state| state.scroll_to(Point::new(state.offset.x, y)));
         }
     });
 }

@@ -46,7 +46,7 @@ pub(crate) enum Op {
     LayerProp(LayerProp, MotionProp, bool),
     Effect(EffectSlot, EffectInstance),
     ScrollLink(u64, ScrollLinked),
-    ScrollTo(Point),
+    ScrollTo(Point, bool),
 }
 
 impl Op {
@@ -64,7 +64,7 @@ impl Op {
             Op::LayerProp(prop, value, animate) => tree.set_layer_prop(id, prop, value, animate),
             Op::Effect(slot, effect) => tree.set_layer_effect(id, slot, effect),
             Op::ScrollLink(key, link) => tree.set_scroll_link(id, key, link),
-            Op::ScrollTo(offset) => tree.scroll_to(id, offset),
+            Op::ScrollTo(offset, anchored) => tree.scroll_to(id, offset, anchored),
         }
     }
 }
@@ -717,8 +717,11 @@ impl Scrollable for Div {
     fn scroll_state(mut self, state: Signal<ScrollState>) -> Self {
         self.spec.extras().scroll.get_or_insert_default().observer = Some(state);
         self.write(
-            Prop::Dynamic(Box::new(move || state.get().offset)),
-            |offset| Some(Op::ScrollTo(offset)),
+            Prop::Dynamic(Box::new(move || {
+                let state = state.get();
+                (state.offset, state.anchored)
+            })),
+            |(offset, anchored)| Some(Op::ScrollTo(offset, anchored)),
         )
     }
 }

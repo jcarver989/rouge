@@ -3,7 +3,7 @@ use super::{RowHeight, RowKey};
 use crate::compositor::ScrollState;
 use crate::prop::Prop;
 use rouge_reactive::{Memo, Signal, batch, effect, memo, signal};
-use rouge_render::Size;
+use rouge_render::{Point, Size};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::hash::Hash;
@@ -64,7 +64,7 @@ impl Rows {
         drop(heights);
         batch(|| {
             if y != offset {
-                state.update(|state| state.offset.y = offset);
+                state.update(|state| state.anchor_to(Point::new(state.offset.x, offset)));
             }
             self.version.update(|version| *version += 1);
         });
