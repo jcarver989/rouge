@@ -6,7 +6,7 @@ pub struct RovingFocus(Rc<[FocusHandle]>);
 
 impl RovingFocus {
     pub fn new(count: usize) -> Self {
-        RovingFocus((0..count).map(|_| focus_handle()).collect())
+        RovingFocus(Vec::from_fn(count, |_| focus_handle()).into())
     }
 
     pub fn len(&self) -> usize {

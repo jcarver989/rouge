@@ -150,7 +150,7 @@ impl ReadSignal<bool> {
 
 impl Signal<bool> {
     pub fn toggle(&self) {
-        self.update(|on| *on = !*on);
+        self.update(bool::toggle);
     }
 }
 

@@ -296,7 +296,7 @@ fn glass_over_a_surface_does_not_reuse_a_stale_backdrop() -> TestResult {
     let nested = [stage.child, glass].map(|layer| Nested { layer, clip: None });
     stage.content(
         stage.root,
-        (0..3).map(|_| DrawList::new()).collect(),
+        Vec::from_fn(3, |_| DrawList::new()),
         nested.to_vec(),
     );
     surface.present(Pattern::Solid(RED))?;

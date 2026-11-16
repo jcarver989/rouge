@@ -94,7 +94,7 @@ impl Todos {
     }
 
     pub(crate) fn toggle(self, id: u64) {
-        self.items.update(&id, |todo| todo.done = !todo.done);
+        self.items.update(&id, |todo| todo.done.toggle());
     }
 
     pub(crate) fn toggle_all(self) {

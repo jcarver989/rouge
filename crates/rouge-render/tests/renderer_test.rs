@@ -476,12 +476,10 @@ fn many_layers_grow_the_uniform_buffer() -> Result<(), GpuError> {
             Rect::new(0.0, 0.0, 1.0, 1.0),
             Color::WHITE,
         )]));
-        (0..200)
-            .map(|i| LayerDraw {
-                transform: Affine::translate((i % 20) as f32, (i / 20) as f32),
-                ..LayerDraw::new(list)
-            })
-            .collect()
+        Vec::from_fn(200, |i| LayerDraw {
+            transform: Affine::translate((i % 20) as f32, (i / 20) as f32),
+            ..LayerDraw::new(list)
+        })
     })?;
     assert_near(img.pixel(0, 0), WHITE, "first layer");
     assert_near(img.pixel(19, 9), WHITE, "last layer");
@@ -496,12 +494,10 @@ fn layers_spanning_many_uniform_pages_each_keep_their_own_transform() -> Result<
             Rect::new(0.0, 0.0, 1.0, 1.0),
             Color::WHITE,
         )]));
-        (0..1600)
-            .map(|i| LayerDraw {
-                transform: Affine::translate((i % 40) as f32, (i / 40) as f32),
-                ..LayerDraw::new(list)
-            })
-            .collect()
+        Vec::from_fn(1600, |i| LayerDraw {
+            transform: Affine::translate((i % 40) as f32, (i / 40) as f32),
+            ..LayerDraw::new(list)
+        })
     })?;
     for (x, y) in (0..40).flat_map(|y| (0..40).map(move |x| (x, y))) {
         assert_near(img.pixel(x, y), WHITE, "every layer lands on its own pixel");

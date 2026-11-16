@@ -6,17 +6,15 @@ fn a_selection_change_notifies_only_the_old_and_new_keys() {
     let _driver = Driver::new();
     let selected = signal(Some(0usize));
     let selection = selector(move || selected.get());
-    let runs: Vec<_> = (0..1000)
-        .map(|row| {
-            let (runs, bump) = counter();
-            let on = selection.is(Some(row));
-            effect(move || {
-                on.get();
-                bump();
-            });
-            runs
-        })
-        .collect();
+    let runs = Vec::from_fn(1000, |row| {
+        let (runs, bump) = counter();
+        let on = selection.is(Some(row));
+        effect(move || {
+            on.get();
+            bump();
+        });
+        runs
+    });
     assert!(selection.is(Some(0)).get_untracked());
     let before = stats();
     selected.set(Some(500));

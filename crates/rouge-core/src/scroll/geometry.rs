@@ -133,21 +133,19 @@ pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
             }
         };
         let estimates = if let RowHeight::Each(indexed) = &input {
-            (0..count)
-                .map(|i| {
-                    let indexed = indexed.clone();
-                    let keys = keys.clone();
-                    memo(move || {
-                        let same_shape =
-                            if let Some((current, keys)) = current_keys.zip(keys.as_ref()) {
-                                current.with_untracked(|current| Rc::ptr_eq(current, keys))
-                            } else {
-                                count == current_count.get_untracked()
-                            };
-                        same_shape.then(|| height(indexed(i)))
-                    })
+            Vec::from_fn(count, |i| {
+                let indexed = indexed.clone();
+                let keys = keys.clone();
+                memo(move || {
+                    let same_shape = if let Some((current, keys)) = current_keys.zip(keys.as_ref())
+                    {
+                        current.with_untracked(|current| Rc::ptr_eq(current, keys))
+                    } else {
+                        count == current_count.get_untracked()
+                    };
+                    same_shape.then(|| height(indexed(i)))
                 })
-                .collect::<Vec<_>>()
+            })
         } else {
             Vec::new()
         };
