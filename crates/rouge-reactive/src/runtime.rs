@@ -5,7 +5,7 @@ use slotmap::{SlotMap, new_key_type};
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::mem::take;
+use std::mem::{DropGuard, take};
 use std::rc::Rc;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle;
@@ -141,16 +141,8 @@ impl Drop for Entered {
     }
 }
 
-pub(crate) struct Restore<'a, T: Copy>(&'a Cell<T>, T);
-
-impl<T: Copy> Drop for Restore<'_, T> {
-    fn drop(&mut self) {
-        self.0.set(self.1);
-    }
-}
-
-pub(crate) fn scoped<T: Copy>(cell: &Cell<T>, value: T) -> Restore<'_, T> {
-    Restore(cell, cell.replace(value))
+pub(crate) fn scoped<T: Copy>(cell: &Cell<T>, value: T) -> DropGuard<T, impl FnOnce(T) + '_> {
+    DropGuard::new(cell.replace(value), move |previous| cell.set(previous))
 }
 
 impl Graph {

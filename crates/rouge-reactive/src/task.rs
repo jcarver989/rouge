@@ -3,6 +3,8 @@ use slotmap::{SlotMap, new_key_type};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::marker::PhantomData;
+#[cfg(feature = "tokio-rt")]
+use std::mem::DropGuard;
 use std::mem::take;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -276,23 +278,13 @@ fn tokio() -> Option<TokioHandle> {
 #[cfg(feature = "tokio-rt")]
 fn bridge<T: Send + 'static>(join: JoinHandle<T>) -> Task<T> {
     let abort = join.abort_handle();
-    let guard = AbortOnDrop(abort.clone());
+    let guard = DropGuard::new(abort.clone(), |abort| abort.abort());
     let mut task = local(async move {
         let _guard = guard;
         Ok(join.await?)
     });
     task.abort = Some(abort);
     task
-}
-
-#[cfg(feature = "tokio-rt")]
-struct AbortOnDrop(AbortHandle);
-
-#[cfg(feature = "tokio-rt")]
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 pub fn poll_tasks() -> bool {
