@@ -16,6 +16,7 @@ use rouge_render::{
     AlphaMode, BufferDesc, DrawList, Frame, GpuError, Origin, Point, SurfaceConfig, SurfaceEvent,
     SurfaceId, surface_channel,
 };
+use std::assert_matches;
 use std::cell::Cell;
 use std::error::Error;
 use std::time::{Duration, Instant};
@@ -336,10 +337,10 @@ fn a_replaced_buffer_is_released_after_the_gpu_finishes_with_it() -> TestResult 
     surface.present(Pattern::Solid(RED))?;
     stage.draw();
     surface.present(Pattern::Solid(BLUE))?;
-    assert!(matches!(
+    assert_matches!(
         surface.present(Pattern::Solid(RED)),
         Err(TestSurfaceError::NoFreeBuffer)
-    ));
+    );
     stage.draw();
     stage.headless.wait()?;
     stage.surfaces().maintain();
@@ -439,12 +440,12 @@ fn srgb_buffers_are_rejected() -> TestResult {
         .surface(source)
         .build()?;
     stage.draw();
-    assert!(matches!(
+    assert_matches!(
         surface.pump(),
         Err(TestSurfaceError::Surface(SurfaceError::Format(
             TextureFormat::Bgra8UnormSrgb
         )))
-    ));
+    );
     Ok(())
 }
 
@@ -454,10 +455,7 @@ fn a_producer_can_drive_the_protocol_directly() -> TestResult {
     let mut stage = staged(source)?;
     stage.draw();
     assert_eq!(producer.try_recv(), Some(SurfaceEvent::Attached));
-    assert!(matches!(
-        producer.try_recv(),
-        Some(SurfaceEvent::Configure(_))
-    ));
+    assert_matches!(producer.try_recv(), Some(SurfaceEvent::Configure(_)));
     producer.configure(BufferDesc::new(4, 4).count(1))?;
     let queue = producer
         .cx()

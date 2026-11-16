@@ -2,6 +2,7 @@
 
 use rouge_reactive::testing::{Driver, TestResult};
 use rouge_reactive::{Scope, TaskError, set_tokio, signal, spawn, spawn_blocking, spawn_tokio};
+use std::assert_matches;
 use std::future::pending;
 use std::io::Error as IoError;
 use std::mem::replace;
@@ -91,7 +92,7 @@ fn completion_is_published_only_on_ui_poll_and_tokio_panics_are_reported() -> Te
         result.set(Some(task.await));
     });
     driver.run_until(|| result.with(Option::is_some))?;
-    assert!(result.with(|result| matches!(result, Some(Ok(42)))));
+    result.with(|result| assert_matches!(result, Some(Ok(42))));
     let failed = signal(false);
     let task = spawn_tokio(async { panic!("intentional task failure") });
     spawn(async move {
@@ -123,7 +124,7 @@ fn blocking_work_runs_on_the_tokio_pool_and_returns_to_the_ui() -> TestResult {
     let task = spawn_blocking(move || thread::current().id() != owner);
     spawn(async move { result.set(Some(task.await)) });
     driver.run_until(|| result.with(Option::is_some))?;
-    assert!(result.with(|result| matches!(result, Some(Ok(true)))));
+    result.with(|result| assert_matches!(result, Some(Ok(true))));
     Ok(())
 }
 

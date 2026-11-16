@@ -10,7 +10,7 @@ use rouge_syntax::{
     SyntaxTheme, SyntaxWorkStats, analyze,
 };
 use rouge_theme::Rgba;
-use std::{fmt::Write, num::NonZeroU16, ops::Range, ptr};
+use std::{assert_matches, fmt::Write, num::NonZeroU16, ops::Range, ptr};
 use support::{SyntaxBuilder, TestResult, line};
 
 #[test]
@@ -170,10 +170,10 @@ fn unknown_language_is_plain_text_without_parsing() -> TestResult {
 fn input_limits_reject_oversized_sources() -> TestResult {
     let mut fixture = SyntaxBuilder::default().build();
     let accepted = fixture.append("let café=1;")?;
-    assert!(matches!(
+    assert_matches!(
         fixture.append(&"x".repeat(MAX_SOURCE_BYTES)),
         Err(SyntaxError::InputLimit { limit: MAX_SOURCE_BYTES, attempted }) if attempted == MAX_SOURCE_BYTES + 12
-    ));
+    );
     assert_eq!(fixture.stream.revision(), accepted.revision);
     let rejected = analyze("rust", &"x".repeat(MAX_SOURCE_BYTES + 1));
     assert_eq!(rejected.work_stats(), SyntaxWorkStats::default());

@@ -3,6 +3,7 @@
 use pollster::block_on;
 use rouge_render::SurfaceError;
 use rouge_render::interop::{IoSurface, import_io_surface};
+use std::assert_matches;
 use std::error::Error;
 use wgpu::{
     Device, DeviceDescriptor, Instance, InstanceDescriptor, RequestAdapterOptions, TextureFormat,
@@ -56,10 +57,10 @@ fn only_bgra_io_surfaces_can_be_imported() -> Result<(), Box<dyn Error>> {
         TextureFormat::Rgba8Unorm,
         TextureUsages::TEXTURE_BINDING,
     );
-    assert!(matches!(
+    assert_matches!(
         imported,
         Err(SurfaceError::Format(TextureFormat::Rgba8Unorm))
-    ));
+    );
     Ok(())
 }
 

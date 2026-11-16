@@ -2,6 +2,7 @@ use rouge_reactive::testing::{Driver, TestResult, recorder};
 use rouge_reactive::{
     Runtime, Scope, Task, TaskError, effect, on_cleanup, poll_tasks, signal, spawn, spawn_blocking,
 };
+use std::assert_matches;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::thread;
@@ -200,7 +201,7 @@ fn blocking_work_runs_off_the_ui_thread_and_returns_to_it() -> TestResult {
     let task = spawn_blocking(|| thread::current().id());
     spawn(async move { worker.set(Some(task.await)) });
     driver.run_until(|| worker.with(Option::is_some))?;
-    assert!(worker.with(|worker| matches!(worker, Some(Ok(id)) if *id != ui_thread)));
+    worker.with(|worker| assert_matches!(worker, Some(Ok(id)) if *id != ui_thread));
     Ok(())
 }
 

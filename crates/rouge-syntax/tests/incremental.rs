@@ -1,7 +1,7 @@
 mod support;
 
 use rouge_syntax::{MAX_SOURCE_BYTES, SyntaxError, analyze};
-use std::{fmt::Write, str, sync::Arc};
+use std::{assert_matches, fmt::Write, str, sync::Arc};
 use support::{SyntaxBuilder, TestResult, line};
 
 #[test]
@@ -269,13 +269,13 @@ fn raw_input_limit_preserves_partial_line_and_work_state() -> TestResult {
         " ".repeat(MAX_SOURCE_BYTES),
         format!("x\n{}", "y".repeat(MAX_SOURCE_BYTES)),
     ] {
-        assert!(matches!(
+        assert_matches!(
             fixture.append(&source),
             Err(SyntaxError::InputLimit {
                 limit: MAX_SOURCE_BYTES,
                 ..
             })
-        ));
+        );
         assert_eq!(fixture.stream.source(), "let café");
         assert_eq!(fixture.stream.revision(), accepted.revision);
         assert!(Arc::ptr_eq(

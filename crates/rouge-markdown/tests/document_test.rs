@@ -3,7 +3,7 @@ use rouge_markdown::{
     MarkdownTargetKind, MarkdownText,
 };
 use rouge_syntax::{SymbolTags, analyze};
-use std::{error::Error, ops::Range, sync::Arc};
+use std::{assert_matches, error::Error, ops::Range, sync::Arc};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -97,10 +97,10 @@ fn parses_nested_inline_nodes_and_table_rows() -> TestResult {
     let document = MarkdownDocument::parse(
         "**bold _em_** and ~~gone~~ [link](url) ![alt](image)\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
     );
-    assert!(matches!(
+    assert_matches!(
         document.blocks()[0].kind,
         MarkdownBlockKind::Paragraph { .. }
-    ));
+    );
     let MarkdownBlockKind::Table(table) = &document.blocks()[1].kind else {
         return Err("expected table".into());
     };
@@ -200,10 +200,10 @@ fn indented_code_preserves_blank_content_lines() -> TestResult {
 #[test]
 fn raw_html_is_plain_fallback_without_a_target() {
     let document = MarkdownDocument::parse("<div>not executed</div>\n");
-    assert!(matches!(
+    assert_matches!(
         document.blocks()[0].kind,
         MarkdownBlockKind::HtmlFallback { .. }
-    ));
+    );
     assert_eq!(document.targets(), []);
 }
 

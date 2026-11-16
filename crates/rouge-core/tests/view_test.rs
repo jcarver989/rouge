@@ -11,6 +11,7 @@ use rouge_core::{
 };
 use rouge_reactive::{Runtime, Signal, signal, stored, use_context};
 use rouge_render::headless::Image;
+use std::assert_matches;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -876,7 +877,7 @@ fn click_text_clicks_the_middle_of_the_matching_text() -> TestResult {
     });
     ui.click_text("two")?;
     assert_eq!(&*clicks.borrow(), &[Some(5)]);
-    assert!(matches!(ui.click_text("three"), Err(TestError::NoText(_))));
+    assert_matches!(ui.click_text("three"), Err(TestError::NoText(_)));
     Ok(())
 }
 

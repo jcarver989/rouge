@@ -3,6 +3,7 @@ use rouge_core::testing::{
 };
 use rouge_core::{Color, Menu, MenuItem, Point, PointerButton, Rect, Styled, div, dynamic};
 use rouge_reactive::{Runtime, signal};
+use std::assert_matches;
 use std::path::PathBuf;
 
 #[test]
@@ -37,10 +38,10 @@ fn build_with_hands_back_what_the_root_closure_made() -> TestResult {
     ui.click_at(20.0, 20.0);
     assert_eq!(clicks.get_untracked(), 2);
     assert!(!ui.press("enter"), "nothing handles the key");
-    assert!(matches!(
+    assert_matches!(
         TestUi::new(div).bounds(500.0, 500.0),
         Err(TestError::NoElement { .. })
-    ));
+    );
     Ok(())
 }
 
@@ -92,10 +93,7 @@ fn test_ids_follow_dynamic_replacements_and_keep_paint_order() -> TestResult {
     assert_eq!(ui.center_of("row")?, Point::new(40.0, 10.0));
     assert_eq!(ui.bounds_of_all("row").len(), 2);
     ui.hover_on("row")?;
-    assert!(matches!(
-        ui.center_of("missing"),
-        Err(TestError::NoTestId(_))
-    ));
+    assert_matches!(ui.center_of("missing"), Err(TestError::NoTestId(_)));
     Ok(())
 }
 
