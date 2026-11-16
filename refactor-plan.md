@@ -175,7 +175,7 @@ Add a `style_resolutions` counter to `FrameStats` (needed by 3.1). Record the ba
   - Remove `full_width` (use `.w_full()`).
   - Make `id` optional via `.test_id()`.
   - Fold `keyboard_focusable` into 2.3.
-  - Return concrete types (`styled!` forwarding), not `AnyView`, where practical.
+  - Return concrete types (`DelegateStyle` forwarding), not `AnyView`, where practical.
   - **Delete** the positional forms. Keeping both APIs violates the "one way" rule.
 - **Tests:** rewrite widget tests to the builder form. Add one `view!` test per widget in `crates/rouge-macros/tests/component_test.rs` to show the markup still lowers correctly.
 - **Risk:** builders add implementation lines at first. That is only acceptable because the positional, defaulting and conversion paths for widgets go away.

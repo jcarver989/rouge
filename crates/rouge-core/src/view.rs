@@ -10,8 +10,7 @@ use crate::focus::FocusHandle;
 use crate::motion::{MotionOp, MotionProp};
 use crate::prop::{AnyEffect, IntoProp, Prop, PropFrom};
 use crate::scroll::{Scrollable, scroll_key};
-use crate::style::{Declaration, StyleDelta, StyleState, Styled};
-use crate::styled;
+use crate::style::{Declaration, DelegateStyle, StyleDelta, StyleState, Styled};
 use crate::text::{SpanStyle, TextAlign, TextStyle, TextSystem, WrapIndent};
 use crate::theme::{Fill, Theme};
 use crate::tree::edit::EditOp;
@@ -249,30 +248,6 @@ pub fn div() -> Div {
     Div::default()
 }
 
-macro_rules! listeners {
-    ($($name:ident: $on:ident($event:ident: $arg:ty);)*) => {$(
-        #[track_caller]
-        pub fn $name(mut self, f: impl Fn($arg) + 'static) -> Self {
-            let owner = Scope::current();
-            let listener = move |event: &Event<'_>| {
-                if let Event::$event(event) = *event {
-                    run_in(owner, || f(event));
-                }
-            };
-            self.spec.extras().listeners.push((On::$on, Rc::new(listener)));
-            self
-        }
-    )*};
-}
-
-macro_rules! layer_props {
-    ($($name:ident: $prop:ident;)*) => {$(
-        pub fn $name<T>(self, value: impl IntoProp<MotionProp, T>) -> Self {
-            self.layer_prop(LayerProp::$prop, value)
-        }
-    )*};
-}
-
 impl Div {
     pub fn preserve_focus(mut self) -> Self {
         self.spec.flags.preserve_focus = true;
@@ -415,28 +390,151 @@ impl Div {
         self
     }
 
-    listeners! {
-        on_click: Click(Pointer: &PointerEvent);
-        on_pointer_down: PointerDown(Pointer: &PointerEvent);
-        on_pointer_up: PointerUp(Pointer: &PointerEvent);
-        on_pointer_move: PointerMove(Pointer: &PointerEvent);
-        on_key_down: KeyDown(Key: &KeyEvent);
-        on_key_up: KeyUp(Key: &KeyEvent);
-        on_focus: Focus(Focus: &FocusEvent);
-        on_blur: Blur(Focus: &FocusEvent);
-        on_hover: Hover(Hover: bool);
-        on_ime: Ime(Ime: &ImeEvent);
-        on_drag: Drag(Drag: &DragEvent);
-        on_scroll: Scroll(Scroll: &ScrollEvent);
-        on_file_drop: FileDrop(FileDrop: &FileDropEvent);
+    #[track_caller]
+    pub fn on_click(self, f: impl Fn(&PointerEvent) + 'static) -> Self {
+        self.listen(On::Click, move |event| {
+            if let Event::Pointer(event) = *event {
+                f(event);
+            }
+        })
     }
 
-    layer_props! {
-        translate_x: TranslateX;
-        translate_y: TranslateY;
-        scale: Scale;
-        rotate: Rotate;
-        opacity: Opacity;
+    #[track_caller]
+    pub fn on_pointer_down(self, f: impl Fn(&PointerEvent) + 'static) -> Self {
+        self.listen(On::PointerDown, move |event| {
+            if let Event::Pointer(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_pointer_up(self, f: impl Fn(&PointerEvent) + 'static) -> Self {
+        self.listen(On::PointerUp, move |event| {
+            if let Event::Pointer(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_pointer_move(self, f: impl Fn(&PointerEvent) + 'static) -> Self {
+        self.listen(On::PointerMove, move |event| {
+            if let Event::Pointer(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_key_down(self, f: impl Fn(&KeyEvent) + 'static) -> Self {
+        self.listen(On::KeyDown, move |event| {
+            if let Event::Key(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_key_up(self, f: impl Fn(&KeyEvent) + 'static) -> Self {
+        self.listen(On::KeyUp, move |event| {
+            if let Event::Key(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_focus(self, f: impl Fn(&FocusEvent) + 'static) -> Self {
+        self.listen(On::Focus, move |event| {
+            if let Event::Focus(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_blur(self, f: impl Fn(&FocusEvent) + 'static) -> Self {
+        self.listen(On::Blur, move |event| {
+            if let Event::Focus(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_hover(self, f: impl Fn(bool) + 'static) -> Self {
+        self.listen(On::Hover, move |event| {
+            if let Event::Hover(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_ime(self, f: impl Fn(&ImeEvent) + 'static) -> Self {
+        self.listen(On::Ime, move |event| {
+            if let Event::Ime(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_drag(self, f: impl Fn(&DragEvent) + 'static) -> Self {
+        self.listen(On::Drag, move |event| {
+            if let Event::Drag(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_scroll(self, f: impl Fn(&ScrollEvent) + 'static) -> Self {
+        self.listen(On::Scroll, move |event| {
+            if let Event::Scroll(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_file_drop(self, f: impl Fn(&FileDropEvent) + 'static) -> Self {
+        self.listen(On::FileDrop, move |event| {
+            if let Event::FileDrop(event) = *event {
+                f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    fn listen(mut self, on: On, listener: impl Fn(&Event<'_>) + 'static) -> Self {
+        let owner = Scope::current();
+        let listener = move |event: &Event<'_>| {
+            run_in(owner, || listener(event));
+        };
+        self.spec.extras().listeners.push((on, Rc::new(listener)));
+        self
+    }
+
+    pub fn translate_x<T>(self, value: impl IntoProp<MotionProp, T>) -> Self {
+        self.layer_prop(LayerProp::TranslateX, value)
+    }
+
+    pub fn translate_y<T>(self, value: impl IntoProp<MotionProp, T>) -> Self {
+        self.layer_prop(LayerProp::TranslateY, value)
+    }
+
+    pub fn scale<T>(self, value: impl IntoProp<MotionProp, T>) -> Self {
+        self.layer_prop(LayerProp::Scale, value)
+    }
+
+    pub fn rotate<T>(self, value: impl IntoProp<MotionProp, T>) -> Self {
+        self.layer_prop(LayerProp::Rotate, value)
+    }
+
+    pub fn opacity<T>(self, value: impl IntoProp<MotionProp, T>) -> Self {
+        self.layer_prop(LayerProp::Opacity, value)
     }
 
     pub fn on_activate(self, f: impl Fn() + 'static) -> Self {
@@ -822,7 +920,11 @@ impl Text {
     }
 }
 
-styled!(Text => 0);
+impl DelegateStyle for Text {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.0
+    }
+}
 
 impl View for Text {
     fn build(self, cx: &mut BuildCx<'_>) {

@@ -1,8 +1,7 @@
 use crate::compositor::ScrollState;
 use crate::control::each;
 use crate::prop::{IntoProp, Prop, PropFrom};
-use crate::style::Styled;
-use crate::styled;
+use crate::style::{DelegateStyle, Styled};
 use crate::view::{BuildCx, Div, View, div};
 use rouge_macros::component;
 use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal, untrack};
@@ -276,7 +275,11 @@ impl<T: View, U: Clone + Eq + Hash + 'static> Scrollable for VirtualList<T, U> {
     }
 }
 
-styled!(VirtualList<T, U> => container);
+impl<T, U> DelegateStyle for VirtualList<T, U> {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.container
+    }
+}
 
 impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
     fn build(self, cx: &mut BuildCx<'_>) {

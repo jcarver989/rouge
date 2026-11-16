@@ -8,7 +8,7 @@ use crate::text::Movement;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Patch, Text, TextOp, View, text};
 use crate::window::EditAction;
-use crate::{Styled, styled};
+use crate::{DelegateStyle, Styled};
 use rouge_macros::component;
 use rouge_reactive::{Scope, Signal, effect, run_in};
 use rouge_render::Color;
@@ -150,7 +150,11 @@ impl Editable {
     }
 }
 
-styled!(Editable => text);
+impl DelegateStyle for Editable {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.text.0
+    }
+}
 
 fn key_op(event: &KeyEvent, multiline: bool) -> Option<EditOp> {
     let modifiers = event.modifiers;

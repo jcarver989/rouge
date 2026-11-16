@@ -1,5 +1,5 @@
 use crate::control::dynamic;
-use crate::styled;
+use crate::style::{DelegateStyle, Styled};
 use crate::tree::Kind;
 use crate::view::{AnyView, BuildCx, Div, View, div};
 use rouge_macros::component;
@@ -51,7 +51,11 @@ impl Surface {
     }
 }
 
-styled!(Surface => div);
+impl DelegateStyle for Surface {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.div
+    }
+}
 
 impl View for Surface {
     fn build(self, cx: &mut BuildCx<'_>) {

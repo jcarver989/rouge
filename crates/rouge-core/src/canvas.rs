@@ -1,7 +1,7 @@
 use crate::event::Modifiers;
 use crate::path::Path;
 use crate::prop::{IntoProp, Prop};
-use crate::styled;
+use crate::style::{DelegateStyle, Styled};
 use crate::text::{TextLayout, TextStyle, TextSystem};
 use crate::theme::{Fill, Theme};
 use crate::tree::Kind;
@@ -358,7 +358,11 @@ pub fn canvas(draw: impl Fn(&mut Painter) + 'static) -> Canvas {
     }
 }
 
-styled!(Canvas => div);
+impl DelegateStyle for Canvas {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.div
+    }
+}
 
 impl View for Canvas {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -428,7 +432,11 @@ impl Icon {
     }
 }
 
-styled!(Icon => canvas);
+impl DelegateStyle for Icon {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.canvas
+    }
+}
 
 impl View for Icon {
     fn build(self, cx: &mut BuildCx<'_>) {

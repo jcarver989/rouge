@@ -52,7 +52,9 @@ pub use scroll::{
     Align, RowHeight, RowKey, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
     virtual_list_handle,
 };
-pub use style::{BoxShadow, Declaration, Slot, StyleDelta, StyleState, Styled, Typography};
+pub use style::{
+    BoxShadow, Declaration, DelegateStyle, Slot, StyleDelta, StyleState, Styled, Typography,
+};
 pub use surface::{Surface, surface};
 pub use theme::{Fill, Palette, Theme};
 pub use tree::{FrameStats, Interaction, PaintRegion};

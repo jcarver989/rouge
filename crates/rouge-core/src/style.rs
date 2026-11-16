@@ -5,7 +5,7 @@ use crate::theme::Fill;
 use crate::tree::Interaction;
 use rouge_render::{Color, Corners, Point};
 use std::borrow::Cow;
-use std::mem::replace;
+use std::mem::{replace, take};
 use std::rc::Rc;
 use taffy::{
     AlignItems, AlignSelf, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
@@ -67,43 +67,63 @@ impl BoxShadow {
     }
 }
 
-macro_rules! slots {
-    ($($slot:ident => $($field:ident).+;)*) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub enum Slot { $($slot,)* }
-
-        fn set_length(layout: &mut Layout, slot: Slot, length: Length) -> bool {
-            match slot { $(Slot::$slot => set(&mut layout.$($field).+, length.into()),)* }
-        }
-    };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    Width,
+    Height,
+    MinWidth,
+    MinHeight,
+    MaxWidth,
+    MaxHeight,
+    Basis,
+    GapX,
+    GapY,
+    PaddingTop,
+    PaddingRight,
+    PaddingBottom,
+    PaddingLeft,
+    MarginTop,
+    MarginRight,
+    MarginBottom,
+    MarginLeft,
+    Top,
+    Right,
+    Bottom,
+    Left,
+    BorderTop,
+    BorderRight,
+    BorderBottom,
+    BorderLeft,
 }
 
-slots! {
-    Width => size.width;
-    Height => size.height;
-    MinWidth => min_size.width;
-    MinHeight => min_size.height;
-    MaxWidth => max_size.width;
-    MaxHeight => max_size.height;
-    Basis => flex_basis;
-    GapX => gap.width;
-    GapY => gap.height;
-    PaddingTop => padding.top;
-    PaddingRight => padding.right;
-    PaddingBottom => padding.bottom;
-    PaddingLeft => padding.left;
-    MarginTop => margin.top;
-    MarginRight => margin.right;
-    MarginBottom => margin.bottom;
-    MarginLeft => margin.left;
-    Top => inset.top;
-    Right => inset.right;
-    Bottom => inset.bottom;
-    Left => inset.left;
-    BorderTop => border.top;
-    BorderRight => border.right;
-    BorderBottom => border.bottom;
-    BorderLeft => border.left;
+fn set_length(layout: &mut Layout, slot: Slot, length: Length) -> bool {
+    match slot {
+        Slot::Width => set(&mut layout.size.width, length.into()),
+        Slot::Height => set(&mut layout.size.height, length.into()),
+        Slot::MinWidth => set(&mut layout.min_size.width, length.into()),
+        Slot::MinHeight => set(&mut layout.min_size.height, length.into()),
+        Slot::MaxWidth => set(&mut layout.max_size.width, length.into()),
+        Slot::MaxHeight => set(&mut layout.max_size.height, length.into()),
+        Slot::Basis => set(&mut layout.flex_basis, length.into()),
+        Slot::GapX => set(&mut layout.gap.width, length.into()),
+        Slot::GapY => set(&mut layout.gap.height, length.into()),
+        Slot::PaddingTop => set(&mut layout.padding.top, length.into()),
+        Slot::PaddingRight => set(&mut layout.padding.right, length.into()),
+        Slot::PaddingBottom => set(&mut layout.padding.bottom, length.into()),
+        Slot::PaddingLeft => set(&mut layout.padding.left, length.into()),
+        Slot::MarginTop => set(&mut layout.margin.top, length.into()),
+        Slot::MarginRight => set(&mut layout.margin.right, length.into()),
+        Slot::MarginBottom => set(&mut layout.margin.bottom, length.into()),
+        Slot::MarginLeft => set(&mut layout.margin.left, length.into()),
+        Slot::Top => set(&mut layout.inset.top, length.into()),
+        Slot::Right => set(&mut layout.inset.right, length.into()),
+        Slot::Bottom => set(&mut layout.inset.bottom, length.into()),
+        Slot::Left => set(&mut layout.inset.left, length.into()),
+        Slot::BorderTop => set(&mut layout.border.top, length.into()),
+        Slot::BorderRight => set(&mut layout.border.right, length.into()),
+        Slot::BorderBottom => set(&mut layout.border.bottom, length.into()),
+        Slot::BorderLeft => set(&mut layout.border.left, length.into()),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -315,29 +335,22 @@ macro_rules! flags {
     )*};
 }
 
-#[macro_export]
-macro_rules! styled {
-    ($name:ident $(<$($generic:ident),+>)? => $field:tt) => {
-        impl $(<$($generic),+>)? $crate::Styled for $name $(<$($generic),+>)? {
-            fn declare(mut self, declaration: $crate::Prop<$crate::Declaration>) -> Self {
-                self.$field = $crate::Styled::declare(self.$field, declaration);
-                self
-            }
-
-            fn restyle(mut self, state: $crate::StyleState, delta: $crate::StyleDelta) -> Self {
-                self.$field = $crate::Styled::restyle(self.$field, state, delta);
-                self
-            }
-        }
-    };
+pub trait DelegateStyle {
+    fn style_target(&mut self) -> &mut (impl Styled + Default);
 }
 
-macro_rules! states {
-    ($($name:ident: $state:ident;)*) => {$(
-        fn $name(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
-            self.restyle(StyleState::Interaction(Interaction::$state), f(StyleDelta::default()))
-        }
-    )*};
+impl<T: DelegateStyle> Styled for T {
+    fn declare(mut self, declaration: Prop<Declaration>) -> Self {
+        let target = self.style_target();
+        *target = take(target).declare(declaration);
+        self
+    }
+
+    fn restyle(mut self, state: StyleState, delta: StyleDelta) -> Self {
+        let target = self.style_target();
+        *target = take(target).restyle(state, delta);
+        self
+    }
 }
 
 pub trait Styled: Sized {
@@ -346,14 +359,32 @@ pub trait Styled: Sized {
     #[must_use]
     fn restyle(self, state: StyleState, delta: StyleDelta) -> Self;
 
-    states! {
-        hover: Hover;
-        active: Active;
-        selected: Selected;
-        checked: Checked;
-        focus: Focus;
-        focus_visible: FocusVisible;
-        disabled: Disabled;
+    fn hover(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.restyle(Interaction::Hover.into(), f(StyleDelta::default()))
+    }
+
+    fn active(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.restyle(Interaction::Active.into(), f(StyleDelta::default()))
+    }
+
+    fn selected(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.restyle(Interaction::Selected.into(), f(StyleDelta::default()))
+    }
+
+    fn checked(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.restyle(Interaction::Checked.into(), f(StyleDelta::default()))
+    }
+
+    fn focus(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.restyle(Interaction::Focus.into(), f(StyleDelta::default()))
+    }
+
+    fn focus_visible(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.restyle(Interaction::FocusVisible.into(), f(StyleDelta::default()))
+    }
+
+    fn disabled(self, f: impl FnOnce(StyleDelta) -> StyleDelta) -> Self {
+        self.restyle(Interaction::Disabled.into(), f(StyleDelta::default()))
     }
 
     fn group_hover(
@@ -475,6 +506,12 @@ pub trait Styled: Sized {
 pub enum StyleState {
     Interaction(Interaction),
     GroupHover(String),
+}
+
+impl From<Interaction> for StyleState {
+    fn from(interaction: Interaction) -> Self {
+        StyleState::Interaction(interaction)
+    }
 }
 
 #[derive(Default)]

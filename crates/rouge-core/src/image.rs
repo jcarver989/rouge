@@ -1,5 +1,5 @@
 use crate::prop::{IntoProp, Prop, PropFrom};
-use crate::styled;
+use crate::style::{DelegateStyle, Styled};
 use crate::tree::{ElementId, Kind};
 use crate::view::{BuildCx, Div, Patch, Queue, View, div};
 use image::{ImageError as DecodeError, load_from_memory};
@@ -144,7 +144,11 @@ impl Image {
     }
 }
 
-styled!(Image => div);
+impl DelegateStyle for Image {
+    fn style_target(&mut self) -> &mut (impl Styled + Default) {
+        &mut self.div
+    }
+}
 
 fn show(queue: &Queue, id: ElementId, source: ImageSource, on_error: Option<ErrorHandler>) {
     if let ImageSource::Data(data) = source {

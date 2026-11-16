@@ -26,35 +26,15 @@ fn lengths_resolve_as_pixels_fractions_of_the_parent_or_automatically() -> TestR
 
 #[test]
 fn every_length_setter_declares_its_slots_in_pixels_or_fractions() {
-    macro_rules! check {
-        ($($setter:ident => $($slot:ident),+;)*) => {$({
-            let slots: &[Slot] = &[$(Slot::$slot),+];
-            assert_eq!(
-                Recorder::default().$setter(7.0).$setter(pct(50.0)).0,
-                [
-                    Declaration::Length(slots, px(7.0)),
-                    Declaration::Length(slots, pct(50.0)),
-                ],
-                stringify!($setter)
-            );
-        })*};
-    }
-    check! {
-        w => Width; h => Height;
-        min_w => MinWidth; min_h => MinHeight;
-        max_w => MaxWidth; max_h => MaxHeight;
-        flex_basis => Basis; gap_x => GapX; gap_y => GapY;
-        pt => PaddingTop; pr => PaddingRight; pb => PaddingBottom; pl => PaddingLeft;
-        mt => MarginTop; mr => MarginRight; mb => MarginBottom; ml => MarginLeft;
-        top => Top; right => Right; bottom => Bottom; left => Left;
-        border_t => BorderTop; border_r => BorderRight; border_b => BorderBottom; border_l => BorderLeft;
-        size => Width, Height; gap => GapX, GapY;
-        px => PaddingLeft, PaddingRight; py => PaddingTop, PaddingBottom;
-        mx => MarginLeft, MarginRight; my => MarginTop, MarginBottom;
-        p => PaddingTop, PaddingRight, PaddingBottom, PaddingLeft;
-        m => MarginTop, MarginRight, MarginBottom, MarginLeft;
-        inset => Top, Right, Bottom, Left;
-        border => BorderTop, BorderRight, BorderBottom, BorderLeft;
+    for (name, setter, slots) in SETTERS {
+        assert_eq!(
+            setter(setter(Recorder::default(), px(7.0)), pct(50.0)).0,
+            [
+                Declaration::Length(slots, px(7.0)),
+                Declaration::Length(slots, pct(50.0)),
+            ],
+            "{name}"
+        );
     }
 }
 
@@ -94,3 +74,58 @@ impl Styled for Recorder {
         self
     }
 }
+
+type Setter = fn(Recorder, Length) -> Recorder;
+
+const SETTERS: &[(&str, Setter, &[Slot])] = {
+    use Slot::*;
+    &[
+        ("w", |r, v| r.w(v), &[Width]),
+        ("h", |r, v| r.h(v), &[Height]),
+        ("min_w", |r, v| r.min_w(v), &[MinWidth]),
+        ("min_h", |r, v| r.min_h(v), &[MinHeight]),
+        ("max_w", |r, v| r.max_w(v), &[MaxWidth]),
+        ("max_h", |r, v| r.max_h(v), &[MaxHeight]),
+        ("flex_basis", |r, v| r.flex_basis(v), &[Basis]),
+        ("gap_x", |r, v| r.gap_x(v), &[GapX]),
+        ("gap_y", |r, v| r.gap_y(v), &[GapY]),
+        ("pt", |r, v| r.pt(v), &[PaddingTop]),
+        ("pr", |r, v| r.pr(v), &[PaddingRight]),
+        ("pb", |r, v| r.pb(v), &[PaddingBottom]),
+        ("pl", |r, v| r.pl(v), &[PaddingLeft]),
+        ("mt", |r, v| r.mt(v), &[MarginTop]),
+        ("mr", |r, v| r.mr(v), &[MarginRight]),
+        ("mb", |r, v| r.mb(v), &[MarginBottom]),
+        ("ml", |r, v| r.ml(v), &[MarginLeft]),
+        ("top", |r, v| r.top(v), &[Top]),
+        ("right", |r, v| r.right(v), &[Right]),
+        ("bottom", |r, v| r.bottom(v), &[Bottom]),
+        ("left", |r, v| r.left(v), &[Left]),
+        ("border_t", |r, v| r.border_t(v), &[BorderTop]),
+        ("border_r", |r, v| r.border_r(v), &[BorderRight]),
+        ("border_b", |r, v| r.border_b(v), &[BorderBottom]),
+        ("border_l", |r, v| r.border_l(v), &[BorderLeft]),
+        ("size", |r, v| r.size(v), &[Width, Height]),
+        ("gap", |r, v| r.gap(v), &[GapX, GapY]),
+        ("px", |r, v| r.px(v), &[PaddingLeft, PaddingRight]),
+        ("py", |r, v| r.py(v), &[PaddingTop, PaddingBottom]),
+        ("mx", |r, v| r.mx(v), &[MarginLeft, MarginRight]),
+        ("my", |r, v| r.my(v), &[MarginTop, MarginBottom]),
+        (
+            "p",
+            |r, v| r.p(v),
+            &[PaddingTop, PaddingRight, PaddingBottom, PaddingLeft],
+        ),
+        (
+            "m",
+            |r, v| r.m(v),
+            &[MarginTop, MarginRight, MarginBottom, MarginLeft],
+        ),
+        ("inset", |r, v| r.inset(v), &[Top, Right, Bottom, Left]),
+        (
+            "border",
+            |r, v| r.border(v),
+            &[BorderTop, BorderRight, BorderBottom, BorderLeft],
+        ),
+    ]
+};
