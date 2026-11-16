@@ -184,7 +184,7 @@ impl MarkdownCodeBlock {
         for line in code.split('\n') {
             self.push_line(
                 source_range(offset..offset + line.len(), index),
-                line.strip_suffix('\r').unwrap_or(line),
+                line.trim_suffix('\r'),
             );
             offset += line.len() + 1;
         }
@@ -818,13 +818,13 @@ impl Builder<'_> {
             block.split_fenced_lines(0, content, self.source, self.index);
             return block;
         }
-        let code = text.strip_suffix('\n').unwrap_or(text);
+        let code = text.trim_suffix('\n');
         let first_source_line = self.index.line_for_offset(range.start);
         if !code.is_empty() {
             for (index, line) in code.split('\n').enumerate() {
                 block.push_line(
                     self.index.source_line_range(first_source_line + index),
-                    line.strip_suffix('\r').unwrap_or(line),
+                    line.trim_suffix('\r'),
                 );
             }
         }

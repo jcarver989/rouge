@@ -480,19 +480,19 @@ fn line_comment(text: &str) -> Option<&str> {
     let body = body
         .strip_prefix('!')
         .unwrap_or_else(|| body.trim_start_matches('/'));
-    Some(body.strip_prefix(' ').unwrap_or(body))
+    Some(body.trim_prefix(' '))
 }
 
 fn block_comment(text: &str) -> Option<String> {
     let body = text.strip_prefix("/*")?;
-    let body = body.strip_suffix("*/").unwrap_or(body);
-    let body = body.strip_prefix('*').unwrap_or(body);
+    let body = body.trim_suffix("*/");
+    let body = body.trim_prefix('*');
     let lines: Vec<&str> = body
         .lines()
         .map(|line| {
             let line = line.trim();
-            let line = line.strip_prefix('*').unwrap_or(line);
-            line.strip_prefix(' ').unwrap_or(line)
+            let line = line.trim_prefix('*');
+            line.trim_prefix(' ')
         })
         .collect();
     Some(lines.join("\n"))

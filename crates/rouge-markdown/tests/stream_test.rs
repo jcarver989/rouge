@@ -728,10 +728,7 @@ fn chunk_message(message: &str, chunk_bytes: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut rest = message;
     while !rest.is_empty() {
-        let mut end = rest.len().min(chunk_bytes);
-        while !rest.is_char_boundary(end) {
-            end += 1;
-        }
+        let end = rest.ceil_char_boundary(rest.len().min(chunk_bytes));
         chunks.push(rest[..end].to_owned());
         rest = &rest[end..];
     }
