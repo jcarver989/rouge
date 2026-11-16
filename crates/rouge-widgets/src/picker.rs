@@ -652,7 +652,7 @@ fn with_preview(
     view! {
         <div flex row flex_1 min_h=0.0>
             <div flex_none w=tokens::PICKER_PREVIEW_LIST_WIDTH max_w=pct(50.0) min_h=0.0 pr=8.0 border_r=1.0
-                 border_color=Role::BorderSubtle>
+                 border_color=Role::BorderSubtle flex col>
                 {children}
             </div>
             <div test_id?=id flex_1 min_w=0.0 min_h=0.0 flex col>

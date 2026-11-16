@@ -1,5 +1,5 @@
 use rouge_core::testing::TestResult;
-use rouge_core::{Length, View, div, text, view};
+use rouge_core::{Length, Styled, View, div, pct, px, text, view};
 use rouge_picker::PickerEntry;
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
@@ -112,5 +112,32 @@ fn grouped_list_aligns_marker_prefix_label_and_check_columns() -> TestResult {
     assert!(ui.center_of("last-subtitle")?.y > last.y);
     ui.click_on("last")?;
     assert_eq!(selected.get(), Some(2));
+    Ok(())
+}
+
+#[test]
+fn a_long_list_beside_a_preview_scrolls_inside_the_picker() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test().size(1000.0, 800.0).build(|| {
+        let items = (0..40).map(|i| PickerItem::new(format!("option-{i}"), format!("Item {i}"))).collect();
+        let handle = SearchPickerHandle::new(items, |_| {});
+        let preview = |index: usize| text(format!("Preview {index}")).into_any();
+        view! {
+            <search_picker handle test_id="picker" searchable="Find" w=px(tokens::PICKER_PREVIEW_WIDTH)
+                           h=px(tokens::PICKER_PREVIEW_HEIGHT) max_list_height=pct(100.0) preview=preview/>
+        }
+    });
+    let picker = ui.rect_of("picker")?;
+    assert!(ui.rect_of("picker-results")?.max().y <= picker.max().y);
+    ui.click_on("picker-query")?;
+    for _ in 0..6 {
+        ui.press("pagedown");
+    }
+    ui.run(0.15);
+    let last = ui.rect_of("option-39")?;
+    assert!(
+        last.origin.y >= picker.origin.y && last.max().y <= picker.max().y,
+        "{last:?} outside {picker:?}"
+    );
     Ok(())
 }
