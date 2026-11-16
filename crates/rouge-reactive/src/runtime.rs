@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use crate::pool::Pool;
 use crate::stats::ReactiveStats;
 use crate::task::Executor;
 use indexmap::IndexSet;
@@ -52,6 +54,8 @@ pub(crate) struct Graph {
     batch_depth: Cell<u32>,
     flushing: Cell<bool>,
     pub(crate) executor: Executor,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) pool: Pool,
     stats: Cell<ReactiveStats>,
     #[cfg(feature = "tokio-rt")]
     pub(crate) tokio: RefCell<Option<Handle>>,

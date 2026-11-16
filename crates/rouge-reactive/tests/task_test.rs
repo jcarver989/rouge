@@ -4,7 +4,9 @@ use rouge_reactive::{
 };
 use std::assert_matches;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::thread;
 use tokio::sync::oneshot::channel;
 use tokio::sync::oneshot::error::RecvError;
@@ -202,6 +204,31 @@ fn blocking_work_runs_off_the_ui_thread_and_returns_to_it() -> TestResult {
     spawn(async move { worker.set(Some(task.await)) });
     driver.run_until(|| worker.with(Option::is_some))?;
     worker.with(|worker| assert_matches!(worker, Some(Ok(id)) if *id != ui_thread));
+    Ok(())
+}
+
+#[test]
+fn blocking_work_reuses_pool_threads_even_after_a_job_panics() -> TestResult {
+    let driver = Driver::new();
+    let (ids, seen) = mpsc::channel();
+    for _ in 0..16 {
+        let done = signal(false);
+        let ids = ids.clone();
+        let task = spawn_blocking(move || {
+            let _ = ids.send(thread::current().id());
+            panic!("worker failed");
+        });
+        spawn(async move {
+            let _: Result<(), _> = task.await;
+            done.set(true);
+        });
+        driver.run_until(|| done.get())?;
+    }
+    let distinct = seen.try_iter().collect::<HashSet<_>>().len();
+    assert!(
+        distinct < 16,
+        "16 sequential jobs ran on {distinct} threads"
+    );
     Ok(())
 }
 

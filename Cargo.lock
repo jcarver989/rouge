@@ -3010,6 +3010,7 @@ dependencies = [
 name = "rouge-reactive"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
  "gloo-timers",
  "indexmap",
  "rouge-reactive",

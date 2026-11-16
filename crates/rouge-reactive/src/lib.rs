@@ -4,6 +4,8 @@ mod handle;
 mod interval;
 mod keyed_list;
 mod memo;
+#[cfg(not(target_arch = "wasm32"))]
+mod pool;
 mod resource;
 mod runtime;
 mod scope;

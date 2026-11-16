@@ -10,8 +10,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
-#[cfg(not(target_arch = "wasm32"))]
-use std::thread;
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle as TokioHandle;
@@ -247,8 +245,10 @@ pub fn spawn_blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'stat
         return bridge(tokio.spawn_blocking(work));
     }
     let (sender, result) = channel();
-    thread::spawn(move || {
-        let _ = sender.send(work());
+    with_rt(|rt| {
+        rt.pool.submit(Box::new(move || {
+            let _ = sender.send(work());
+        }));
     });
     local(async move { result.await.map_err(|_| TaskError::Panicked) })
 }
