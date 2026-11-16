@@ -12,7 +12,10 @@ impl Tree {
             };
             let size = element.bounds.size;
             let shown = self.window_visible
-                && !element.unseen()
+                && !self
+                    .chain(id)
+                    .iter()
+                    .any(|node| self.elements[*node].unseen())
                 && !self.paint_region(id).bounds.is_empty();
             let placement = SurfaceConfig {
                 width: (size.width * scale).round().max(0.0) as u32,

@@ -105,6 +105,25 @@ fn hidden_clipped_and_occluded_surfaces_are_not_visible() -> TestResult {
 }
 
 #[test]
+fn a_surface_under_an_invisible_ancestor_is_not_visible() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let hidden = signal(false);
+    let (mut producer, mut ui) = filled(move |source| {
+        div()
+            .size(100.0)
+            .when(hidden, Styled::invisible)
+            .child(surface(source).size(100.0))
+    })?;
+    assert!(config(&producer)?.3, "shown");
+    hidden.set(true);
+    ui.advance(0.0);
+    ui.draw()?;
+    producer.pump()?;
+    assert!(!config(&producer)?.3, "the ancestor is invisible");
+    Ok(())
+}
+
+#[test]
 fn a_failed_surface_shows_its_fallback_and_reports_its_status() -> TestResult {
     let _rt = Runtime::new().enter();
     let status = signal(SurfaceStatus::Waiting);
