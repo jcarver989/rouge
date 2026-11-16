@@ -3,7 +3,7 @@ mod common;
 
 use common::{Stage, StageBuilder, WINDOW, square};
 use rouge_core::testing::{LINEAR, TestResult};
-use rouge_core::{CompositorEvent, LayerProp, Message};
+use rouge_core::{CompositorEvent, Keyframes, LayerProp, Message};
 use std::error::Error;
 
 #[test]
@@ -38,10 +38,91 @@ fn a_compositor_only_animation_sends_nothing_back() -> TestResult {
         0,
         "no message while the UI is not watching"
     );
+    assert!(
+        stage.actor.next_wake(1.5).is_some(),
+        "the settled pose is still to be shown"
+    );
+    stage.frame(1.5);
     assert_eq!(
-        stage.actor.next_wake(1.5),
+        stage.actor.next_wake(1.6),
         None,
-        "and the compositor idles at the end"
+        "and then the compositor idles"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_held_keyframe_wakes_the_compositor_only_when_its_pose_changes() -> TestResult {
+    let mut stage = stepping(
+        Keyframes::new()
+            .at(0.0, |pose| pose.translate_x(0.0))
+            .at(0.5, |pose| pose.translate_x(0.0))
+            .at(0.5, |pose| pose.translate_x(10.0))
+            .at(1.0, |pose| pose.translate_x(10.0)),
+    )?;
+    stage.frame(0.0);
+    stage.presented();
+    assert_wakes_at(&mut stage, 0.1, 0.5);
+    stage.frame(0.5);
+    assert_wakes_at(&mut stage, 0.6, 1.0);
+    Ok(())
+}
+
+#[test]
+fn a_held_keyframe_starting_with_a_jump_wakes_at_each_repeat() -> TestResult {
+    let mut stage = stepping(
+        Keyframes::new()
+            .at(0.0, |pose| pose.translate_x(20.0))
+            .at(0.0, |pose| pose.translate_x(0.0))
+            .at(0.5, |pose| pose.translate_x(0.0))
+            .at(0.5, |pose| pose.translate_x(10.0))
+            .at(1.0, |pose| pose.translate_x(10.0)),
+    )?;
+    stage.frame(0.0);
+    stage.presented();
+    assert_wakes_at(&mut stage, 0.1, 0.5);
+    stage.frame(0.5);
+    assert_wakes_at(&mut stage, 0.6, 1.0);
+    stage.frame(1.0);
+    assert_wakes_at(&mut stage, 1.1, 1.5);
+    Ok(())
+}
+
+#[test]
+fn a_frame_presented_during_a_step_is_followed_by_one_showing_where_it_settled() -> TestResult {
+    let mut stage = stepping(
+        Keyframes::new()
+            .at(0.0, |pose| pose.translate_x(0.0))
+            .at(0.49, |pose| pose.translate_x(0.0))
+            .at(0.5, |pose| pose.translate_x(10.0))
+            .at(1.0, |pose| pose.translate_x(10.0)),
+    )?;
+    stage.frame(0.0);
+    stage.presented();
+    stage.frame(0.495);
+    let wake = stage.actor.next_wake(0.6);
+    assert!(
+        wake.is_some_and(|wake| wake <= 0.6),
+        "the settled step is still to be shown, not at {wake:?}"
+    );
+    stage.frame(0.6);
+    assert_wakes_at(&mut stage, 0.7, 1.0);
+    Ok(())
+}
+
+#[test]
+fn an_interpolated_keyframe_wakes_the_compositor_every_frame() -> TestResult {
+    let mut stage = stepping(
+        Keyframes::new()
+            .at(0.0, |pose| pose.translate_x(0.0))
+            .at(1.0, |pose| pose.translate_x(10.0)),
+    )?;
+    stage.frame(0.0);
+    stage.presented();
+    let wake = stage.actor.next_wake(0.1);
+    assert!(
+        wake.is_some_and(|wake| wake <= 0.1),
+        "a frame is due at once, not {wake:?}"
     );
     Ok(())
 }
@@ -91,6 +172,23 @@ fn closing_a_window_reports_it() -> TestResult {
     let closed = stage.actor.events().last();
     assert_eq!(closed, Some((WINDOW, CompositorEvent::Closed)));
     Ok(())
+}
+
+fn stepping(keyframes: Keyframes) -> Result<Stage, Box<dyn Error>> {
+    let mut stage = StageBuilder::default().child(square()).build()?;
+    stage
+        .layers
+        .animate(stage.child, keyframes.duration(1.0).repeat());
+    stage.sync();
+    Ok(stage)
+}
+
+fn assert_wakes_at(stage: &mut Stage, now: f64, expected: f64) {
+    let wake = stage.actor.next_wake(now);
+    assert!(
+        wake.is_some_and(|wake| (wake - expected).abs() < 1e-4),
+        "at {now} the compositor wakes at {wake:?}, not {expected}"
+    );
 }
 
 fn sliding() -> Result<Stage, Box<dyn Error>> {

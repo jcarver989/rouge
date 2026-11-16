@@ -50,9 +50,18 @@ struct Window {
 }
 
 impl Window {
-    fn wants(&self, now: f64) -> bool {
-        let settles = self.compositor.model().settles_at();
-        self.config.visible && (self.owed || self.surfaced || settles.is_some_and(|end| end > now))
+    fn wake_at(&self, now: f64) -> Option<f64> {
+        if !self.config.visible {
+            return None;
+        }
+        let change = if self.owed || self.surfaced {
+            Some(now)
+        } else {
+            self.compositor
+                .model()
+                .next_change(self.presented.unwrap_or(now))
+        };
+        change.map(|at| at.max(self.due_at()))
     }
 
     fn due_at(&self) -> f64 {
@@ -198,15 +207,15 @@ impl CompositorActor {
                 .saturating_duration_since(Instant::now())
                 .as_secs_f64()
         });
-        let wanting = self.windows.iter().filter(|window| window.wants(now));
-        wanting.map(Window::due_at).chain(maintain).reduce(f64::min)
+        let wanting = self.windows.iter().filter_map(|window| window.wake_at(now));
+        wanting.chain(maintain).reduce(f64::min)
     }
 
     pub fn frame(&mut self, now: f64) {
         self.latch();
         for index in 0..self.windows.len() {
             let window = &self.windows[index];
-            if window.wants(now) && window.due_at() <= now {
+            if window.wake_at(now).is_some_and(|at| at <= now) {
                 self.present(index, now);
             }
         }

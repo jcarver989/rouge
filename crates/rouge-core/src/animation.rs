@@ -347,39 +347,70 @@ impl Keyframes {
         self.duration
     }
 
-    pub fn is_finished(&self, elapsed: f32) -> bool {
-        !self.repeat && elapsed >= self.duration
+    pub fn is_finished(&self, elapsed: f64) -> bool {
+        !self.repeat && elapsed >= f64::from(self.duration)
     }
 
-    pub fn progress(&self, elapsed: f32) -> f32 {
-        if self.duration <= 0.0 {
-            return 1.0;
-        }
-        let progress = elapsed / self.duration;
-        if self.repeat {
-            progress.fract()
-        } else {
-            progress.min(1.0)
-        }
+    pub fn progress(&self, elapsed: f64) -> f32 {
+        self.cycle(elapsed).1 as f32
     }
 
     pub fn sample(&self, prop: LayerProp, progress: f32) -> Option<f32> {
+        let (from, to) = self.segment(prop, progress)?;
+        if from.1 == to.1 {
+            return Some(from.1);
+        }
+        let t = (progress - from.0) / (to.0 - from.0);
+        Some(from.1 + (to.1 - from.1) * self.ease.apply(t))
+    }
+
+    pub(crate) fn next_change(&self, elapsed: f64) -> Option<f64> {
+        if self.duration <= 0.0 || self.is_finished(elapsed) {
+            return None;
+        }
+        let (cycle, progress) = self.cycle(elapsed);
+        let mut until = 1.0_f32;
+        for prop in LayerProp::ALL {
+            let Some((from, to)) = self.segment(prop, progress as f32) else {
+                continue;
+            };
+            if from.1 != to.1 {
+                return Some(elapsed);
+            }
+            until = until.min(to.0);
+        }
+        Some(cycle + f64::from(until) * f64::from(self.duration))
+    }
+
+    fn segment(&self, prop: LayerProp, progress: f32) -> Option<((f32, f32), (f32, f32))> {
         let mut stops = self
             .stops
             .iter()
             .filter_map(|(at, pose)| Some((*at, pose.get(prop)?)));
         let mut previous = stops.next()?;
-        if progress <= previous.0 {
-            return Some(previous.1);
+        if progress < previous.0 {
+            return Some((previous, previous));
         }
         for next in stops {
             if progress < next.0 {
-                let t = (progress - previous.0) / (next.0 - previous.0);
-                return Some(previous.1 + (next.1 - previous.1) * self.ease.apply(t));
+                return Some((previous, next));
             }
             previous = next;
         }
-        Some(previous.1)
+        Some((previous, (1.0, previous.1)))
+    }
+
+    fn cycle(&self, elapsed: f64) -> (f64, f64) {
+        let duration = f64::from(self.duration);
+        if duration <= 0.0 {
+            return (elapsed, 1.0);
+        }
+        let progress = elapsed / duration;
+        if self.repeat {
+            (progress.floor() * duration, progress.fract())
+        } else {
+            (0.0, progress.min(1.0))
+        }
     }
 }
 

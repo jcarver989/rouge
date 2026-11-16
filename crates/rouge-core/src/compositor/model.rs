@@ -325,7 +325,7 @@ impl Default for Layer {
 impl Layer {
     fn value(&self, prop: LayerProp, motions: &Motions, at: f64) -> f32 {
         let keyed = self.keyframes.as_ref().and_then(|(keyframes, start)| {
-            keyframes.sample(prop, keyframes.progress((at - start).max(0.0) as f32))
+            keyframes.sample(prop, keyframes.progress((at - start).max(0.0)))
         });
         keyed.unwrap_or_else(|| match self.props[prop as usize] {
             Value::Own(animated) => animated.value(at),
@@ -345,7 +345,7 @@ impl Layer {
 
     fn freeze(&mut self, motions: &Motions, at: f64) {
         if let Some((keyframes, start)) = self.keyframes.take() {
-            self.bake(&keyframes, keyframes.progress((at - start).max(0.0) as f32));
+            self.bake(&keyframes, keyframes.progress((at - start).max(0.0)));
         }
         for prop in LayerProp::ALL {
             self.own(prop, motions, at);
@@ -551,7 +551,7 @@ impl Layer {
             }
         }
         if let Some((keyframes, start)) = self.keyframes.take() {
-            if keyframes.is_finished((at - start).max(0.0) as f32) {
+            if keyframes.is_finished((at - start).max(0.0)) {
                 self.bake(&keyframes, 1.0);
             } else {
                 self.keyframes = Some((keyframes, start));
@@ -570,21 +570,34 @@ impl Layer {
 
     fn keyframes_end(&self) -> Option<f64> {
         let (keyframes, start) = self.keyframes.as_ref()?;
-        Some(if keyframes.is_finished(f32::INFINITY) {
+        Some(if keyframes.is_finished(f64::INFINITY) {
             start + f64::from(keyframes.length())
         } else {
             f64::INFINITY
         })
     }
 
+    fn motion_ends(&self) -> impl Iterator<Item = Option<f64>> + '_ {
+        self.prop_ends()
+            .chain(self.flip.iter().map(Animated::end))
+            .chain(self.effects.values().map(Applied::end))
+            .chain(self.fling.iter().map(Fling::end))
+    }
+
     fn end(&self) -> Option<f64> {
-        latest(
-            self.prop_ends()
-                .chain(self.flip.iter().map(Animated::end))
-                .chain(self.effects.values().map(Applied::end))
-                .chain(self.fling.iter().map(Fling::end))
-                .chain([self.keyframes_end()]),
-        )
+        latest(self.motion_ends().chain([self.keyframes_end()]))
+    }
+
+    fn next_change(&self, at: f64) -> Option<f64> {
+        let running = latest(self.motion_ends())
+            .filter(|end| *end > at)
+            .map(|_| at);
+        let keyed = self.keyframes.as_ref().and_then(|(keyframes, start)| {
+            let elapsed = (at - start).max(0.0);
+            let next = keyframes.next_change(elapsed)?;
+            Some(if next > elapsed { start + next } else { at })
+        });
+        running.into_iter().chain(keyed).reduce(f64::min)
     }
 
     pub(crate) fn exited(&self, at: f64) -> bool {
@@ -774,6 +787,15 @@ impl LayerModel {
 
     pub fn settles_at(&self) -> Option<f64> {
         self.settles
+    }
+
+    pub fn next_change(&self, since: f64) -> Option<f64> {
+        let motions = (self.motions.values())
+            .filter_map(Animated::end)
+            .filter(|end| *end > since)
+            .map(|_| since);
+        let layers = (self.layers.values()).filter_map(|layer| layer.next_change(since));
+        motions.chain(layers).reduce(f64::min)
     }
 
     pub fn motion_end(&self, id: MotionId) -> Option<f64> {

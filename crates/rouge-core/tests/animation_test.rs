@@ -60,6 +60,20 @@ fn keyframes_interpolate_between_stops() {
 }
 
 #[test]
+fn the_last_of_several_stops_at_one_offset_holds_from_that_offset() {
+    let keyframes = Keyframes::new()
+        .at(0.0, |pose| pose.translate_x(20.0))
+        .at(0.0, |pose| pose.translate_x(0.0))
+        .at(0.5, |pose| pose.translate_x(0.0))
+        .at(0.5, |pose| pose.translate_x(10.0))
+        .at(1.0, |pose| pose.translate_x(10.0));
+    assert_eq!(keyframes.sample(LayerProp::TranslateX, 0.0), Some(0.0));
+    assert_eq!(keyframes.sample(LayerProp::TranslateX, 0.25), Some(0.0));
+    assert_eq!(keyframes.sample(LayerProp::TranslateX, 0.5), Some(10.0));
+    assert_eq!(keyframes.sample(LayerProp::TranslateX, 1.0), Some(10.0));
+}
+
+#[test]
 fn poses_list_only_the_props_they_set() {
     let pose = Pose::new().opacity(0.0).scale(0.9);
     let set: Vec<_> = pose.iter().collect();
