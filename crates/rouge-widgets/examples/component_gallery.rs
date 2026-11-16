@@ -47,7 +47,10 @@ fn gallery() -> impl View {
                         <segment test_id="disabled-segment" label="Disabled" disabled=true/>
                     </segmented_control>
                     <notification message="Theme tokens and bundled typefaces" tone=NoticeTone::Info/>
-                    <inline_edit value=edit on_commit={move |value: String| status.set(value)}/>
+                    <inline_edit value=edit on_commit={move |value: String| {
+                        edit.set(value.clone());
+                        status.set(value);
+                    }}/>
                     <empty_state icon=IconName::FileDiff title="No changes" detail="The working tree is clean"/>
                     <action_bar>
                         <text caption primary>{move || status.get()}</text>
