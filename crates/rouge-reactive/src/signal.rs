@@ -17,37 +17,61 @@ pub struct ReadSignal<T> {
 
 pub struct Signal<T>(ReadSignal<T>);
 
-macro_rules! impl_handle_traits {
-    ($name:ident, $field:tt) => {
-        impl<T> Clone for $name<T> {
-            fn clone(&self) -> Self {
-                *self
-            }
-        }
-        impl<T> Copy for $name<T> {}
-        impl<T> PartialEq for $name<T> {
-            fn eq(&self, other: &Self) -> bool {
-                self.$field == other.$field
-            }
-        }
-        impl<T> Eq for $name<T> {}
-        impl<T> Hash for $name<T> {
-            fn hash<U: Hasher>(&self, state: &mut U) {
-                self.$field.hash(state);
-            }
-        }
-        impl<T> Debug for $name<T> {
-            fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-                f.debug_tuple(stringify!($name))
-                    .field(&self.$field)
-                    .finish()
-            }
-        }
-    };
+impl<T> Clone for ReadSignal<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-impl_handle_traits!(ReadSignal, handle);
-impl_handle_traits!(Signal, 0);
+impl<T> Copy for ReadSignal<T> {}
+
+impl<T> PartialEq for ReadSignal<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
+impl<T> Eq for ReadSignal<T> {}
+
+impl<T> Hash for ReadSignal<T> {
+    fn hash<U: Hasher>(&self, state: &mut U) {
+        self.handle.hash(state);
+    }
+}
+
+impl<T> Debug for ReadSignal<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_tuple("ReadSignal").field(&self.handle).finish()
+    }
+}
+
+impl<T> Clone for Signal<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Signal<T> {}
+
+impl<T> PartialEq for Signal<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T> Eq for Signal<T> {}
+
+impl<T> Hash for Signal<T> {
+    fn hash<U: Hasher>(&self, state: &mut U) {
+        self.0.hash(state);
+    }
+}
+
+impl<T> Debug for Signal<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_tuple("Signal").field(&self.0).finish()
+    }
+}
 
 #[track_caller]
 pub fn signal<T: 'static>(value: T) -> Signal<T> {
