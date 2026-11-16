@@ -590,7 +590,7 @@ impl Host {
                 self.invalidate_rect();
                 self.resized.set(true);
             }
-            (Source::Canvas, "pointerleave") => self.leave(state, event),
+            (Source::Canvas, "pointerleave") => Self::leave(state, event),
             (Source::Canvas, "contextmenu") => event.prevent_default(),
             (Source::Canvas, "wheel") if let Some(event) = event.dyn_ref() => {
                 self.wheel(state, event);
@@ -636,7 +636,7 @@ impl Host {
         }
     }
 
-    fn leave(&self, state: &mut State, event: &Event) {
+    fn leave(state: &mut State, event: &Event) {
         let touch = event
             .dyn_ref::<PointerEvent>()
             .is_some_and(|event| event.pointer_type() == "touch");
