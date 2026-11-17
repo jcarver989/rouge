@@ -1,4 +1,5 @@
 use framer::Project;
+use framer::github::Step;
 use framer::rust::CargoWorkspace;
 use framer_presets::{Release, ReleasePlz, Rust, RustMonorepo, Workspace};
 use std::mem;
@@ -21,7 +22,19 @@ fn main() -> ExitCode {
         RustMonorepo::new()
             .rust(Rust::new("1.100").targets(["aarch64-apple-ios", "aarch64-apple-ios-sim"]))
             .workspace(Workspace::new().license("MIT"))
-            .release(Release::new().release_plz(ReleasePlz::new().publish_to_crates_io().github_token()))
+            .release(
+                Release::new().release_plz(
+                    ReleasePlz::new()
+                        .publish_to_crates_io()
+                        .github_token()
+                        .setup(
+                            Step::run(
+                                "sudo apt-get update && sudo apt-get install -y libfontconfig-dev",
+                            )
+                            .name("Install Fontconfig development files"),
+                        ),
+                ),
+            )
             .without_conventions(),
     );
     if let Some(workspace) = project.get_mut::<CargoWorkspace>() {
