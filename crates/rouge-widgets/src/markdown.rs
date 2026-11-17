@@ -6,8 +6,8 @@ use crate::{IconName, UiStyles, icon_button};
 use rouge_core::Role;
 use rouge_core::{
     BuildCx, Color, Corners, Cursor, DelegateStyle, Div, IntoProp, SpanStyle, StyleDelta, Styled,
-    Text, TextAlign, Theme, Typography, Underline, View, component, div, each, rich_text, text,
-    view, window_handle,
+    Text, TextAlign, TextBreak, Theme, Typography, Underline, View, component, div, each,
+    rich_text, text, view, window_handle,
 };
 use rouge_markdown::{
     MarkdownBlock, MarkdownBlockKind as Block, MarkdownCodeBlock, MarkdownDocument,
@@ -241,6 +241,22 @@ impl MarkdownRows {
     }
 
     #[must_use]
+    pub fn plain_text(&self) -> String {
+        let mut pieces = Vec::new();
+        for entry in &self.entries {
+            entry.row.pieces(&mut pieces);
+        }
+        let mut text = String::new();
+        for (separator, piece) in pieces {
+            if !text.is_empty() {
+                text.push_str(separator.as_str());
+            }
+            text.push_str(&piece);
+        }
+        text
+    }
+
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -286,7 +302,9 @@ impl MarkdownRows {
             .is_some_and(|row| matches!(row.kind, Kind::CodeHeader { .. }));
         for (offset, mut row) in rows.into_iter().enumerate() {
             let previous = self.entries.last().map(|entry| &entry.row.kind);
-            row.gap = previous.map_or(0.0, |previous| gap(previous, &row));
+            (row.gap, row.lead) = previous.map_or((0.0, TextBreak::Paragraph), |previous| {
+                spacing(previous, &row)
+            });
             let key = match offset.checked_sub(1).and_then(|line| kept.get(line)) {
                 Some(&key) if header && matches!(row.kind, Kind::CodeLine { .. }) => key,
                 _ => {
@@ -321,6 +339,7 @@ impl MarkdownRows {
 pub struct MarkdownRow {
     pub target: Option<MarkdownTargetId>,
     pub gap: f32,
+    lead: TextBreak,
     depth: u16,
     kind: Kind,
 }
@@ -348,6 +367,45 @@ impl MarkdownRow {
         }
     }
 
+    fn pieces(&self, pieces: &mut Vec<(TextBreak, String)>) {
+        match &self.kind {
+            Kind::Heading { content, .. }
+            | Kind::Paragraph { content }
+            | Kind::Html { content } => pieces.push((self.lead, content.text().to_owned())),
+            Kind::ListItem { marker, content } => {
+                pieces.push((self.lead, marker.clone()));
+                pieces.push((TextBreak::Space, content.text().to_owned()));
+            }
+            Kind::Quote { rows } => {
+                let first = pieces.len();
+                for row in rows {
+                    row.pieces(pieces);
+                }
+                if let Some((separator, _)) = pieces.get_mut(first) {
+                    *separator = self.lead;
+                }
+            }
+            Kind::CodeLine { code, index } => {
+                let text = code
+                    .lines()
+                    .get(*index)
+                    .map_or("", |line| code.line_text(line));
+                pieces.push((self.lead, text.to_owned()));
+            }
+            Kind::TableRow { cells, .. } => {
+                for (column, cell) in cells.iter().enumerate() {
+                    let separator = if column == 0 {
+                        self.lead
+                    } else {
+                        TextBreak::Tab
+                    };
+                    pieces.push((separator, cell.text().to_owned()));
+                }
+            }
+            Kind::CodeHeader { .. } | Kind::Rule => {}
+        }
+    }
+
     pub fn block(&self, paint: &MarkdownPaint) -> Div {
         match &self.kind {
             Kind::Heading { level, content } => paint
@@ -358,8 +416,10 @@ impl MarkdownRow {
                     heading(*level)
                 })
                 .text_color(paint.markdown(|m| m.heading))
-                .child(inline_text(content, paint)),
-            Kind::Paragraph { content } => paint.prose().child(inline_text(content, paint)),
+                .child(inline_text(content, paint).selection_break(self.lead)),
+            Kind::Paragraph { content } => paint
+                .prose()
+                .child(inline_text(content, paint).selection_break(self.lead)),
             Kind::ListItem { marker, content } => paint
                 .prose()
                 .py(0.0)
@@ -368,11 +428,13 @@ impl MarkdownRow {
                 .gap(8.0)
                 .child(view! {
                     <div min_w=16.0 flex_none muted>
-                        <text>{marker.clone()}</text>
+                        <text selection_break=self.lead>{marker.clone()}</text>
                     </div>
                 })
                 .child(view! {
-                    <div flex_1 min_w=0.0>{inline_text(content, paint)}</div>
+                    <div flex_1 min_w=0.0>
+                        {inline_text(content, paint).selection_break(TextBreak::Space)}
+                    </div>
                 }),
             Kind::Quote { rows } => view! {
                 <div px=8.0>
@@ -391,7 +453,7 @@ impl MarkdownRow {
                 code_header(code).bg(paint.markdown(|m| m.code_background))
             }
             Kind::CodeLine { code, index } => {
-                code_line(code, *index, paint).bg(paint.markdown(|m| m.code_background))
+                code_line(code, *index, self.lead, paint).bg(paint.markdown(|m| m.code_background))
             }
             Kind::TableRow {
                 cells,
@@ -400,16 +462,17 @@ impl MarkdownRow {
                 first,
                 last,
             } => {
-                let row = table_row(cells, alignments, *header, *first, *last, paint);
+                let row = table_row(cells, alignments, *header, *first, *last, self.lead, paint);
                 if *header { row.bg(Role::Surface) } else { row }
             }
             Kind::Rule => view! {
                 <div py=12.0><div w_full border_t=1.0 border_color=Role::Border/></div>
             },
-            Kind::Html { content } => paint
-                .prose()
-                .muted()
-                .child(inline_text(content, paint).code()),
+            Kind::Html { content } => paint.prose().muted().child(
+                inline_text(content, paint)
+                    .code()
+                    .selection_break(self.lead),
+            ),
         }
     }
 }
@@ -506,7 +569,8 @@ fn code_header(code: &Arc<MarkdownCodeBlock>) -> Div {
     let (code, window) = (Arc::clone(code), window_handle());
     let header = view! {
         <div h=CODE_HEADER_HEIGHT pl=16.0 pr=4.0 flex row items_center justify_between border_t=1.0
-             border_l=1.0 border_r=1.0 border_color=Role::Border rounded=corners(true, empty)>
+             border_l=1.0 border_r=1.0 border_color=Role::Border rounded=corners(true, empty)
+             unselectable>
             <text caption muted>{code.language().unwrap_or("code").to_owned()}</text>
             <icon_button test_id="markdown-copy-code" icon=IconName::Copy label="Copy code"
                          on_click={
@@ -525,7 +589,12 @@ fn code_header(code: &Arc<MarkdownCodeBlock>) -> Div {
     if empty { header.border_b(1.0) } else { header }
 }
 
-fn code_line(code: &MarkdownCodeBlock, index: usize, paint: &MarkdownPaint) -> Div {
+fn code_line(
+    code: &MarkdownCodeBlock,
+    index: usize,
+    lead: TextBreak,
+    paint: &MarkdownPaint,
+) -> Div {
     let lines = code.lines();
     let last = index + 1 == lines.len();
     let source = lines
@@ -539,7 +608,8 @@ fn code_line(code: &MarkdownCodeBlock, index: usize, paint: &MarkdownPaint) -> D
     let line = view! {
         <div px=16.0 min_h=line_height(CODE) overflow_hidden border_l=1.0 border_r=1.0
              border_color=Role::Border rounded=corners(false, last)>
-            <rich_text spans code wrap_indent=CODE_WRAP color=paint.markdown(|m| m.code)>{source}</rich_text>
+            <rich_text spans code wrap_indent=CODE_WRAP color=paint.markdown(|m| m.code)
+                       selection_break=lead>{source}</rich_text>
         </div>
     };
     if last {
@@ -555,6 +625,7 @@ fn table_row(
     header: bool,
     first: bool,
     last: bool,
+    lead: TextBreak,
     paint: &MarkdownPaint,
 ) -> Div {
     let cells = cells.iter().enumerate().map(|(column, cell)| {
@@ -563,8 +634,11 @@ fn table_row(
             Some(MarkdownTableAlignment::Right) => TextAlign::End,
             _ => TextAlign::Start,
         };
+        let separator = if column == 0 { lead } else { TextBreak::Tab };
         let cell = view! {
-            <div flex_1 min_w=0.0 px=12.0 py=TABLE_CELL_PADDING_Y>{inline_text(cell, paint).align(align)}</div>
+            <div flex_1 min_w=0.0 px=12.0 py=TABLE_CELL_PADDING_Y>
+                {inline_text(cell, paint).align(align).selection_break(separator)}
+            </div>
         };
         if column > 0 {
             cell.border_l(1.0).border_color(Role::Border)
@@ -675,6 +749,7 @@ fn push_block(block: &MarkdownBlock, depth: u16, rows: &mut Vec<MarkdownRow>) {
         target: block.target_id,
         depth,
         gap: 0.0,
+        lead: TextBreak::Paragraph,
         kind,
     });
 }
@@ -685,7 +760,7 @@ fn nested_rows(blocks: &[MarkdownBlock]) -> Vec<MarkdownRow> {
         push_block(block, 0, &mut rows);
     }
     for index in 1..rows.len() {
-        rows[index].gap = gap(&rows[index - 1].kind, &rows[index]);
+        (rows[index].gap, rows[index].lead) = spacing(&rows[index - 1].kind, &rows[index]);
     }
     rows
 }
@@ -708,6 +783,7 @@ fn push_list(
             target: item.target_id,
             depth,
             gap: 0.0,
+            lead: TextBreak::Paragraph,
             kind: Kind::ListItem {
                 marker,
                 content: Arc::clone(&item.content),
@@ -724,6 +800,7 @@ fn push_code(code: &Arc<MarkdownCodeBlock>, depth: u16, rows: &mut Vec<MarkdownR
         target: code.target_id,
         depth,
         gap: 0.0,
+        lead: TextBreak::Paragraph,
         kind: Kind::CodeHeader {
             code: Arc::clone(code),
         },
@@ -736,6 +813,7 @@ fn push_code(code: &Arc<MarkdownCodeBlock>, depth: u16, rows: &mut Vec<MarkdownR
                 target: line.target_id,
                 depth,
                 gap: 0.0,
+                lead: TextBreak::Paragraph,
                 kind: Kind::CodeLine {
                     code: Arc::clone(code),
                     index,
@@ -752,6 +830,7 @@ fn push_table(table: &MarkdownTable, depth: u16, rows: &mut Vec<MarkdownRow>) {
             target: row.target_id,
             depth,
             gap: 0.0,
+            lead: TextBreak::Paragraph,
             kind: Kind::TableRow {
                 cells: row
                     .cells
@@ -767,8 +846,20 @@ fn push_table(table: &MarkdownTable, depth: u16, rows: &mut Vec<MarkdownRow>) {
     }));
 }
 
-fn gap(previous: &Kind, row: &MarkdownRow) -> f32 {
-    match (&row.kind, previous) {
+fn spacing(previous: &Kind, row: &MarkdownRow) -> (f32, TextBreak) {
+    let line = row.depth > 0
+        || matches!(
+            (&row.kind, previous),
+            (Kind::CodeLine { .. }, Kind::CodeLine { .. })
+                | (Kind::TableRow { first: false, .. }, _)
+                | (Kind::ListItem { .. }, Kind::ListItem { .. })
+        );
+    let lead = if line {
+        TextBreak::Line
+    } else {
+        TextBreak::Paragraph
+    };
+    let gap = match (&row.kind, previous) {
         (Kind::CodeLine { .. } | Kind::TableRow { first: false, .. }, _) => 0.0,
         (Kind::Heading { level: 1, .. }, _) => 36.0,
         (Kind::Heading { level: 2, .. }, _) => 32.0,
@@ -778,7 +869,8 @@ fn gap(previous: &Kind, row: &MarkdownRow) -> f32 {
         (_, _) if row.depth > 0 => 6.0,
         (Kind::Rule, _) => 20.0,
         _ => 14.0,
-    }
+    };
+    (gap, lead)
 }
 
 const fn bullet(depth: u16) -> &'static str {
