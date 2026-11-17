@@ -4,7 +4,10 @@ description = "Element tree, styles, layout, text, views and the layer composito
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
 rouge-macros.workspace = true

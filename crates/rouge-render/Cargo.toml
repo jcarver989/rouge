@@ -4,7 +4,10 @@ description = "wgpu renderer, effects and shared GPU surfaces for Rouge."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
 rouge-theme.workspace = true

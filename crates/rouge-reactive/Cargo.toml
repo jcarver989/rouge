@@ -4,7 +4,10 @@ description = "Fine-grained signals, memos, effects and scopes for Rouge."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+license-file.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [features]
 tokio-rt = ["tokio/rt"]

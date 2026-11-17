@@ -790,7 +790,7 @@ An optional crate embedding [Servo](https://servo.org) as a surface producer. No
 
 **Input.** Events arrive through normal dispatch in surface-local coordinates and are forwarded to Servo. Because Servo answers whether it consumed an event only after a round trip, frames will carry input regions (areas that consume wheel events, and cursor zones) so Rouge can decide scroll chaining synchronously from the current frame. Focus maps to `set_focused`, keys go to the page first, and the page's cursor drives the platform cursor.
 
-**Constraints.** Pin an exact Servo release and gate upgrades on the crate's tests; build in its own CI job; Servo is MPL-2.0 while Rouge stays MIT or Apache-2.0; build without Servo's `webgpu` feature.
+**Constraints.** Pin an exact Servo release and gate upgrades on the crate's tests; build in its own CI job; Servo is MPL-2.0 while Rouge stays MIT; build without Servo's `webgpu` feature.
 
 **Known and open.** On macOS, Servo drawing through a custom `RenderingContext` into an IOSurface imported into wgpu without copies, fence-gated triple buffering without stale or torn frames, and Servo running off the main thread are known to work. Open: DMA-BUF export from GL on Mesa and NVIDIA, forcing Servo's GL context onto the wgpu adapter's GPU on Linux, Servo's paint budget for heavy pages, how much of Servo's scroll tree is exposed for input regions, and custom-scheme resource loading.
 

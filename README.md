@@ -19,7 +19,7 @@ Rouge is heavily inspired by [Leptos](https://leptos.dev/) and [GPUI](https://gp
 
 ## Quick start
 
-Rouge needs Rust 1.99 or later. Rouge is not on crates.io yet, so add it from Git:
+Rouge needs Rust 1.100 or later. Rouge is not on crates.io yet, so add it from Git:
 
 ```toml
 [dependencies]
@@ -206,4 +206,6 @@ For the full design and the list of planned work, read [design.md](design.md).
 
 ## License
 
-Rouge is available under the MIT license or the Apache License 2.0, at your choice.
+Rouge is available under the [MIT license](LICENSE).
+
+Bundled fonts and icons retain their own licenses, included alongside the assets.
