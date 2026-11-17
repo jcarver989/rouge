@@ -157,7 +157,7 @@ Clone this repository, and then run these commands from its root.
 | Command | What it shows |
 |---|---|
 | `cargo run -p rouge --example todomvc` | A full TodoMVC app with routes and saved data |
-| `cargo run -p rouge-widgets --example component_gallery` | All of the widgets |
+| `cargo run -p rouge --example component_gallery` | All of the widgets |
 | `cargo run -p rouge --example demo counter` | The counter |
 | `cargo run -p rouge --example demo glass` | Liquid glass |
 | `cargo run -p rouge --example demo effects` | Blur, masks, blend modes and a custom WGSL effect |

@@ -20,7 +20,10 @@ rouge-picker.workspace = true
 
 [dev-dependencies]
 rouge-render.workspace = true
-rouge.workspace = true
 
 [lints]
 workspace = true
+
+[[test]]
+name = "macros_component_test"
+path = "tests/macros/component_test.rs"

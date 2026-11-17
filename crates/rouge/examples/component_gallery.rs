@@ -1,12 +1,11 @@
-use rouge::{App, AppError, WindowOptions};
-use rouge_core::{Role, Styled, Theme, View, component, div, text, view};
-use rouge_reactive::{Signal, signal};
-use rouge_theme::UiPalette;
-use rouge_widgets::{
+use rouge::core::{Role, Styled, Theme, UiPalette, View, component, div, text, view};
+use rouge::reactive::{Signal, signal};
+use rouge::widgets::{
     ButtonVariant, IconName, InterfaceSize, Material, MaterialExt, MenuItem, NoticeTone,
     SelectionState, Side, UiStyles, action_bar, button, context_menu, empty_state, inline_edit,
     notification, resizable_panel, section_header, segment, segmented_control, tree_row,
 };
+use rouge::{App, AppError, WindowOptions};
 
 fn main() -> Result<(), AppError> {
     App::new()

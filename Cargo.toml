@@ -28,7 +28,6 @@ tokio = { version = "1", features = ["sync"] }
 zeno = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rouge-widgets = { path = "crates/rouge-widgets" }
-rouge = { path = "crates/rouge" }
 rouge-theme = { path = "crates/rouge-theme" }
 rouge-picker = { path = "crates/rouge-picker" }
 rouge-syntax = { path = "crates/rouge-syntax" }

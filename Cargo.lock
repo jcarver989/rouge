@@ -2982,9 +2982,6 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "rouge-core",
- "rouge-reactive",
- "rouge-widgets",
  "syn 2.0.119",
 ]
 
@@ -3127,7 +3124,6 @@ dependencies = [
 name = "rouge-widgets"
 version = "0.1.0"
 dependencies = [
- "rouge",
  "rouge-core",
  "rouge-markdown",
  "rouge-picker",
