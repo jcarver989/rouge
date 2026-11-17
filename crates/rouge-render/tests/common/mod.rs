@@ -3,7 +3,7 @@
 use rouge_render::headless::{Headless, Image};
 use rouge_render::{
     Atlas, Color, Command, DrawList, DrawLists, EffectDraw, Glass, GpuError, LayerDraw, ListKey,
-    Quad, Rect, RenderStats, Scene, Viewport,
+    Quad, Rect, RenderMemory, RenderStats, Scene, Viewport,
 };
 use std::error::Error;
 
@@ -46,15 +46,23 @@ impl Canvas {
     }
 
     pub(crate) fn frame(&mut self, layers: &[LayerDraw]) -> RenderStats {
+        let commands: Vec<_> = layers.iter().copied().map(Command::Draw).collect();
+        self.commands_frame(&commands)
+    }
+
+    pub(crate) fn commands_frame(&mut self, commands: &[Command]) -> RenderStats {
         self.commands.clear();
-        self.commands
-            .extend(layers.iter().copied().map(Command::Draw));
+        self.commands.extend_from_slice(commands);
         let scene = Scene::new(&self.commands, &self.lists);
         self.headless.render(self.clear, scene, &mut self.atlas)
     }
 
     pub(crate) fn image(&self) -> Result<Image, GpuError> {
         self.headless.image()
+    }
+
+    pub(crate) fn memory(&self) -> RenderMemory {
+        self.headless.memory()
     }
 }
 

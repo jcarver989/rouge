@@ -1,5 +1,7 @@
 use crate::gpu::create_texture;
-use crate::{Atlas, Color, Gpu, GpuError, RenderStats, Renderer, Scene, Surfaces, Viewport};
+use crate::{
+    Atlas, Color, Gpu, GpuError, RenderMemory, RenderStats, Renderer, Scene, Surfaces, Viewport,
+};
 use image::ExtendedColorType::Rgba8;
 use image::codecs::png::PngEncoder;
 use image::{ImageEncoder, ImageError};
@@ -106,6 +108,10 @@ impl Headless {
             .render(&self.view, self.viewport, clear, scene, &self.surfaces);
         self.surfaces.maintain();
         self.renderer.stats()
+    }
+
+    pub fn memory(&self) -> RenderMemory {
+        self.renderer.memory()
     }
 
     pub fn wait(&self) -> Result<(), GpuError> {

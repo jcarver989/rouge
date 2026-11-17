@@ -24,7 +24,8 @@ pub use geometry::{Affine, Corners, Edges, Point, Rect, Size};
 pub use gpu::{Gpu, GpuError};
 pub use image::{ImageData, ImageError, ImageFormat};
 pub use renderer::{
-    Command, Group, LayerDraw, RenderStats, Renderer, Scene, SurfaceDraw, Viewport, device_rect,
+    Command, Group, LayerDraw, RenderMemory, RenderStats, Renderer, Scene, SurfaceDraw, Viewport,
+    device_rect,
 };
 pub use scene::{DrawList, DrawLists, Glyph, ImageQuad, ListKey, Quad, Shadow};
 pub use surface::{

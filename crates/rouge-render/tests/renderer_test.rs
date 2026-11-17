@@ -6,8 +6,8 @@ use common::{
 };
 use rouge_render::headless::{Image, assert_near};
 use rouge_render::{
-    Affine, Color, Corners, DrawList, Edges, EffectDraw, Glass, Glyph, GpuError, ImageData,
-    ImageQuad, LayerDraw, ListKey, Point, Quad, Rect, Shadow,
+    Affine, Color, Command, Corners, DrawList, Edges, EffectDraw, Glass, Glyph, GpuError, Group,
+    ImageData, ImageQuad, LayerDraw, ListKey, Point, Quad, Rect, Shadow,
 };
 use std::error::Error;
 use std::f32::consts::FRAC_PI_4;
@@ -671,6 +671,54 @@ fn a_change_behind_a_backdrop_but_away_from_it_keeps_the_blur() -> Result<(), Gp
         (1, 0),
         "a mark moved under the glass re-blurs"
     );
+    Ok(())
+}
+
+#[test]
+fn memory_accounts_for_the_retained_scene_and_its_buffers() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    assert_eq!(
+        canvas.memory().scene,
+        0,
+        "nothing is retained before a frame"
+    );
+    let scene = canvas.add(split_scene());
+    canvas.frame(&[LayerDraw::new(scene)]);
+
+    let memory = canvas.memory();
+    assert_eq!(
+        memory.scene,
+        64 * 64 * 4,
+        "one retained window-sized target"
+    );
+    assert_eq!(memory.groups + memory.backdrops + memory.scratch, 0);
+    assert!(memory.total() > memory.scene, "buffers are counted too");
+    Ok(())
+}
+
+#[test]
+fn a_group_that_shrinks_a_little_keeps_its_texture() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(256, 1.0, Color::WHITE)?;
+    let mark = canvas.add(square(Color::RED));
+    let mut frame = |width: f32| {
+        let group = Group {
+            key: 1,
+            signature: width.to_bits().into(),
+            bounds: Rect::new(0.0, 0.0, width, 40.0),
+            offset: (0, 0),
+            opacity: 0.5,
+            scissor: None,
+            transform: Affine::IDENTITY,
+            effect: None,
+            len: 1,
+        };
+        canvas.commands_frame(&[Command::Group(group), Command::Draw(LayerDraw::new(mark))]);
+        canvas.memory().groups
+    };
+    let wide = frame(200.0);
+    assert!(wide > 0, "the group is rasterized into its own texture");
+    assert_eq!(frame(190.0), wide, "a slightly smaller group reuses it");
+    assert_eq!(frame(200.0), wide, "and so does growing back");
     Ok(())
 }
 

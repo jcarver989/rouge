@@ -291,6 +291,26 @@ pub struct RenderStats {
     pub surfaces: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderMemory {
+    pub scene: u64,
+    pub groups: u64,
+    pub group_blurs: u64,
+    pub backdrops: u64,
+    pub scratch: u64,
+    pub atlas: u64,
+    pub images: u64,
+    pub instances: u64,
+    pub records: u64,
+}
+
+impl RenderMemory {
+    pub fn total(&self) -> u64 {
+        let textures = self.scene + self.groups + self.group_blurs + self.backdrops;
+        textures + self.scratch + self.atlas + self.images + self.instances + self.records
+    }
+}
+
 type Scissor = [u32; 4];
 type SurfaceKey = (SurfaceId, BufferRef);
 
@@ -653,6 +673,16 @@ impl BlurGeometry {
     }
 }
 
+fn fit(kept: u32, needed: u32, slack: u32) -> u32 {
+    if (needed..=needed + 2 * slack).contains(&kept) {
+        kept
+    } else if kept > 0 && kept < needed {
+        needed + slack
+    } else {
+        needed
+    }
+}
+
 fn scratch_dims(scratch: (u32, u32), level: u32) -> (u32, u32) {
     (
         (scratch.0 >> (level + 1)).max(1),
@@ -746,8 +776,14 @@ impl Plan {
         self.since.clear();
         self.scale = scale;
         self.viewport = area.rect();
-        let pad = |extent: u32| (extent + SCRATCH_PADDING).next_multiple_of(GROUP_TEXTURE_STEP);
-        self.scratch = (pad(area.size.0), pad(area.size.1));
+        let pad = |kept: u32, extent: u32| {
+            let needed = (extent + SCRATCH_PADDING).next_multiple_of(GROUP_TEXTURE_STEP);
+            fit(kept, needed, SCRATCH_PADDING)
+        };
+        self.scratch = (
+            pad(self.scratch.0, area.size.0),
+            pad(self.scratch.1, area.size.1),
+        );
     }
 
     fn blurs(&self) -> bool {
@@ -846,6 +882,11 @@ struct Target {
 impl Target {
     fn dims(&self) -> (u32, u32) {
         (self.texture.width(), self.texture.height())
+    }
+
+    fn bytes(&self) -> u64 {
+        let texel = self.texture.format().block_copy_size(None).unwrap_or(4);
+        u64::from(self.texture.width()) * u64::from(self.texture.height()) * u64::from(texel)
     }
 }
 
@@ -1241,6 +1282,24 @@ impl Renderer {
         self.stats
     }
 
+    pub fn memory(&self) -> RenderMemory {
+        let sum = |targets: &mut dyn Iterator<Item = &Option<Target>>| -> u64 {
+            targets.flatten().map(Target::bytes).sum()
+        };
+        RenderMemory {
+            scene: sum(&mut [&self.scene].into_iter()),
+            groups: sum(&mut self.groups.values().map(|group| &group.target)),
+            group_blurs: sum(&mut self.groups.values().map(|group| &group.blurred)),
+            backdrops: sum(&mut (self.backdrops.iter())
+                .flat_map(|backdrop| [&backdrop.target, &backdrop.clean])),
+            scratch: sum(&mut self.scratch.iter()),
+            atlas: sum(&mut [&self.atlas].into_iter()),
+            images: self.images.bytes,
+            instances: self.instances.buffer.size(),
+            records: self.records.size(),
+        }
+    }
+
     fn sync_image(&mut self, image: &ImageData) {
         if let Some(cached) = self.images.cached.get_mut(&image.id()) {
             cached.used = self.frame;
@@ -1538,9 +1597,21 @@ impl Renderer {
         let Some(scissor) = area.scissor(group.scissor) else {
             return false;
         };
+        let kept = (self.groups.get(&group.key))
+            .and_then(|entry| entry.target.as_ref())
+            .map_or((0, 0), Target::dims);
+        let slack = 4 * GROUP_TEXTURE_STEP;
         let needed = (
-            cover.size.0.next_multiple_of(GROUP_TEXTURE_STEP),
-            cover.size.1.next_multiple_of(GROUP_TEXTURE_STEP),
+            fit(
+                kept.0,
+                cover.size.0.next_multiple_of(GROUP_TEXTURE_STEP),
+                slack,
+            ),
+            fit(
+                kept.1,
+                cover.size.1.next_multiple_of(GROUP_TEXTURE_STEP),
+                slack,
+            ),
         );
         let signature = group.signature;
         let (textures, device) = (&self.textures, &self.device);
