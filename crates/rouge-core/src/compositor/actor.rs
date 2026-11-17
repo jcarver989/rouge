@@ -4,8 +4,8 @@ use rouge_render::GpuError;
 #[cfg(not(target_arch = "wasm32"))]
 use rouge_render::headless::{Image, read_texture};
 use rouge_render::{
-    Acquire, Color, Command, Gpu, RenderStats, Renderer, SurfaceId, SurfaceStatus, Surfaces,
-    Target, Viewport,
+    Acquire, Color, Command, Gpu, RenderMemory, RenderStats, Renderer, SurfaceId, SurfaceStatus,
+    Surfaces, Target, Viewport,
 };
 use std::mem::take;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -123,6 +123,11 @@ impl CompositorActor {
 
     pub fn stats(&self) -> RenderStats {
         self.stats
+    }
+
+    pub fn memory(&self, window: WindowId) -> Option<RenderMemory> {
+        let open = self.windows.iter().find(|open| open.id == window)?;
+        Some(open.renderer.memory())
     }
 
     #[cfg(not(target_arch = "wasm32"))]

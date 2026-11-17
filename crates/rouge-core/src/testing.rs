@@ -6,7 +6,9 @@ use crate::ui::Ui;
 use crate::view::View;
 use crate::window::{Menu, WindowCommand};
 use rouge_render::headless::{Image, headless_gpu};
-use rouge_render::{Color, Command, GpuError, Point, Rect, RenderStats, Size, Surfaces, Target};
+use rouge_render::{
+    Color, Command, GpuError, Point, Rect, RenderMemory, RenderStats, Size, Surfaces, Target,
+};
 use rouge_theme::UiPalette;
 use std::borrow::Cow;
 use std::mem::take;
@@ -227,6 +229,10 @@ impl TestUi {
             frames += 1;
         }
         Ok(frames)
+    }
+
+    pub fn memory(&mut self) -> Result<RenderMemory, TestError> {
+        Ok(self.actor()?.memory(WINDOW).unwrap_or_default())
     }
 
     pub fn wait(&self) -> Result<(), TestError> {

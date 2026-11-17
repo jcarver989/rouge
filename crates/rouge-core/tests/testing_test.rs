@@ -186,6 +186,18 @@ fn a_frame_that_changes_no_pixels_is_drawn_but_not_presented() -> TestResult {
 }
 
 #[test]
+fn memory_reports_the_bytes_the_renderer_holds_for_the_window() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default()
+        .size(100.0, 50.0)
+        .scale(2.0)
+        .build(|| div().size_full().bg(Color::RED));
+    ui.draw()?;
+    assert_eq!(ui.memory()?.scene, 200 * 100 * 4);
+    Ok(())
+}
+
+#[test]
 fn compositor_frames_counts_only_the_frames_the_compositor_wakes_for() -> TestResult {
     let _rt = Runtime::new().enter();
     let steps = (0..4u8).fold(Keyframes::new(), |keyframes, step| {
