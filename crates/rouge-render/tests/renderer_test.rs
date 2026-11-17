@@ -706,6 +706,38 @@ fn a_frame_redraws_only_what_changed_and_matches_a_full_redraw() -> Result<(), G
 }
 
 #[test]
+fn a_small_change_encodes_only_the_layers_it_touches() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(256, 1.0, Color::WHITE)?;
+    let marks: Vec<_> = (0..8).map(|_| canvas.add(square(Color::BLUE))).collect();
+    let moving = canvas.add(square(Color::RED));
+    let frame = |x: f32| {
+        let row = marks.iter().enumerate();
+        let mut layers: Vec<_> = row
+            .map(|(i, mark)| moved(*mark, i as f32 * 30.0, 0.0))
+            .collect();
+        layers.push(moved(moving, x, 200.0));
+        layers
+    };
+    let first = canvas.frame(&frame(0.0));
+    assert_eq!(first.draw_calls, 9, "the first frame draws every layer");
+    let nudged = canvas.frame(&frame(4.0));
+    assert_eq!(nudged.draw_calls, 1, "only the moved layer is encoded");
+
+    let fresh = render_layers_on(256, Color::WHITE, |canvas| {
+        let marks: Vec<_> = (0..8).map(|_| canvas.add(square(Color::BLUE))).collect();
+        let moving = canvas.add(square(Color::RED));
+        let row = marks.iter().enumerate();
+        let mut layers: Vec<_> = row
+            .map(|(i, mark)| moved(*mark, i as f32 * 30.0, 0.0))
+            .collect();
+        layers.push(moved(moving, 4.0, 200.0));
+        layers
+    })?;
+    assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
 fn swapping_the_order_of_unchanged_layers_matches_a_full_redraw() -> Result<(), GpuError> {
     let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
     let (red, blue) = (
@@ -750,6 +782,50 @@ fn a_change_under_glass_redraws_what_it_blurs_and_matches_a_full_redraw() -> Res
         vec![LayerDraw::new(scene), moved(mark, 70.0, 70.0), glass]
     })?;
     assert_eq!(canvas.image()?.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
+fn a_small_change_under_wide_glass_redraws_only_the_glass_it_can_reach() -> Result<(), GpuError> {
+    let bounds = Rect::new(16.0, 16.0, 224.0, 224.0);
+    let refracting = EffectDraw::new(&Glass::new().blur(4.0).edge_width(14.0), bounds);
+    let cases = [
+        (1.0, backdrop(bounds, 4.0), 100.0, 104.0),
+        (2.0, backdrop(bounds, 4.0), 100.0, 104.0),
+        (2.0, backdrop(bounds, 4.0), 0.0, 4.0),
+        (2.0, backdrop(bounds, 16.0), 0.0, 4.0),
+        (2.0, refracting, 0.0, 4.0),
+    ];
+    for (case, (scale, effect, from, to)) in cases.into_iter().enumerate() {
+        let size = (256.0 * scale) as u32;
+        let mut canvas = Canvas::new(size, scale, Color::WHITE)?;
+        let (scene, mark) = (canvas.add(split_scene()), canvas.add(square(Color::RED)));
+        let glass = LayerDraw {
+            backdrop: Some(effect),
+            ..LayerDraw::default()
+        };
+        let frame = |x: f32| [LayerDraw::new(scene), moved(mark, x, 100.0), glass];
+
+        canvas.frame(&frame(from));
+        let nudged = canvas.frame(&frame(to));
+        let glass_pixels = (224.0 * scale) as u64 * (224.0 * scale) as u64;
+        assert_eq!(
+            nudged.backdrop_blurs, 1,
+            "the blur is redone in case {case}"
+        );
+        assert!(
+            nudged.damaged > 0 && nudged.damaged < glass_pixels / 2,
+            "but only glass within reach of the mark is redrawn in case {case}: {}",
+            nudged.damaged
+        );
+
+        let fresh = Canvas::new(size, scale, Color::WHITE).map(|mut fresh| {
+            let (scene, mark) = (fresh.add(split_scene()), fresh.add(square(Color::RED)));
+            fresh.frame(&[LayerDraw::new(scene), moved(mark, to, 100.0), glass]);
+            fresh.image()
+        })??;
+        assert_eq!(canvas.image()?.pixels, fresh.pixels, "case {case}");
+    }
     Ok(())
 }
 

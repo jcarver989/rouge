@@ -612,6 +612,7 @@ impl BlurGeometry {
                 size: self.size,
                 source: from,
                 destination: to,
+                kept: None,
             });
             return start..start + 1;
         }
@@ -637,6 +638,7 @@ impl BlurGeometry {
                 size,
                 source,
                 destination,
+                kept: None,
             });
             source = destination;
             let used = (size.0 as f32, size.1 as f32);
@@ -669,6 +671,7 @@ enum BlurKind {
 enum Attachment {
     Scene,
     Backdrop(usize),
+    Clean(usize),
     Group(u64),
     GroupBlur(u64),
     Scratch(u32),
@@ -680,6 +683,7 @@ struct BlurPass {
     size: (u32, u32),
     source: Attachment,
     destination: Attachment,
+    kept: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -758,10 +762,16 @@ struct Children<'a> {
     surfaces: &'a Surfaces,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct Reads {
+    region: Rect,
+    reach: f32,
+}
+
 struct Behind {
     base: u64,
     drawn: Vec<Drawn>,
-    reads: Option<Rect>,
+    reads: Option<Reads>,
     open: Option<usize>,
     backdrops: usize,
 }
@@ -770,7 +780,7 @@ struct Behind {
 struct Drawn {
     fingerprint: u64,
     extent: Option<Rect>,
-    reads: Option<Rect>,
+    reads: Option<Reads>,
 }
 
 struct Placed<'a> {
@@ -795,6 +805,7 @@ struct GroupTarget {
 
 struct BackdropTarget {
     target: Option<Target>,
+    clean: Option<Target>,
     signature: u64,
 }
 
@@ -1431,7 +1442,14 @@ impl Renderer {
             };
             self.plan_effect(placed, area, behind, plan);
         }
-        if let (Some(start), Some(list)) = (start, list) {
+        let extent = list
+            .and_then(DrawList::extent)
+            .map(|extent| device_rect(&draw.transform, &extent, plan.scale).inflate(1.0));
+        let bounded = match (draw.scissor, extent) {
+            (Some(scissor), Some(extent)) => Some(scissor.intersect(&extent)),
+            (scissor, extent) => scissor.or(extent),
+        };
+        if let (Some(start), Some(list), Some(scissor)) = (start, list, area.scissor(bounded)) {
             let record = plan.records.push(&DrawRecord {
                 layer: Layer::new(&draw.transform, draw.opacity, area, plan.scale, draw.radii),
                 fill: draw.fill,
@@ -1673,7 +1691,19 @@ impl Renderer {
             let Some(geometry) = BlurGeometry::new(&viewport, region, kernel) else {
                 return;
             };
-            behind.reads = Some(region);
+            let stretch = transform
+                .a
+                .hypot(transform.b)
+                .max(transform.c.hypot(transform.d));
+            let slack = if kernel.levels == 0 {
+                1.0
+            } else {
+                (4u32 << kernel.levels) as f32
+            };
+            let reach = effect
+                .backdrop_reach()
+                .map_or(f32::INFINITY, |reach| reach * scale * stretch + slack);
+            behind.reads = Some(Reads { region, reach });
             let mut hasher = FxHasher::default();
             behind.base.hash(&mut hasher);
             for drawn in &behind.drawn {
@@ -1694,6 +1724,7 @@ impl Renderer {
             if self.backdrops.len() <= index {
                 self.backdrops.push(BackdropTarget {
                     target: None,
+                    clean: None,
                     signature,
                 });
             }
@@ -1703,6 +1734,11 @@ impl Renderer {
                 &mut existing.target,
                 "rouge backdrop",
                 geometry.dims,
+            ) | self.textures.ensure(
+                &self.device,
+                &mut existing.clean,
+                "rouge clean backdrop",
+                geometry.size,
             );
             let cached = !created && existing.signature == signature;
             existing.signature = signature;
@@ -1717,8 +1753,30 @@ impl Renderer {
                     since,
                     ..
                 } = plan;
-                let slots = (Attachment::Scene, Attachment::Backdrop(index));
-                let range = geometry.passes(&viewport, kernel, slots, records, *scratch, snapshots);
+                let start = snapshots.len() as u32;
+                let size = (geometry.size.0 as f32, geometry.size.1 as f32);
+                let copy = RegionRecord {
+                    rect: texels(geometry.origin, size, viewport.dims),
+                    bounds: texel_bounds(geometry.origin, size, viewport.dims, 0.0),
+                    options: [0.0; 4],
+                };
+                snapshots.push(BlurPass {
+                    kind: BlurKind::Copy,
+                    record: records.push(&copy),
+                    size: geometry.size,
+                    source: Attachment::Scene,
+                    destination: Attachment::Clean(index),
+                    kept: Some(geometry.origin),
+                });
+                let copied = Source {
+                    origin: geometry.origin,
+                    dims: geometry.size,
+                    valid: viewport.valid,
+                    zero_outside: false,
+                };
+                let slots = (Attachment::Clean(index), Attachment::Backdrop(index));
+                let range = geometry.passes(&copied, kernel, slots, records, *scratch, snapshots);
+                let range = start..range.end;
                 let clear = !since
                     .iter()
                     .any(|drawn| !drawn.intersect(&region).is_empty());
@@ -1759,6 +1817,7 @@ impl Renderer {
         match slot {
             Attachment::Scene => scene,
             Attachment::Backdrop(index) => self.backdrops.get(index)?.target.as_ref(),
+            Attachment::Clean(index) => self.backdrops.get(index)?.clean.as_ref(),
             Attachment::Group(key) => self.groups.get(&key)?.target.as_ref(),
             Attachment::GroupBlur(key) => self.groups.get(&key)?.blurred.as_ref(),
             Attachment::Scratch(level) => self.scratch.get(level as usize)?.as_ref(),
@@ -1770,6 +1829,7 @@ impl Renderer {
         encoder: &mut CommandEncoder,
         passes: &[BlurPass],
         scene: Option<&Target>,
+        clips: Option<&[Scissor]>,
         stats: &mut RenderStats,
     ) {
         for pass in passes {
@@ -1780,16 +1840,41 @@ impl Renderer {
             let (Some(source), Some(destination)) = (source, destination) else {
                 continue;
             };
-            let mut render = begin_pass(
-                encoder,
-                &destination.view,
-                LoadOp::Clear(ClearColor::TRANSPARENT),
-            );
+            let kept = pass.kept.zip(clips);
+            let load = if kept.is_some() {
+                LoadOp::Load
+            } else {
+                LoadOp::Clear(ClearColor::TRANSPARENT)
+            };
+            let mut render = begin_pass(encoder, &destination.view, load);
             render.set_viewport(0.0, 0.0, pass.size.0 as f32, pass.size.1 as f32, 0.0, 1.0);
             render.set_pipeline(&self.fullscreen[pass.kind as usize]);
             render.set_bind_group(0, &source.bind_group, &[]);
             render.set_bind_group(1, &self.records_group, &[pass.record.page]);
-            render.draw(pass.record.vertices(), 0..1);
+            let Some((origin, clips)) = kept else {
+                render.draw(pass.record.vertices(), 0..1);
+                continue;
+            };
+            let bounds = Rect::new(0.0, 0.0, pass.size.0 as f32, pass.size.1 as f32);
+            for clip in clips {
+                let rect = Rect::new(
+                    clip[0] as f32 - origin.0,
+                    clip[1] as f32 - origin.1,
+                    clip[2] as f32,
+                    clip[3] as f32,
+                )
+                .intersect(&bounds);
+                if rect.is_empty() {
+                    continue;
+                }
+                render.set_scissor_rect(
+                    rect.origin.x as u32,
+                    rect.origin.y as u32,
+                    rect.size.width as u32,
+                    rect.size.height as u32,
+                );
+                render.draw(pass.record.vertices(), 0..1);
+            }
         }
     }
 
@@ -1830,7 +1915,7 @@ impl Renderer {
                 Step::Snapshot(passes) => {
                     drop(pass);
                     let passes = &plan.snapshots[passes.start as usize..passes.end as usize];
-                    self.encode_blurs(encoder, passes, scene, stats);
+                    self.encode_blurs(encoder, passes, scene, clips, stats);
                     pass = begin_pass(encoder, view, LoadOp::Load);
                     bound = Bound::default();
                     stats.backdrop_passes += 1;
@@ -2008,7 +2093,7 @@ impl Renderer {
                 }
                 Pass::Blur(passes) => {
                     let passes = &plan.blurs[passes.start as usize..passes.end as usize];
-                    self.encode_blurs(&mut encoder, passes, None, &mut stats);
+                    self.encode_blurs(&mut encoder, passes, None, None, &mut stats);
                 }
             }
         }
@@ -2132,7 +2217,7 @@ impl Damage {
         Damage { key, drawn }
     }
 
-    fn readers(&self) -> impl Iterator<Item = (usize, Rect)> + '_ {
+    fn readers(&self) -> impl Iterator<Item = (usize, Reads)> + '_ {
         (self.drawn.iter().enumerate()).filter_map(|(index, drawn)| Some((index, drawn.reads?)))
     }
 
@@ -2218,27 +2303,54 @@ fn unmatched(
 
 fn settle(
     mut rects: Vec<(Rect, Depth)>,
-    before: &[(usize, Rect)],
-    after: &[(usize, Rect)],
+    before: &[(usize, Reads)],
+    after: &[(usize, Reads)],
     full: Rect,
 ) -> Vec<Rect> {
-    let readers: Vec<((usize, usize), Rect)> = (before.iter().zip(after))
-        .map(|((was, _), (is, region))| ((*was, *is), *region))
+    let readers: Vec<((usize, usize), Reads)> = (before.iter().zip(after))
+        .map(|((was, _), (is, reads))| ((*was, *is), *reads))
         .collect();
-    for ((_, was), (_, region)) in before.iter().zip(after) {
-        if was != region {
-            rects.extend([(*was, Depth::Under), (*region, Depth::Under)]);
+    for ((_, was), (_, reads)) in before.iter().zip(after) {
+        if was.region != reads.region {
+            rects.extend([(was.region, Depth::Under), (reads.region, Depth::Under)]);
         }
     }
-    let reaches = |rects: &[(Rect, Depth)], (at, region): &((usize, usize), Rect)| {
-        (rects.iter()).any(|(rect, depth)| depth.behind(*at) && !rect.intersect(region).is_empty())
-    };
-    let mut resampled = vec![false; readers.len()];
-    while let Some(index) =
-        (0..readers.len()).find(|index| !resampled[*index] && reaches(&rects, &readers[*index]))
-    {
-        resampled[index] = true;
-        rects.push((readers[index].1, Depth::Under));
+    let mut owners = vec![None; rects.len()];
+    let mut seen = vec![0; readers.len()];
+    let mut pieces = vec![0; readers.len()];
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for (reader, (at, reads)) in readers.iter().enumerate() {
+            while seen[reader] < rects.len() && pieces[reader] <= MAX_DAMAGE_RECTS {
+                let ((rect, depth), owner) = (rects[seen[reader]], owners[seen[reader]]);
+                seen[reader] += 1;
+                if owner == Some(reader)
+                    || !depth.behind(*at)
+                    || rect.intersect(&reads.region).is_empty()
+                {
+                    continue;
+                }
+                let piece = if reads.reach.is_finite() {
+                    rect.inflate(reads.reach).intersect(&reads.region)
+                } else {
+                    reads.region
+                };
+                let covered = (rects.iter())
+                    .any(|(other, depth)| *depth == Depth::Under && other.union(&piece) == *other);
+                if !covered {
+                    pieces[reader] += 1;
+                    let piece = if pieces[reader] > MAX_DAMAGE_RECTS {
+                        reads.region
+                    } else {
+                        piece
+                    };
+                    rects.push((piece, Depth::Under));
+                    owners.push(Some(reader));
+                    grew = true;
+                }
+            }
+        }
     }
     let mut merged: Vec<Rect> = Vec::new();
     for rect in rects.iter().map(|(rect, _)| rect.intersect(&full)) {

@@ -2,6 +2,7 @@ use crate::{Color, Corners, Point, Rect};
 use std::ptr;
 
 const SHADOW_REACH: f32 = 28.0;
+const HEADER: usize = 4;
 /// From the upper left, so the top and left edges catch the light.
 const DIAGONAL_RIM_ANGLE: f32 = -0.643_501_1;
 pub(crate) const PASSTHROUGH_WGSL: &str = include_str!("shaders/passthrough.wgsl");
@@ -41,6 +42,10 @@ pub trait ShaderEffect: 'static {
     fn backdrop_blur(&self) -> f32 {
         0.0
     }
+
+    fn backdrop_reach(&self) -> Option<f32> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,7 +58,7 @@ pub struct EffectInstance {
 
 impl EffectInstance {
     pub const UNIFORMS: usize = 16;
-    pub const VALUES: usize = Self::UNIFORMS + 3;
+    pub const VALUES: usize = Self::UNIFORMS + HEADER;
 
     pub fn new<T: ShaderEffect>(effect: &T) -> Self {
         assert!(
@@ -67,7 +72,8 @@ impl EffectInstance {
         values[0] = effect.margin().max(0.0);
         values[1] = effect.content_blur().max(0.0);
         values[2] = effect.backdrop_blur().max(0.0);
-        values[3..].copy_from_slice(&uniforms);
+        values[3] = effect.backdrop_reach().map_or(-1.0, |reach| reach.max(0.0));
+        values[HEADER..].copy_from_slice(&uniforms);
         EffectInstance {
             wgsl: T::WGSL,
             inputs: T::INPUTS,
@@ -82,7 +88,7 @@ impl EffectInstance {
 
     pub fn at(mut self, seconds: f32) -> Self {
         if let Some(index) = self.clock {
-            self.values[3 + index] = seconds;
+            self.values[HEADER + index] = seconds;
         }
         self
     }
@@ -121,9 +127,13 @@ impl EffectInstance {
         self.values[2]
     }
 
+    pub fn backdrop_reach(&self) -> Option<f32> {
+        Some(self.values[3]).filter(|reach| *reach >= 0.0)
+    }
+
     pub fn uniforms(&self) -> [f32; Self::UNIFORMS] {
         let mut uniforms = [0.0; Self::UNIFORMS];
-        uniforms.copy_from_slice(&self.values[3..]);
+        uniforms.copy_from_slice(&self.values[HEADER..]);
         uniforms
     }
 }
@@ -206,6 +216,10 @@ impl ShaderEffect for BackdropBlur {
 
     fn backdrop_blur(&self) -> f32 {
         self.radius
+    }
+
+    fn backdrop_reach(&self) -> Option<f32> {
+        Some(0.0)
     }
 }
 
@@ -529,5 +543,9 @@ impl ShaderEffect for Glass {
 
     fn backdrop_blur(&self) -> f32 {
         self.blur
+    }
+
+    fn backdrop_reach(&self) -> Option<f32> {
+        Some(self.refraction.abs() * self.edge_width * 2.0 * (1.0 + self.dispersion.abs()))
     }
 }
