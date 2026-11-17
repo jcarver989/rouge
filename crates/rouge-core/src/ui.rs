@@ -140,6 +140,7 @@ pub struct Ui {
     clicks: Option<(f64, Point, u32)>,
     epoch: Instant,
     clock: Option<f64>,
+    following: bool,
     committed_clear: Option<Color>,
     committed_scale: Option<f32>,
     shortcuts: Vec<(Chord, MenuItem)>,
@@ -238,6 +239,7 @@ impl Ui {
             clicks: None,
             epoch: Instant::now(),
             clock: None,
+            following: false,
             committed_clear: None,
             committed_scale: None,
             shortcuts: Vec::new(),
@@ -278,6 +280,7 @@ impl Ui {
         self.settle_layout();
         let changed = self.paint();
         self.tree.place_surfaces(self.cache.scale);
+        self.following = self.tree.following();
         animating || changed
     }
 
@@ -379,10 +382,7 @@ impl Ui {
     }
 
     pub fn next_frame(&self) -> Wake {
-        if !self.queue.is_empty()
-            || self.tree.dirty() != Dirty::None
-            || self.tree.observed_animating()
-        {
+        if !self.queue.is_empty() || self.tree.dirty() != Dirty::None || self.following {
             return Wake::Now;
         }
         let completions = self

@@ -1230,6 +1230,25 @@ fn a_fling_keeps_its_momentum_when_rows_measured_above_it_reanchor_the_list() ->
     Ok(())
 }
 
+#[test]
+fn a_fling_keeps_a_virtual_list_mounting_rows_until_it_settles_without_more_input() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, mounted, _) = rows(100_000);
+    ui.pointer_moved(Point::new(50.0, 50.0));
+    flick(&mut ui, 2000.0, 0.05);
+    let mut frames = 0;
+    while ui.next_frame() == Wake::Now && frames < 600 {
+        ui.advance(FRAME);
+        frames += 1;
+    }
+    let first = mounted.borrow().first().copied().unwrap_or_default();
+    assert!(
+        first >= 30,
+        "rows were swapped in as it coasted, not only when input arrived: {first}"
+    );
+    assert!(frames < 600, "and the UI went idle once it settled");
+}
+
 fn flick(ui: &mut TestUi, speed: f32, over: f64) {
     ui.scroll_drag(Point::new(0.0, -10.0));
     ui.advance(over);

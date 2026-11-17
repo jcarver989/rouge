@@ -4,8 +4,8 @@ use rouge_core::testing::{
     BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
 };
 use rouge_core::{
-    Color, DragEvent, DragPhase, Edges, Menu, MenuItem, Modifiers, Point, PointerButton, Rect,
-    ScrollState, Scrollable, Size, Styled, TouchPhase, Ui, UiPalette, canvas, div, dynamic,
+    Color, DragEvent, DragPhase, Edges, Keyframes, Menu, MenuItem, Modifiers, Point, PointerButton,
+    Rect, ScrollState, Scrollable, Size, Styled, TouchPhase, Ui, UiPalette, canvas, div, dynamic,
     modifiers, pct, safe_area, scroll, show, text, window_size, zoom,
 };
 use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
@@ -1032,4 +1032,62 @@ fn the_clock_counts_from_the_epoch_the_host_shares_with_the_compositor() -> Test
     ui.set_epoch(epoch);
     assert!(ui.time() >= 5.0, "time is measured from the shared epoch");
     Ok(())
+}
+
+#[test]
+fn tracked_bounds_riding_on_a_looping_slide_keep_the_ui_following_only_while_mounted() {
+    let _rt = Runtime::new().enter();
+    let (shown, bounds) = (signal(true), signal(Rect::ZERO));
+    let mut ui = TestUi::new(move || {
+        div().size(40.0).animate(slide()).child(show(
+            move || shown.get(),
+            move || div().size(10.0).track_bounds(bounds),
+        ))
+    });
+    ui.update_at(0.0);
+    assert_eq!(ui.next_frame(), Wake::Now, "the bounds move with the slide");
+    ui.update_at(0.5);
+    assert_eq!(
+        bounds.get_untracked().origin.x,
+        20.0,
+        "and are published as it runs"
+    );
+
+    shown.set(false);
+    ui.update_at(0.6);
+    assert_eq!(ui.next_frame(), Wake::Idle, "nothing watches the slide");
+
+    shown.set(true);
+    ui.update_at(0.7);
+    assert_eq!(
+        ui.next_frame(),
+        Wake::Now,
+        "a newly mounted observer is followed"
+    );
+}
+
+#[test]
+fn a_size_observer_does_not_follow_a_moving_parent() {
+    let _rt = Runtime::new().enter();
+    let measured = signal(Size::ZERO);
+    let mut ui = TestUi::new(move || {
+        div()
+            .size(40.0)
+            .animate(slide())
+            .child(div().size(10.0).track_size(measured))
+    });
+    ui.update_at(0.0);
+    assert_eq!(measured.get_untracked(), Size::new(10.0, 10.0));
+    assert_eq!(
+        ui.next_frame(),
+        Wake::Idle,
+        "a transform cannot change a size"
+    );
+}
+
+fn slide() -> Keyframes {
+    Keyframes::new()
+        .at(0.0, |pose| pose.translate_x(0.0))
+        .at(1.0, |pose| pose.translate_x(40.0))
+        .repeat()
 }

@@ -25,19 +25,8 @@ impl Tree {
         });
     }
 
-    pub(crate) fn observed_animating(&self) -> bool {
-        if !self.layers.is_animating() {
-            return false;
-        }
-        self.observers.iter().any(|id| {
-            self.chain(*id).iter().any(|node| {
-                self.elements[*node]
-                    .layers
-                    .iter()
-                    .flatten()
-                    .any(|layer| self.layers.is_layer_moving(layer.id))
-            })
-        })
+    pub(crate) fn following(&self) -> bool {
+        self.layers.is_animating() && self.observers.iter().any(|id| self.follows(*id))
     }
 
     pub(crate) fn publish_motions(&self) {
@@ -237,6 +226,37 @@ impl Tree {
             }
             None
         })
+    }
+
+    fn follows(&self, id: ElementId) -> bool {
+        successors(Some(id), |id| self.elements.get(*id)?.parent)
+            .take(self.reach(id))
+            .filter_map(|id| self.elements.get(id))
+            .flat_map(|element| element.layers.iter().flatten())
+            .any(|layer| self.layers.is_layer_moving(layer.id))
+    }
+
+    fn reach(&self, id: ElementId) -> usize {
+        let Some(element) = self.elements.get(id) else {
+            return 0;
+        };
+        let bounds = element.extras().is_some_and(|extras| {
+            extras.bounds_observer.is_some() || extras.paint_region.is_some()
+        });
+        let tracked_text = element.kind.canvas().is_some_and(|canvas| {
+            canvas
+                .ops
+                .iter()
+                .any(|op| matches!(op, PaintOp::Text(shaped) if shaped.run.track.is_some()))
+        });
+        let scroll = element
+            .scroll()
+            .is_some_and(|scroll| scroll.observer.is_some());
+        if bounds || tracked_text {
+            usize::MAX
+        } else {
+            usize::from(scroll)
+        }
     }
 
     fn publish_observers(&mut self, id: ElementId) {
