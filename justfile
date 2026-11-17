@@ -68,6 +68,18 @@ web-build example="component_gallery" package="rouge":
 web example="component_gallery" package="rouge": (web-build example package)
     python3 -m http.server 8000 --bind 127.0.0.1 -d target/web/{{example}}
 
+# Measure the bench scenarios on a headless GPU and print what changed since `just bench --save`; arguments are name fragments, --save or --runs <n>
+bench *args:
+    cargo run --release -p rouge-bench -- run {{args}}
+
+# Sample one bench scenario and print its hottest functions (macOS: sample; Linux: perf)
+profile scenario seconds="10":
+    scripts/profile {{scenario}} {{seconds}}
+
+# Write a dhat heap profile of one bench scenario to target/bench/dhat-heap.json
+bench-heap scenario:
+    cargo run --release -p rouge-bench --features dhat -- run {{scenario}} --runs 0
+
 # Keep widget spacing on the 4px grid and radii on the token scale
 style-check:
     scripts/style-check

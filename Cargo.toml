@@ -69,6 +69,10 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+
 [profile.dev]
 debug = "line-tables-only"
 
