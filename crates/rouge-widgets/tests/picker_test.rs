@@ -1,21 +1,163 @@
-use rouge_core::testing::TestResult;
+use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::{Length, Styled, View, div, pct, px, text, view};
-use rouge_picker::PickerEntry;
-use rouge_reactive::{Runtime, signal};
+use rouge_reactive::{Runtime, Signal, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::*;
 
-use SearchPickerEvent::{Chose, Highlighted};
+use SearchPickerEvent::{Chose, Highlighted, Query};
 
 #[test]
-fn an_item_searches_its_visible_text_and_keywords_in_display_order() {
-    let item = PickerItem::new("id", "Label")
-        .keywords("hidden")
-        .detail("first")
-        .subtitle("Sub")
-        .prefix("p")
-        .detail("second");
-    assert_eq!(item.text(), "p Label Sub first second hidden");
+fn an_item_matches_its_prefix_label_subtitle_details_and_keywords() {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle, _) = SearchPickerTest::new(vec![
+        PickerItem::new("match", "Label")
+            .prefix("pfx")
+            .subtitle("Sub")
+            .detail("first")
+            .keywords("hidden"),
+        PickerItem::new("other", "Other"),
+    ])
+    .build();
+    for query in ["pfx", "Label", "Sub", "first", "hidden"] {
+        handle.query().set(query.to_owned());
+        assert_eq!(visible(&mut ui, ["match", "other"]), ["match"], "{query}");
+    }
+}
+
+#[test]
+fn matches_are_ranked_best_first_and_misses_dropped() {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle, events) = SearchPickerTest::new(vec![
+        PickerItem::new("toggle", "Toggle split / unified"),
+        PickerItem::new("submit", "Submit review"),
+        PickerItem::new("stage", "Stage all"),
+    ])
+    .build();
+    let ids = ["toggle", "submit", "stage"];
+    handle.query().set("sub".to_owned());
+    assert_eq!(visible(&mut ui, ids), ["submit"]);
+    handle.query().set("st".to_owned());
+    assert_eq!(visible(&mut ui, ids)[0], "stage");
+    handle.query().set("zzz".to_owned());
+    assert_eq!(visible(&mut ui, ids), Vec::<&str>::new());
+    assert!(ui.text_bounds("No matching items").is_some());
+    handle.choose();
+    assert!(!events.with(|events| events.iter().any(|event| matches!(event, Chose(_)))));
+}
+
+#[test]
+fn groups_stay_together_in_first_appearance_order_under_their_headers() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, _, _) = SearchPickerTest::new(vec![
+        PickerItem::new("next", "next").group("Navigation"),
+        PickerItem::new("theme", "theme").group("View"),
+        PickerItem::new("previous", "previous").group("Navigation"),
+    ])
+    .build();
+    assert_eq!(
+        visible(&mut ui, ["next", "theme", "previous"]),
+        ["next", "previous", "theme"]
+    );
+    let navigation = ui.text_bounds("Navigation").ok_or("no Navigation header")?;
+    let view = ui.text_bounds("View").ok_or("no View header")?;
+    assert!(navigation.origin.y < ui.rect_of("next")?.origin.y);
+    assert!(ui.rect_of("previous")?.origin.y < view.origin.y);
+    assert!(view.origin.y < ui.rect_of("theme")?.origin.y);
+    Ok(())
+}
+
+#[test]
+fn the_highlight_skips_disabled_items_and_stops_at_either_end() {
+    let _entered = Runtime::new().enter();
+    let (_ui, handle, events) = SearchPickerTest::new(vec![
+        PickerItem::new("off", "off").disabled(true),
+        PickerItem::new("first", "first"),
+        PickerItem::new("off-again", "off").disabled(true),
+        PickerItem::new("last", "last"),
+    ])
+    .build();
+    handle.move_highlight(1);
+    handle.move_highlight(8);
+    handle.move_highlight(-8);
+    handle.highlight(2);
+    handle.highlight(3);
+    handle.choose();
+    assert_eq!(
+        events.get(),
+        [Highlighted(3), Highlighted(1), Highlighted(3), Chose(3)]
+    );
+}
+
+#[test]
+fn an_unfiltered_picker_reports_the_query_and_lists_everything() {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle, events) = SearchPickerTest::new(vec![
+        PickerItem::new("alpha", "Alpha"),
+        PickerItem::new("beta", "Beta"),
+    ])
+    .unfiltered()
+    .build();
+    handle.query().set("zzz".to_owned());
+    assert_eq!(visible(&mut ui, ["alpha", "beta"]), ["alpha", "beta"]);
+    assert_eq!(events.get(), [Query("zzz".to_owned())]);
+}
+
+#[test]
+fn a_limited_picker_limits_its_matches_not_its_items() {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle, _) = SearchPickerTest::new(vec![
+        PickerItem::new("submit", "Submit review"),
+        PickerItem::new("stage", "Stage all"),
+        PickerItem::new("show", "Show split"),
+    ])
+    .max_matches(1)
+    .build();
+    let ids = ["submit", "stage", "show"];
+    assert_eq!(visible(&mut ui, ids), ["submit"]);
+    handle.query().set("split".to_owned());
+    assert_eq!(visible(&mut ui, ids), ["show"]);
+}
+
+#[test]
+fn only_matching_items_can_be_highlighted() {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle, events) = SearchPickerTest::new(vec![
+        PickerItem::new("submit", "Submit review"),
+        PickerItem::new("stage", "Stage all"),
+        PickerItem::new("show", "Show split"),
+    ])
+    .build();
+    handle.query().set("split".to_owned());
+    ui.run(0.0);
+    handle.highlight(0);
+    handle.choose();
+    assert_eq!(
+        events.get(),
+        [Query("split".to_owned()), Highlighted(2), Chose(2)]
+    );
+}
+
+#[test]
+fn replacing_items_keeps_the_query_and_regroups() {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle, _) = SearchPickerTest::new(vec![
+        PickerItem::new("gate", "gate"),
+        PickerItem::new("beta", "beta"),
+    ])
+    .build();
+    let ids = ["gate", "beta", "delta", "gamma", "alpha"];
+    handle.query().set("ga".to_owned());
+    assert_eq!(visible(&mut ui, ids), ["gate"]);
+    handle.set_items(vec![
+        PickerItem::new("delta", "delta").group("Sooner"),
+        PickerItem::new("gamma", "gamma").group("Later"),
+        PickerItem::new("alpha", "alpha").group("Sooner"),
+    ]);
+    assert_eq!(visible(&mut ui, ids), ["gamma"]);
+    assert_eq!(handle.query().get(), "ga");
+    assert!(ui.text_bounds("Later").is_some() && ui.text_bounds("Sooner").is_none());
+    handle.query().set(String::new());
+    assert_eq!(visible(&mut ui, ids), ["delta", "alpha", "gamma"]);
 }
 
 #[test]
@@ -140,4 +282,60 @@ fn a_long_list_beside_a_preview_scrolls_inside_the_picker() -> TestResult {
         "{last:?} outside {picker:?}"
     );
     Ok(())
+}
+
+struct SearchPickerTest {
+    items: Vec<PickerItem>,
+    unfiltered: bool,
+    max_matches: Option<usize>,
+}
+
+impl SearchPickerTest {
+    fn new(items: Vec<PickerItem>) -> Self {
+        Self {
+            items,
+            unfiltered: false,
+            max_matches: None,
+        }
+    }
+
+    fn unfiltered(mut self) -> Self {
+        self.unfiltered = true;
+        self
+    }
+
+    fn max_matches(mut self, limit: usize) -> Self {
+        self.max_matches = Some(limit);
+        self
+    }
+
+    fn build(self) -> (TestUi, SearchPickerHandle, Signal<Vec<SearchPickerEvent>>) {
+        let (ui, (handle, events)) = component_test().size(600.0, 400.0).build_with(|| {
+            let events = signal(Vec::new());
+            let mut handle = SearchPickerHandle::new(self.items, move |event| {
+                events.update(|events| events.push(event));
+            });
+            if self.unfiltered {
+                handle = handle.unfiltered();
+            }
+            if let Some(limit) = self.max_matches {
+                handle = handle.max_matches(limit);
+            }
+            (
+                view! { <search_picker handle test_id="picker"/> },
+                (handle, events),
+            )
+        });
+        (ui, handle, events)
+    }
+}
+
+fn visible<const N: usize>(ui: &mut TestUi, ids: [&'static str; N]) -> Vec<&'static str> {
+    ui.run(0.0);
+    let mut shown: Vec<_> = ids
+        .into_iter()
+        .filter_map(|id| ui.bounds_of(id).map(|rect| (rect.origin.y, id)))
+        .collect();
+    shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+    shown.into_iter().map(|(_, id)| id).collect()
 }

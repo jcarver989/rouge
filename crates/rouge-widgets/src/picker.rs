@@ -1,3 +1,6 @@
+mod fuzzy;
+mod state;
+
 use crate::{
     components::{ListRow, list_row, muted_text},
     icon::{Icon, IconName},
@@ -11,14 +14,11 @@ use rouge_core::{
     Scrollable, StyleDelta, Styled, View, component, div, dynamic, editable, pct, px, scroll, show,
     text, view, virtual_list, virtual_list_handle,
 };
-use rouge_picker::{PickerEntry, PickerRow, PickerState};
 use rouge_reactive::{Callback, Memo, Signal, batch, effect, memo, signal};
 use rouge_theme::SelectionState;
-use std::borrow::Cow;
+use state::{PickerRow, PickerState};
 use std::mem;
 use std::rc::Rc;
-
-type Picker = PickerState<PickerItem>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PickerMarker {
@@ -136,20 +136,6 @@ impl PickerItem {
             self.search.push_str(part);
         }
         self
-    }
-}
-
-impl PickerEntry for PickerItem {
-    fn text(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.search)
-    }
-
-    fn group(&self) -> Option<&str> {
-        self.group.as_deref()
-    }
-
-    fn disabled(&self) -> bool {
-        self.disabled
     }
 }
 
@@ -394,7 +380,7 @@ impl<T: Fn(usize) -> AnyView + 'static> From<T> for Preview {
 
 #[derive(Clone, Copy)]
 pub struct SearchPickerHandle {
-    model: Signal<Picker>,
+    model: Signal<PickerState>,
     revision: Signal<u64>,
     query: Signal<String>,
     emit: Callback<(SearchPickerEvent,)>,
@@ -458,7 +444,7 @@ impl SearchPickerHandle {
         self.emit.call(SearchPickerEvent::Dismissed);
     }
 
-    fn update(&self, f: impl FnOnce(&mut Picker)) {
+    fn update(&self, f: impl FnOnce(&mut PickerState)) {
         let before = self.model.with_untracked(PickerState::highlighted);
         self.model.update(f);
         if let Some(after) = self
@@ -470,7 +456,7 @@ impl SearchPickerHandle {
         }
     }
 
-    fn configure(self, f: impl FnOnce(Picker) -> Picker) -> Self {
+    fn configure(self, f: impl FnOnce(PickerState) -> PickerState) -> Self {
         self.model
             .update(|model| *model = f(mem::replace(model, PickerState::new(Vec::new()))));
         self

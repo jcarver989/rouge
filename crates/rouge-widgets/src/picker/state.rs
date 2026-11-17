@@ -1,78 +1,23 @@
-use crate::fuzzy::fuzzy_filter;
-use std::borrow::Cow;
+use super::PickerItem;
+use super::fuzzy::fuzzy_filter;
 use std::collections::HashMap;
 
-pub trait PickerEntry {
-    fn text(&self) -> Cow<'_, str>;
-
-    fn group(&self) -> Option<&str> {
-        None
-    }
-
-    fn disabled(&self) -> bool {
-        false
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PickerOption {
-    pub text: String,
-    pub group: Option<String>,
-    pub disabled: bool,
-}
-
-impl PickerOption {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            group: None,
-            disabled: false,
-        }
-    }
-
-    pub fn group(mut self, group: impl Into<String>) -> Self {
-        self.group = Some(group.into());
-        self
-    }
-
-    pub const fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-}
-
-impl PickerEntry for PickerOption {
-    fn text(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.text)
-    }
-
-    fn group(&self) -> Option<&str> {
-        self.group.as_deref()
-    }
-
-    fn disabled(&self) -> bool {
-        self.disabled
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PickerRow {
+pub(super) enum PickerRow {
     Group(usize),
     Option(usize),
 }
 
 impl PickerRow {
-    #[must_use]
-    pub const fn index(self) -> usize {
+    pub(super) const fn index(self) -> usize {
         match self {
             Self::Group(index) | Self::Option(index) => index,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PickerState<T = PickerOption> {
-    options: Vec<T>,
+pub(super) struct PickerState {
+    options: Vec<PickerItem>,
     groups: Vec<Option<usize>>,
     filtered: bool,
     limit: Option<usize>,
@@ -82,8 +27,8 @@ pub struct PickerState<T = PickerOption> {
     highlighted: usize,
 }
 
-impl<T: PickerEntry> PickerState<T> {
-    pub fn new(options: Vec<T>) -> Self {
+impl PickerState {
+    pub(super) fn new(options: Vec<PickerItem>) -> Self {
         let mut state = Self {
             options: Vec::new(),
             groups: Vec::new(),
@@ -98,39 +43,39 @@ impl<T: PickerEntry> PickerState<T> {
         state
     }
 
-    pub fn unfiltered(mut self) -> Self {
+    pub(super) fn unfiltered(mut self) -> Self {
         self.filtered = false;
         self.refilter();
         self
     }
 
-    pub fn limit(mut self, limit: usize) -> Self {
+    pub(super) fn limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self.refilter();
         self
     }
 
-    pub fn query(&self) -> &str {
+    pub(super) fn query(&self) -> &str {
         &self.query
     }
 
-    pub fn set_query(&mut self, query: impl Into<String>) {
+    pub(super) fn set_query(&mut self, query: impl Into<String>) {
         self.query = query.into();
         self.refilter();
     }
 
-    pub fn options(&self) -> &[T] {
+    pub(super) fn options(&self) -> &[PickerItem] {
         &self.options
     }
 
-    pub fn set_options(&mut self, options: Vec<T>) {
+    pub(super) fn set_options(&mut self, options: Vec<PickerItem>) {
         self.options = options;
         let mut order = HashMap::new();
         self.groups = self
             .options
             .iter()
             .map(|option| {
-                option.group().map(|group| {
+                option.group.as_deref().map(|group| {
                     let next = order.len();
                     *order.entry(group).or_insert(next)
                 })
@@ -139,29 +84,25 @@ impl<T: PickerEntry> PickerState<T> {
         self.refilter();
     }
 
-    pub fn matches(&self) -> &[usize] {
-        &self.matches
-    }
-
-    pub fn highlighted(&self) -> Option<usize> {
+    pub(super) fn highlighted(&self) -> Option<usize> {
         self.matches
             .get(self.highlighted)
             .copied()
-            .filter(|&index| !self.options[index].disabled())
+            .filter(|&index| !self.options[index].disabled)
     }
 
-    pub fn highlight(&mut self, index: usize) -> bool {
+    pub(super) fn highlight(&mut self, index: usize) -> bool {
         let Some(position) = self.positions.get(index).copied().flatten() else {
             return false;
         };
-        let enabled = !self.options[index].disabled();
+        let enabled = !self.options[index].disabled;
         if enabled {
             self.highlighted = position;
         }
         enabled
     }
 
-    pub fn move_by(&mut self, delta: isize) -> bool {
+    pub(super) fn move_by(&mut self, delta: isize) -> bool {
         let Some(last) = self.matches.len().checked_sub(1) else {
             return false;
         };
@@ -178,11 +119,11 @@ impl<T: PickerEntry> PickerState<T> {
         moved
     }
 
-    pub fn rows(&self) -> Vec<PickerRow> {
+    pub(super) fn rows(&self) -> Vec<PickerRow> {
         let mut rows = Vec::with_capacity(self.matches.len());
         let mut group = None;
         for &index in &self.matches {
-            let option_group = self.options[index].group();
+            let option_group = self.options[index].group.as_deref();
             if option_group != group {
                 if option_group.is_some() {
                     rows.push(PickerRow::Group(index));
@@ -196,7 +137,7 @@ impl<T: PickerEntry> PickerState<T> {
 
     fn refilter(&mut self) {
         if self.filtered {
-            let keys = self.options.iter().map(PickerEntry::text);
+            let keys = self.options.iter().map(|option| option.search.as_str());
             fuzzy_filter(&self.query, keys, &mut self.matches);
         } else {
             self.matches.clear();
@@ -218,7 +159,7 @@ impl<T: PickerEntry> PickerState<T> {
     fn enabled_from(&self, start: usize, step: isize) -> Option<usize> {
         let mut position = start;
         loop {
-            if !self.options[*self.matches.get(position)?].disabled() {
+            if !self.options[*self.matches.get(position)?].disabled {
                 return Some(position);
             }
             position = position.checked_add_signed(step)?;

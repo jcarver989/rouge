@@ -4,7 +4,7 @@ use nucleo_matcher::{
 };
 use std::cmp::Reverse;
 
-pub(crate) fn fuzzy_filter<T: AsRef<str>>(
+pub(super) fn fuzzy_filter<T: AsRef<str>>(
     query: &str,
     keys: impl ExactSizeIterator<Item = T>,
     output: &mut Vec<usize>,

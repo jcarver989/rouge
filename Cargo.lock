@@ -2997,13 +2997,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rouge-picker"
-version = "0.1.0"
-dependencies = [
- "nucleo-matcher",
-]
-
-[[package]]
 name = "rouge-reactive"
 version = "0.1.0"
 dependencies = [
@@ -3124,9 +3117,9 @@ dependencies = [
 name = "rouge-widgets"
 version = "0.1.0"
 dependencies = [
+ "nucleo-matcher",
  "rouge-core",
  "rouge-markdown",
- "rouge-picker",
  "rouge-reactive",
  "rouge-render",
  "rouge-syntax",

@@ -190,9 +190,8 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 | `rouge-theme` | Colors and palettes. |
 | `rouge-markdown` | Markdown documents that you can parse in parts. |
 | `rouge-syntax` | Tree-sitter syntax highlighting. |
-| `rouge-picker` | Fuzzy search for pickers. |
 
-`rouge-reactive`, `rouge-theme`, `rouge-markdown`, `rouge-syntax` and `rouge-picker` do not need a GPU or a window. You can use them in other apps, for example in a terminal UI.
+`rouge-reactive`, `rouge-theme`, `rouge-markdown` and `rouge-syntax` do not need a GPU or a window. You can use them in other apps, for example in a terminal UI.
 
 ## Limits
 
