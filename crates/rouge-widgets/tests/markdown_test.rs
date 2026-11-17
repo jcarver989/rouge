@@ -108,7 +108,7 @@ fn replacing_a_stream_rebuilds_every_row() -> TestResult {
 #[test]
 fn copying_selected_markdown_matches_its_plain_text() -> TestResult {
     let _entered = Runtime::new().enter();
-    let source = "# Title\n\nSome *styled* text.\n\n- one\n- two\n\n```rust\nfn a() {}\n\nfn b() {}\n```\n\n| Name | Age |\n| --- | --- |\n| Ann | 3 |\n\n> quoted\n";
+    let source = "# Title\n\nSome *styled* text.\n\n- one\n- two\n\n  > nested quote\n\n```rust\nfn a() {}\n\nfn b() {}\n```\n\n| Name | Age |\n| --- | --- |\n| Ann | 3 |\n\n> quoted\n";
     let document = MarkdownDocument::parse(source);
     let plain = MarkdownRows::new(document.blocks()).plain_text();
     let mut ui = component_test().size(600.0, 800.0).build(move || {
@@ -123,7 +123,7 @@ fn copying_selected_markdown_matches_its_plain_text() -> TestResult {
     ui.press("cmd-a cmd-c");
     assert_eq!(
         plain,
-        "Title\n\nSome styled text.\n\n• one\n• two\n\nfn a() {}\n\nfn b() {}\n\nName\tAge\nAnn\t3\n\nquoted"
+        "Title\n\nSome styled text.\n\n• one\n• two\nnested quote\n\nfn a() {}\n\nfn b() {}\n\nName\tAge\nAnn\t3\n\nquoted"
     );
     assert_eq!(clipboard.text(), Some(plain));
     Ok(())

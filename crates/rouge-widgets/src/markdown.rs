@@ -18,6 +18,7 @@ use rouge_reactive::{Callback, Memo, ReadSignal, Signal, effect, memo, signal};
 use rouge_syntax::SyntaxTheme;
 use rouge_theme::{MarkdownPalette, Rgba};
 use std::rc::Rc;
+use std::slice::from_ref;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -242,16 +243,9 @@ impl MarkdownRows {
 
     #[must_use]
     pub fn plain_text(&self) -> String {
-        let mut pieces = Vec::new();
-        for entry in &self.entries {
-            entry.row.pieces(&mut pieces);
-        }
         let mut text = String::new();
-        for (separator, piece) in pieces {
-            if !text.is_empty() {
-                text.push_str(separator.as_str());
-            }
-            text.push_str(&piece);
+        for entry in &self.entries {
+            entry.row.append_text(&mut text);
         }
         text
     }
@@ -302,9 +296,9 @@ impl MarkdownRows {
             .is_some_and(|row| matches!(row.kind, Kind::CodeHeader { .. }));
         for (offset, mut row) in rows.into_iter().enumerate() {
             let previous = self.entries.last().map(|entry| &entry.row.kind);
-            (row.gap, row.lead) = previous.map_or((0.0, TextBreak::Paragraph), |previous| {
-                spacing(previous, &row)
-            });
+            if let Some(previous) = previous {
+                row.space_after(previous);
+            }
             let key = match offset.checked_sub(1).and_then(|line| kept.get(line)) {
                 Some(&key) if header && matches!(row.kind, Kind::CodeLine { .. }) => key,
                 _ => {
@@ -345,6 +339,31 @@ pub struct MarkdownRow {
 }
 
 impl MarkdownRow {
+    fn new(target: Option<MarkdownTargetId>, depth: u16, kind: Kind) -> Self {
+        Self {
+            target,
+            gap: 0.0,
+            lead: TextBreak::Paragraph,
+            depth,
+            kind,
+        }
+    }
+
+    fn space_after(&mut self, previous: &Kind) {
+        let (gap, lead) = spacing(previous, self);
+        self.gap = gap;
+        self.set_lead(lead);
+    }
+
+    fn set_lead(&mut self, lead: TextBreak) -> bool {
+        self.lead = lead;
+        match &mut self.kind {
+            Kind::Quote { rows } => rows.iter_mut().any(|row| row.set_lead(lead)),
+            Kind::CodeHeader { .. } | Kind::Rule => false,
+            _ => true,
+        }
+    }
+
     #[must_use]
     pub fn indent(&self) -> f32 {
         LIST_INDENT * f32::from(self.depth)
@@ -367,48 +386,46 @@ impl MarkdownRow {
         }
     }
 
-    fn pieces(&self, pieces: &mut Vec<(TextBreak, String)>) {
-        match &self.kind {
+    fn fragments(&self) -> impl Iterator<Item = Fragment<'_>> {
+        use FragmentSource::{Code, Inline, Literal};
+        let (first, rest, separator) = match &self.kind {
             Kind::Heading { content, .. }
             | Kind::Paragraph { content }
-            | Kind::Html { content } => pieces.push((self.lead, content.text().to_owned())),
+            | Kind::Html { content } => (Some(Inline(content)), &[][..], TextBreak::None),
             Kind::ListItem { marker, content } => {
-                pieces.push((self.lead, marker.clone()));
-                pieces.push((TextBreak::Space, content.text().to_owned()));
+                (Some(Literal(marker)), from_ref(content), TextBreak::Space)
             }
-            Kind::Quote { rows } => {
-                let first = pieces.len();
-                for row in rows {
-                    row.pieces(pieces);
-                }
-                if let Some((separator, _)) = pieces.get_mut(first) {
-                    *separator = self.lead;
-                }
+            Kind::CodeLine { code, index } => (Some(Code(code, *index)), &[][..], TextBreak::None),
+            Kind::TableRow { cells, .. } => (None, cells.as_slice(), TextBreak::Tab),
+            _ => (None, &[][..], TextBreak::None),
+        };
+        first
+            .into_iter()
+            .chain(rest.iter().map(Inline))
+            .enumerate()
+            .map(move |(index, source)| {
+                Fragment(if index == 0 { self.lead } else { separator }, source)
+            })
+    }
+
+    fn append_text(&self, text: &mut String) {
+        if let Kind::Quote { rows } = &self.kind {
+            for row in rows {
+                row.append_text(text);
             }
-            Kind::CodeLine { code, index } => {
-                let text = code
-                    .lines()
-                    .get(*index)
-                    .map_or("", |line| code.line_text(line));
-                pieces.push((self.lead, text.to_owned()));
+        }
+        for Fragment(separator, source) in self.fragments() {
+            if !text.is_empty() {
+                text.push_str(separator.as_str());
             }
-            Kind::TableRow { cells, .. } => {
-                for (column, cell) in cells.iter().enumerate() {
-                    let separator = if column == 0 {
-                        self.lead
-                    } else {
-                        TextBreak::Tab
-                    };
-                    pieces.push((separator, cell.text().to_owned()));
-                }
-            }
-            Kind::CodeHeader { .. } | Kind::Rule => {}
+            text.push_str(source.as_str());
         }
     }
 
     pub fn block(&self, paint: &MarkdownPaint) -> Div {
+        let mut fragments = self.fragments().map(|fragment| fragment.view(paint));
         match &self.kind {
-            Kind::Heading { level, content } => paint
+            Kind::Heading { level, .. } => paint
                 .prose()
                 .typography(if paint.compact {
                     TITLE
@@ -416,11 +433,9 @@ impl MarkdownRow {
                     heading(*level)
                 })
                 .text_color(paint.markdown(|m| m.heading))
-                .child(inline_text(content, paint).selection_break(self.lead)),
-            Kind::Paragraph { content } => paint
-                .prose()
-                .child(inline_text(content, paint).selection_break(self.lead)),
-            Kind::ListItem { marker, content } => paint
+                .child(fragments.next()),
+            Kind::Paragraph { .. } => paint.prose().child(fragments.next()),
+            Kind::ListItem { .. } => paint
                 .prose()
                 .py(0.0)
                 .flex()
@@ -428,12 +443,12 @@ impl MarkdownRow {
                 .gap(8.0)
                 .child(view! {
                     <div min_w=16.0 flex_none muted>
-                        <text selection_break=self.lead>{marker.clone()}</text>
+                        {fragments.next()}
                     </div>
                 })
                 .child(view! {
                     <div flex_1 min_w=0.0>
-                        {inline_text(content, paint).selection_break(TextBreak::Space)}
+                        {fragments.next()}
                     </div>
                 }),
             Kind::Quote { rows } => view! {
@@ -453,27 +468,70 @@ impl MarkdownRow {
                 code_header(code).bg(paint.markdown(|m| m.code_background))
             }
             Kind::CodeLine { code, index } => {
-                code_line(code, *index, self.lead, paint).bg(paint.markdown(|m| m.code_background))
+                code_line(fragments.next(), *index + 1 == code.lines().len())
+                    .bg(paint.markdown(|m| m.code_background))
             }
             Kind::TableRow {
-                cells,
                 alignments,
                 header,
                 first,
                 last,
+                ..
             } => {
-                let row = table_row(cells, alignments, *header, *first, *last, self.lead, paint);
+                let row = table_row(fragments, alignments, *header, *first, *last);
                 if *header { row.bg(Role::Surface) } else { row }
             }
             Kind::Rule => view! {
                 <div py=12.0><div w_full border_t=1.0 border_color=Role::Border/></div>
             },
-            Kind::Html { content } => paint.prose().muted().child(
-                inline_text(content, paint)
-                    .code()
-                    .selection_break(self.lead),
-            ),
+            Kind::Html { .. } => paint
+                .prose()
+                .muted()
+                .child(fragments.next().map(|text| text.code())),
         }
+    }
+}
+
+enum FragmentSource<'a> {
+    Inline(&'a Arc<MarkdownText>),
+    Literal(&'a str),
+    Code(&'a MarkdownCodeBlock, usize),
+}
+
+impl<'a> FragmentSource<'a> {
+    fn as_str(&self) -> &'a str {
+        match self {
+            Self::Inline(content) => content.text(),
+            Self::Literal(text) => text,
+            Self::Code(code, index) => code
+                .lines()
+                .get(*index)
+                .map_or("", |line| code.line_text(line)),
+        }
+    }
+}
+
+struct Fragment<'a>(TextBreak, FragmentSource<'a>);
+
+impl Fragment<'_> {
+    fn view(self, paint: &MarkdownPaint) -> Text {
+        let Fragment(separator, source) = self;
+        let view = match source {
+            FragmentSource::Inline(content) => inline_text(content, paint),
+            FragmentSource::Literal(text_source) => text(text_source.to_owned()),
+            FragmentSource::Code(code, index) => {
+                let (syntax, highlights) = (paint.syntax, Arc::clone(&code.syntax().highlights));
+                rich_text(source.as_str().to_owned(), move || {
+                    syntax.with(|syntax| {
+                        syntax_spans(highlights.line(index).unwrap_or_default(), syntax)
+                    })
+                })
+                .code()
+                .wrap_indent(CODE_WRAP)
+                .color(paint.markdown(|m| m.code))
+            }
+        };
+        view.selection_break(separator)
     }
 }
 
@@ -589,27 +647,11 @@ fn code_header(code: &Arc<MarkdownCodeBlock>) -> Div {
     if empty { header.border_b(1.0) } else { header }
 }
 
-fn code_line(
-    code: &MarkdownCodeBlock,
-    index: usize,
-    lead: TextBreak,
-    paint: &MarkdownPaint,
-) -> Div {
-    let lines = code.lines();
-    let last = index + 1 == lines.len();
-    let source = lines
-        .get(index)
-        .map_or_else(String::new, |line| code.line_text(line).to_owned());
-    let (syntax, highlights) = (paint.syntax, Arc::clone(&code.syntax().highlights));
-    let spans = move || {
-        let line = highlights.line(index).unwrap_or_default();
-        syntax.with(|syntax| syntax_spans(line, syntax))
-    };
+fn code_line(source: Option<Text>, last: bool) -> Div {
     let line = view! {
         <div px=16.0 min_h=line_height(CODE) overflow_hidden border_l=1.0 border_r=1.0
              border_color=Role::Border rounded=corners(false, last)>
-            <rich_text spans code wrap_indent=CODE_WRAP color=paint.markdown(|m| m.code)
-                       selection_break=lead>{source}</rich_text>
+            {source}
         </div>
     };
     if last {
@@ -620,24 +662,21 @@ fn code_line(
 }
 
 fn table_row(
-    cells: &[Arc<MarkdownText>],
+    cells: impl Iterator<Item = Text>,
     alignments: &[MarkdownTableAlignment],
     header: bool,
     first: bool,
     last: bool,
-    lead: TextBreak,
-    paint: &MarkdownPaint,
 ) -> Div {
-    let cells = cells.iter().enumerate().map(|(column, cell)| {
+    let cells = cells.enumerate().map(|(column, cell)| {
         let align = match alignments.get(column) {
             Some(MarkdownTableAlignment::Center) => TextAlign::Center,
             Some(MarkdownTableAlignment::Right) => TextAlign::End,
             _ => TextAlign::Start,
         };
-        let separator = if column == 0 { lead } else { TextBreak::Tab };
         let cell = view! {
             <div flex_1 min_w=0.0 px=12.0 py=TABLE_CELL_PADDING_Y>
-                {inline_text(cell, paint).align(align).selection_break(separator)}
+                {cell.align(align)}
             </div>
         };
         if column > 0 {
@@ -745,13 +784,7 @@ fn push_block(block: &MarkdownBlock, depth: u16, rows: &mut Vec<MarkdownRow>) {
         Block::CodeBlock(code) => return push_code(code, depth, rows),
         Block::Table(table) => return push_table(table, depth, rows),
     };
-    rows.push(MarkdownRow {
-        target: block.target_id,
-        depth,
-        gap: 0.0,
-        lead: TextBreak::Paragraph,
-        kind,
-    });
+    rows.push(MarkdownRow::new(block.target_id, depth, kind));
 }
 
 fn nested_rows(blocks: &[MarkdownBlock]) -> Vec<MarkdownRow> {
@@ -760,7 +793,8 @@ fn nested_rows(blocks: &[MarkdownBlock]) -> Vec<MarkdownRow> {
         push_block(block, 0, &mut rows);
     }
     for index in 1..rows.len() {
-        (rows[index].gap, rows[index].lead) = spacing(&rows[index - 1].kind, &rows[index]);
+        let (before, after) = rows.split_at_mut(index);
+        after[0].space_after(&before[index - 1].kind);
     }
     rows
 }
@@ -779,16 +813,14 @@ fn push_list(
         } else {
             bullet(depth).to_owned()
         };
-        rows.push(MarkdownRow {
-            target: item.target_id,
+        rows.push(MarkdownRow::new(
+            item.target_id,
             depth,
-            gap: 0.0,
-            lead: TextBreak::Paragraph,
-            kind: Kind::ListItem {
+            Kind::ListItem {
                 marker,
                 content: Arc::clone(&item.content),
             },
-        });
+        ));
         for block in &item.blocks {
             push_block(block, depth.saturating_add(1), rows);
         }
@@ -796,42 +828,33 @@ fn push_list(
 }
 
 fn push_code(code: &Arc<MarkdownCodeBlock>, depth: u16, rows: &mut Vec<MarkdownRow>) {
-    rows.push(MarkdownRow {
-        target: code.target_id,
+    rows.push(MarkdownRow::new(
+        code.target_id,
         depth,
-        gap: 0.0,
-        lead: TextBreak::Paragraph,
-        kind: Kind::CodeHeader {
+        Kind::CodeHeader {
             code: Arc::clone(code),
         },
-    });
-    rows.extend(
-        code.lines()
-            .iter()
-            .enumerate()
-            .map(|(index, line)| MarkdownRow {
-                target: line.target_id,
-                depth,
-                gap: 0.0,
-                lead: TextBreak::Paragraph,
-                kind: Kind::CodeLine {
-                    code: Arc::clone(code),
-                    index,
-                },
-            }),
-    );
+    ));
+    rows.extend(code.lines().iter().enumerate().map(|(index, line)| {
+        MarkdownRow::new(
+            line.target_id,
+            depth,
+            Kind::CodeLine {
+                code: Arc::clone(code),
+                index,
+            },
+        )
+    }));
 }
 
 fn push_table(table: &MarkdownTable, depth: u16, rows: &mut Vec<MarkdownRow>) {
     let alignments: Rc<[MarkdownTableAlignment]> = Rc::from(table.alignments.as_slice());
     let count = table.rows.len();
     rows.extend(table.rows.iter().enumerate().map(|(index, row)| {
-        MarkdownRow {
-            target: row.target_id,
+        MarkdownRow::new(
+            row.target_id,
             depth,
-            gap: 0.0,
-            lead: TextBreak::Paragraph,
-            kind: Kind::TableRow {
+            Kind::TableRow {
                 cells: row
                     .cells
                     .iter()
@@ -842,7 +865,7 @@ fn push_table(table: &MarkdownTable, depth: u16, rows: &mut Vec<MarkdownRow>) {
                 first: index == 0,
                 last: index + 1 == count,
             },
-        }
+        )
     }));
 }
 
