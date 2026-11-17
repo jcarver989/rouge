@@ -886,7 +886,8 @@ impl LayerModel {
 
     pub fn animate(&mut self, id: LayerId, keyframes: Keyframes) {
         self.update(id, |layer, _, at| {
-            layer.keyframes = Some((keyframes, at));
+            let start = keyframes.start(at);
+            layer.keyframes = Some((keyframes, start));
             true
         });
     }

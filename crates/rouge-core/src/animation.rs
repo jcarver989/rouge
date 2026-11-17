@@ -343,6 +343,15 @@ impl Keyframes {
         self
     }
 
+    pub(crate) fn start(&self, at: f64) -> f64 {
+        let duration = f64::from(self.duration);
+        if self.repeat && duration > 0.0 {
+            (at / duration).floor() * duration
+        } else {
+            at
+        }
+    }
+
     pub(crate) fn length(&self) -> f32 {
         self.duration
     }

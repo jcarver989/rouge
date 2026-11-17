@@ -201,9 +201,34 @@ fn one_shot_keyframes_hold_their_final_pose_and_looping_ones_repeat() -> TestRes
     assert!(!stage.layers.is_animating());
 
     stage.layers.animate(stage.child, slide.repeat());
-    stage.run(1.5);
-    assert_eq!(stage.x(stage.child), 30.0, "wrapped around");
+    stage.run(1.4);
+    assert!(
+        (stage.x(stage.child) - 30.0).abs() < 0.01,
+        "wrapped around, on the clock's phase rather than its start's: {}",
+        stage.x(stage.child)
+    );
     assert!(stage.layers.is_animating(), "a loop never settles");
+    Ok(())
+}
+
+#[test]
+fn loops_started_at_different_times_stay_in_phase() -> TestResult {
+    let steps = Keyframes::new()
+        .at(0.0, |pose| pose.translate_x(0.0))
+        .at(0.5, |pose| pose.translate_x(0.0))
+        .at(0.5, |pose| pose.translate_x(10.0))
+        .at(1.0, |pose| pose.translate_x(10.0))
+        .duration(0.2)
+        .repeat();
+    let mut stage = StageBuilder::default().child(square()).build()?;
+    let (first, second) = (stage.root, stage.child);
+    stage.layers.animate(first, steps.clone());
+    stage.run(0.33);
+    stage.layers.animate(second, steps);
+    for frame in 0..40 {
+        stage.run(0.01);
+        assert_eq!(stage.x(first), stage.x(second), "frame {frame}");
+    }
     Ok(())
 }
 
