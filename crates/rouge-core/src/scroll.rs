@@ -2,13 +2,14 @@ use crate::compositor::ScrollState;
 use crate::control::each;
 use crate::prop::{IntoProp, Prop, PropFrom};
 use crate::style::{DelegateStyle, Styled};
+use crate::tree::RowSource;
 use crate::view::{BuildCx, Div, View, div};
 use rouge_macros::component;
-use rouge_reactive::{Memo, Signal, effect, memo, on_cleanup, signal, untrack};
+use rouge_reactive::{Memo, ReadSignal, Signal, effect, memo, on_cleanup, signal, untrack};
 use rouge_render::{Point, Rect, Size};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::cell::Cell;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -199,6 +200,7 @@ pub struct VirtualList<T, U = usize> {
     visible: Option<Signal<Range<usize>>>,
     handle: Option<VirtualListHandle>,
     follow: Option<Signal<bool>>,
+    row_text: Option<Rc<dyn Fn(usize) -> String>>,
 }
 
 #[component]
@@ -219,6 +221,7 @@ pub fn virtual_list<T: View, U>(
         visible: None,
         handle: None,
         follow: None,
+        row_text: None,
     }
 }
 
@@ -239,6 +242,7 @@ impl<T, U> VirtualList<T, U> {
             visible: self.visible,
             handle: self.handle,
             follow: self.follow,
+            row_text: self.row_text,
         }
     }
 
@@ -264,6 +268,11 @@ impl<T, U> VirtualList<T, U> {
 
     pub fn follow_end(mut self, following: Signal<bool>) -> Self {
         self.follow = Some(following);
+        self
+    }
+
+    pub fn row_text(mut self, text: impl Fn(usize) -> String + 'static) -> Self {
+        self.row_text = Some(Rc::new(text));
         self
     }
 }
@@ -404,7 +413,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                 Clone::clone,
                 move |item| {
                     let (index, key) = item.get_untracked();
-                    let mut container = div().flex_none();
+                    let mut container = div().flex_none().selection_row(index);
                     if let Some(mounted) = mounted {
                         let size = signal(Size::ZERO);
                         mounted.update(|rows| {
@@ -447,7 +456,21 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         if mounted.is_some() {
             content = content.track_size(width);
         }
-        let mut container = self.container;
+        let mut container = self.container.row_source(RowSource {
+            count: Rc::new(move || {
+                if count.is_alive() {
+                    count.get_untracked()
+                } else {
+                    0
+                }
+            }),
+            identity: Rc::new(move |row| {
+                keys.filter(ReadSignal::is_alive).map_or(0, |keys| {
+                    keys.with_untracked(|keys| keys.rows.get(row).map_or(0, identity))
+                })
+            }),
+            text: self.row_text,
+        });
         if let Some(handle) = handle {
             let frame = signal(Rect::ZERO);
             effect(move || {
@@ -457,6 +480,12 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         }
         container.scroll_state(state).child(content).build(cx);
     }
+}
+
+fn identity<T: Hash>(key: &RowKey<T>) -> u64 {
+    let mut hasher = FxHasher::default();
+    key.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn follow_end(

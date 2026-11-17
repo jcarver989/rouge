@@ -7,7 +7,7 @@ use crate::compositor::{Content, Layers, Nested};
 use crate::image::{Fit, ImageSpec};
 use crate::path::Path;
 use crate::style::Dirty;
-use crate::text::{GlyphKey, TextLayout, TextRect, TextSystem};
+use crate::text::{GlyphKey, TextLayout, TextRect, TextSelection, TextSystem};
 use crate::theme::Palette;
 use rouge_render::{
     Atlas, AtlasRect, Color, Corners, DrawList, Edges, Glyph, ImageData, ImageQuad, Point, Quad,
@@ -469,6 +469,8 @@ fn paint_canvas(
     }
 }
 
+const SELECTION_ALPHA: f32 = 0.3;
+
 fn paint_text(
     text: &TextData,
     mut origin: Point,
@@ -481,6 +483,11 @@ fn paint_text(
         return;
     };
     let Some(edit) = &text.edit else {
+        if let Some(range) = &text.selected {
+            let color = cx.palette.accent.with_alpha(SELECTION_ALPHA);
+            let selection = layout.select(range.start, range.end);
+            paint_selection(layout, selection, origin, clip, color, out);
+        }
         return paint_glyphs(
             layout,
             origin,
@@ -505,22 +512,10 @@ fn paint_text(
         .inflate(CARET_WIDTH),
     );
     origin = origin - edit.scroll;
-    let rect = |rect: &TextRect| {
-        Rect::new(
-            origin.x + rect.x,
-            origin.y + rect.y,
-            rect.width,
-            rect.height,
-        )
-    };
+    let rect = |rect: &TextRect| text_rect(origin, rect);
     let selection = edit.current(layout, &text.content);
     if focused {
-        for selected in &layout.selection_rects(selection) {
-            out.push_quad(Quad {
-                clip,
-                ..Quad::new(rect(selected), edit.selection_color)
-            });
-        }
+        paint_selection(layout, selection, origin, clip, edit.selection_color, out);
     }
     paint_glyphs(
         layout,
@@ -557,6 +552,31 @@ fn paint_text(
     }
 }
 
+fn paint_selection(
+    layout: &TextLayout,
+    selection: TextSelection,
+    origin: Point,
+    clip: Rect,
+    color: Color,
+    out: &mut DrawList,
+) {
+    for rect in &layout.selection_rects(selection) {
+        out.push_quad(Quad {
+            clip,
+            ..Quad::new(text_rect(origin, rect), color)
+        });
+    }
+}
+
+fn text_rect(origin: Point, rect: &TextRect) -> Rect {
+    Rect::new(
+        origin.x + rect.x,
+        origin.y + rect.y,
+        rect.width,
+        rect.height,
+    )
+}
+
 fn paint_glyphs(
     layout: &TextLayout,
     origin: Point,
@@ -565,18 +585,10 @@ fn paint_glyphs(
     out: &mut DrawList,
     cx: &mut PaintCx<'_>,
 ) {
-    let bounds = |rect: TextRect| {
-        Rect::new(
-            origin.x + rect.x,
-            origin.y + rect.y,
-            rect.width,
-            rect.height,
-        )
-    };
     layout.for_each_rect(false, |rect, fill| {
         out.push_quad(Quad {
             clip,
-            ..Quad::new(bounds(rect), fill.unwrap_or(color))
+            ..Quad::new(text_rect(origin, &rect), fill.unwrap_or(color))
         });
     });
     let PaintCache {
@@ -616,7 +628,7 @@ fn paint_glyphs(
     layout.for_each_rect(true, |rect, stroke| {
         out.push_quad(Quad {
             clip,
-            ..Quad::line(bounds(rect), stroke.unwrap_or(color))
+            ..Quad::line(text_rect(origin, &rect), stroke.unwrap_or(color))
         });
     });
 }

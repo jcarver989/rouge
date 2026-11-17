@@ -10,10 +10,10 @@ use crate::style::Dirty;
 use crate::text::TextSystem;
 use crate::theme::Theme;
 use crate::tree::{
-    ActionHandler, ElementId, Event, FrameStats, Listeners, On, PaintCache, Tree, emit,
+    ActionHandler, ElementId, Event, FrameStats, Listeners, On, PaintCache, SelectOp, Tree, emit,
 };
 use crate::view::{BuildCx, Queue, View};
-use crate::window::{Appearance, Menu, MenuItem, Sent, WindowCommand, WindowHandle};
+use crate::window::{Appearance, EditAction, Menu, MenuItem, Sent, WindowCommand, WindowHandle};
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, expect_context, poll_tasks, provide_context, signal, stats,
 };
@@ -274,6 +274,7 @@ impl Ui {
         let animating = self.tree.layers.is_animating();
         self.tree.layers.advance(now);
         self.tree.tick_caret(now);
+        self.tree.tick_selection(now);
         self.flush();
         self.publish();
         self.flush();
@@ -390,7 +391,11 @@ impl Ui {
             .layers
             .completion_deadline()
             .map_or(Wake::Idle, Wake::At);
-        self.tree.caret_wake(self.time()).sooner(completions)
+        let now = self.time();
+        self.tree
+            .caret_wake(now)
+            .sooner(completions)
+            .sooner(self.tree.selection_wake(now))
     }
 
     pub fn is_animating(&self) -> bool {
@@ -571,6 +576,9 @@ impl Ui {
         let path = self.tree.pointer_path().to_vec();
         let button = self.held.unwrap_or(PointerButton::Primary);
         self.dispatch(&path, On::PointerMove, position, button);
+        if self.held == Some(PointerButton::Primary) {
+            self.tree.select(SelectOp::Drag(position));
+        }
         self.drag_moved(position);
     }
 
@@ -620,6 +628,13 @@ impl Ui {
         self.flush();
         let path = self.tree.focus_path();
         let handlers = self.tree.action_handlers(&path, action.type_id());
+        if handlers.is_empty()
+            && let Some(action) = action.downcast_ref::<EditAction>()
+            && self.tree.select(SelectOp::Edit(&path, *action))
+        {
+            self.flush();
+            return true;
+        }
         self.invoke_action(action, &handlers)
     }
 
@@ -642,6 +657,15 @@ impl Ui {
             return true;
         }
         let path = self.tree.focus_path();
+        let op = match EditAction::from_key(&event) {
+            Some(action) => Some(SelectOp::Edit(&path, action)),
+            None if event.key == Key::Escape => Some(SelectOp::Escape(&path)),
+            None => None,
+        };
+        if op.is_some_and(|op| self.tree.select(op)) {
+            self.flush();
+            return true;
+        }
         if let Some((action, handlers)) = self.tree.binding(&path, &event) {
             return self.invoke_action(&*action, &handlers);
         }
@@ -723,6 +747,12 @@ impl Ui {
         let path = self.tree.hover_path().to_vec();
         self.dispatch(&path, On::PointerDown, position, button);
         if button == PointerButton::Primary {
+            self.tree.select(SelectOp::Press {
+                path: &path,
+                position,
+                clicks: self.clicks.map_or(1, |(_, _, count)| count),
+                extend: self.modifiers.get_untracked().shift,
+            });
             let samples = Samples::new(self.time(), position);
             let targets = self.tree.listeners(&path, On::Drag);
             self.drag = targets.first().map(|(element, _)| Drag {
@@ -746,6 +776,9 @@ impl Ui {
         self.flush();
         let path = self.tree.pointer_path().to_vec();
         self.dispatch(&path, On::PointerUp, position, button);
+        if primary {
+            self.tree.select(SelectOp::Release);
+        }
         self.tree.release_capture();
         self.refresh_pointer();
         let clicked = if primary {
@@ -768,6 +801,7 @@ impl Ui {
 
     fn release_press(&mut self) {
         self.held = None;
+        self.tree.select(SelectOp::Release);
         if let (Some(drag), Some(position)) =
             (self.drag.take().filter(|drag| drag.started), self.pointer)
         {

@@ -170,7 +170,11 @@ impl Tree {
     }
 
     pub(crate) fn cursor(&self) -> Cursor {
-        let mut path = self.pointer_path().iter().rev();
+        let path = self.pointer_path();
+        if let Some(cursor) = self.selection_cursor(path) {
+            return cursor;
+        }
+        let mut path = path.iter().rev();
         path.find_map(|id| {
             let element = self.elements.get(*id)?;
             if element.disabled() {

@@ -1,12 +1,14 @@
 use super::edit::EditState;
 use super::{ElementId, Kind, Tree};
 use crate::canvas::{PaintOp, ShapedRun};
+use crate::selection::TextBreak;
 use crate::style::Dirty;
 use crate::text::{TextLayout, TextStyle, TextSystem};
 use crate::theme::Fill;
 use crate::view::TextOp;
 use rouge_render::{Color, ImageData, Point, Size};
 use rouge_theme::Role;
+use std::ops::Range;
 use std::rc::Rc;
 
 pub(crate) struct TextData {
@@ -16,6 +18,8 @@ pub(crate) struct TextData {
     pub edit: Option<Box<EditState>>,
     pub placeholder: String,
     pub placeholder_color: Fill,
+    pub selection_break: TextBreak,
+    pub(super) selected: Option<Range<usize>>,
     pub(super) layout: Option<TextLayout>,
     pub(super) inset: Point,
     pub(super) wrap_width: Option<f32>,
@@ -31,6 +35,8 @@ impl Default for TextData {
             edit: None,
             placeholder: String::new(),
             placeholder_color: Fill::Color(Color::TRANSPARENT),
+            selection_break: TextBreak::default(),
+            selected: None,
             layout: None,
             inset: Point::ZERO,
             wrap_width: None,

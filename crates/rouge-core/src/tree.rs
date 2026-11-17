@@ -38,6 +38,7 @@ mod layers;
 mod layout;
 mod paint;
 mod scroll;
+mod selection;
 mod surfaces;
 
 pub(crate) use content::TextData;
@@ -48,6 +49,7 @@ pub use geometry::PaintRegion;
 pub(crate) use layers::{LayerSpec, Presence};
 pub(crate) use paint::PaintCache;
 pub(crate) use scroll::ScrollSpec;
+pub(crate) use selection::{RowSource, SelectOp, SelectionScope};
 
 new_key_type! {
     pub(crate) struct ElementId;
@@ -158,6 +160,9 @@ pub(crate) struct Extras {
     pub size_observer: Option<Signal<Size>>,
     pub bounds_observer: Option<Signal<Rect>>,
     pub paint_region: Option<Signal<PaintRegion>>,
+    pub selection: Option<Box<SelectionScope>>,
+    pub select_row: Option<usize>,
+    pub row_source: Option<RowSource>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -167,6 +172,7 @@ pub(crate) struct Flags {
     pub preserve_focus: bool,
     pub root_host: bool,
     pub focus_scope: bool,
+    pub unselectable: bool,
 }
 
 pub(crate) struct ElementSpec {
@@ -344,6 +350,7 @@ pub(crate) struct Tree {
     surface_ops: Vec<SurfaceOp>,
     surface_sinks: FxHashMap<SurfaceId, StatusSink>,
     window_visible: bool,
+    selection_scopes: Vec<ElementId>,
 }
 
 impl Tree {
@@ -383,6 +390,7 @@ impl Tree {
             surface_ops: Vec::new(),
             surface_sinks: FxHashMap::default(),
             window_visible: true,
+            selection_scopes: Vec::new(),
         };
         tree.root = tree.create_element(ElementSpec {
             layout: root_layout(size),
@@ -535,6 +543,7 @@ impl Tree {
                 extras.size_observer.is_some()
                     || extras.bounds_observer.is_some()
                     || extras.paint_region.is_some()
+                    || extras.selection.is_some()
             })
             || selection.is_some_and(|edit| edit.selection_signal.is_some());
         let handle = extras
@@ -564,6 +573,12 @@ impl Tree {
         self.layouts.insert(id, LayoutNode::new(spec.layout));
         if watched {
             self.observers.push(id);
+        }
+        if self.elements[id]
+            .extras()
+            .is_some_and(|extras| extras.selection.is_some())
+        {
+            self.selection_scopes.push(id);
         }
         if let Some(attach) = attach {
             if let Some((source, status)) = attach {

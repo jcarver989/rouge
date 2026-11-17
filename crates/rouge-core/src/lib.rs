@@ -13,6 +13,7 @@ mod motion;
 mod path;
 mod prop;
 mod scroll;
+mod selection;
 mod style;
 mod surface;
 #[cfg(not(target_arch = "wasm32"))]
@@ -55,6 +56,7 @@ pub use scroll::{
     Align, RowHeight, RowKey, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
     virtual_list_handle,
 };
+pub use selection::TextBreak;
 pub use style::{
     BoxShadow, Declaration, DelegateStyle, Slot, StyleDelta, StyleState, Styled, Typography,
 };

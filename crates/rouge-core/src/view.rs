@@ -541,7 +541,8 @@ impl Div {
         let clicked = Rc::new(f);
         let pressed = clicked.clone();
         let focus = self.focus_policy;
-        self.cursor(Cursor::Pointer)
+        self.unselectable()
+            .cursor(Cursor::Pointer)
             .on_click(move |event| {
                 event.stop_propagation();
                 clicked();

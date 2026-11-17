@@ -112,6 +112,7 @@ impl Tree {
             }
         }
         self.stats.layouts += 1;
+        self.refresh_selections();
         self.dirty = Dirty::Paint;
         true
     }

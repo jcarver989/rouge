@@ -388,8 +388,28 @@ impl TestUi {
         Ok(())
     }
 
+    pub fn click_times(&mut self, position: Point, count: u32) {
+        self.advance(CLICK_PAUSE);
+        self.settle_pointer(position);
+        for _ in 0..count {
+            self.ui.pointer_down(PointerButton::Primary);
+            self.ui.pointer_up(PointerButton::Primary);
+        }
+        self.advance(0.0);
+    }
+
+    pub fn drag(&mut self, from: Point, to: Point) {
+        self.advance(CLICK_PAUSE);
+        self.drag_between(from, to);
+    }
+
     pub fn drag_on(&mut self, name: &str, to: Point) -> Result<(), TestError> {
         let from = self.center_of(name)?;
+        self.drag_between(from, to);
+        Ok(())
+    }
+
+    fn drag_between(&mut self, from: Point, to: Point) {
         self.ui.pointer_moved(from);
         self.ui.pointer_down(PointerButton::Primary);
         for step in 1..=DRAG_STEPS {
@@ -402,7 +422,6 @@ impl TestUi {
         }
         self.ui.pointer_up(PointerButton::Primary);
         self.advance(0.0);
-        Ok(())
     }
 
     pub fn scroll_on(&mut self, name: &str, delta: Point) -> Result<(), TestError> {
