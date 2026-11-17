@@ -129,6 +129,32 @@ fn copying_selected_markdown_matches_its_plain_text() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn dragging_to_a_markdown_link_selects_without_opening_it() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (links, on_link) = recorder();
+    let mut ui = component_test().size(600.0, 200.0).build(move || {
+        div().size_full().selectable().child(
+            markdown(MarkdownDocument::parse(
+                "Some [linked words](https://example.com).",
+            ))
+            .palette(palette())
+            .on_link(on_link),
+        )
+    });
+    let clipboard = MemoryClipboard::new();
+    ui.set_clipboard(clipboard.clone());
+    let start = ui.text_bounds("Some").ok_or("start of paragraph")?;
+    let link = ui.text_bounds("linked words").ok_or("link text")?;
+    ui.drag(start.center(), link.center());
+    ui.press("cmd-c");
+    assert!(clipboard.text().is_some_and(|text| text.contains("linked")));
+    assert!(links.borrow().is_empty());
+    ui.click_text("linked words")?;
+    assert_eq!(links.borrow().as_slice(), &["https://example.com"]);
+    Ok(())
+}
+
 fn rendered(source: &str) -> (TestUi, Rc<RefCell<Vec<String>>>) {
     let (links, link) = recorder();
     let document = MarkdownDocument::parse(source);

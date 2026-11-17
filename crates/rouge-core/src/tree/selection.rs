@@ -9,6 +9,7 @@ use crate::window::EditAction;
 use rouge_reactive::untrack;
 use rouge_render::Point;
 use std::cmp::Ordering;
+use std::iter::from_fn;
 use std::mem::take;
 use std::ops::Range;
 use std::rc::Rc;
@@ -19,37 +20,17 @@ const AUTOSCROLL_BASE: f32 = 240.0;
 const AUTOSCROLL_GAIN: f32 = 12.0;
 const AUTOSCROLL_MAX: f32 = 6000.0;
 
-#[derive(Clone)]
 pub(crate) struct RowSource {
     pub count: Rc<dyn Fn() -> usize>,
     pub identity: Rc<dyn Fn(usize) -> u64>,
     pub text: Option<Rc<dyn Fn(usize) -> String>>,
 }
 
-pub(crate) enum SelectOp<'a> {
-    Press {
-        path: &'a [ElementId],
-        position: Point,
-        clicks: u32,
-        extend: bool,
-    },
-    Drag(Point),
-    Release,
-    Edit(&'a [ElementId], EditAction),
-    Escape(&'a [ElementId]),
-}
-
 #[derive(Default)]
 pub(crate) struct SelectionScope {
+    list: Option<ElementId>,
     range: Option<TextRange>,
-    drag: Option<Drag>,
-    rows: Vec<RowSnapshot>,
-}
-
-impl SelectionScope {
-    fn visible(&self) -> Option<TextRange> {
-        self.range.filter(|range| range.anchor != range.focus)
-    }
+    endpoints: Vec<RowSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,6 +43,10 @@ struct TextPoint {
 impl TextPoint {
     const fn new(row: usize, leaf: usize, offset: usize) -> Self {
         Self { row, leaf, offset }
+    }
+
+    const fn row_end(row: usize) -> Self {
+        Self::new(row, usize::MAX, usize::MAX)
     }
 
     const fn at(self, offset: usize) -> Self {
@@ -83,18 +68,47 @@ impl TextRange {
     fn end(self) -> TextPoint {
         self.anchor.max(self.focus)
     }
+
+    fn visible(self) -> bool {
+        self.anchor != self.focus
+    }
+
+    fn partial_endpoint(self, row: usize) -> bool {
+        (row == self.start().row || row == self.end().row) && !self.whole_row(row)
+    }
+
+    fn whole_row(self, row: usize) -> bool {
+        self.start() <= TextPoint::new(row, 0, 0) && self.end() >= TextPoint::row_end(row)
+    }
+
+    fn clip(self, row: usize, leaf: usize, content: &str) -> Option<Range<usize>> {
+        let (start, end) = (self.start(), self.end());
+        let len = content.len();
+        let (first, last) = (TextPoint::new(row, leaf, 0), TextPoint::new(row, leaf, len));
+        if len == 0 {
+            return (start < first && end > first).then_some(0..0);
+        }
+        if end <= first || start >= last {
+            return None;
+        }
+        let from = if start > first {
+            content.floor_char_boundary(start.offset.min(len))
+        } else {
+            0
+        };
+        let to = if end < last {
+            content.floor_char_boundary(end.offset.min(len))
+        } else {
+            len
+        };
+        (from < to).then_some(from..to)
+    }
 }
 
 struct RowSnapshot {
     row: usize,
     identity: u64,
-    pieces: Vec<Piece>,
-}
-
-struct Piece {
-    leaf: usize,
-    text: String,
-    separator: TextBreak,
+    pieces: Vec<(String, TextBreak)>,
 }
 
 #[derive(Clone, Copy)]
@@ -105,34 +119,33 @@ enum Unit {
 }
 
 #[derive(Clone, Copy)]
-struct Drag {
+pub(super) struct SelectionDrag {
+    pub(crate) scope: ElementId,
+    scroller: Option<ElementId>,
+    start: Point,
     position: Point,
+    started: bool,
     unit: Unit,
     origin: (TextPoint, TextPoint),
-    outside: bool,
     ticked: Option<f64>,
 }
 
 struct Leaf {
     id: ElementId,
-    row: Option<usize>,
+    list: Option<ElementId>,
+    row: usize,
     ordinal: usize,
     visible: bool,
 }
 
-impl Leaf {
-    fn row(&self) -> usize {
-        self.row.unwrap_or(0)
-    }
-}
-
-struct Hit {
+struct Hit<'a> {
+    leaf: &'a Leaf,
     point: TextPoint,
     word: Range<usize>,
     len: usize,
 }
 
-impl Hit {
+impl Hit<'_> {
     fn span(&self, unit: Unit) -> (TextPoint, TextPoint) {
         let point = self.point;
         match unit {
@@ -155,13 +168,6 @@ impl Tree {
             .as_mut()?
             .selection
             .as_deref_mut()
-    }
-
-    fn selection_scopes(&mut self) -> Vec<ElementId> {
-        let mut scopes = take(&mut self.selection_scopes);
-        scopes.retain(|id| self.selection(*id).is_some());
-        self.selection_scopes.clone_from(&scopes);
-        scopes
     }
 
     fn scope_in(&self, path: &[ElementId]) -> Option<(usize, ElementId)> {
@@ -189,317 +195,354 @@ impl Tree {
         None
     }
 
-    pub(crate) fn select(&mut self, op: SelectOp<'_>) -> bool {
-        match op {
-            SelectOp::Press {
-                path,
-                position,
-                clicks,
-                extend,
-            } => {
-                self.press_selection(path, position, clicks, extend);
-                false
-            }
-            SelectOp::Drag(position) => {
-                for scope in self.selection_scopes() {
-                    let outside = self.outside_scroller(scope, position);
-                    let Some(drag) = self
-                        .selection_mut(scope)
-                        .and_then(|state| state.drag.as_mut())
-                    else {
-                        continue;
-                    };
-                    drag.position = position;
-                    drag.outside = outside;
-                    if !outside {
-                        drag.ticked = None;
-                    }
-                    self.extend_drag(scope);
-                }
-                false
-            }
-            SelectOp::Release => {
-                for scope in self.selection_scopes() {
-                    if let Some(state) = self.selection_mut(scope) {
-                        state.drag = None;
-                    }
-                }
-                false
-            }
-            SelectOp::Edit(path, action) => {
-                let Some((_, scope)) = self.scope_in(path) else {
-                    return false;
-                };
-                match action {
-                    EditAction::Copy => self.selected_text(scope).is_some_and(|text| {
-                        self.clipboard.write(&text);
-                        true
-                    }),
-                    EditAction::SelectAll => self.select_all(scope),
-                    _ => false,
-                }
-            }
-            SelectOp::Escape(path) => {
-                let Some((_, scope)) = self.scope_in(path) else {
-                    return false;
-                };
-                let visible = self.selection(scope).and_then(SelectionScope::visible);
-                self.set_range(scope, None);
-                visible.is_some()
-            }
+    pub(crate) fn select_edit(&mut self, path: &[ElementId], action: EditAction) -> bool {
+        let Some((_, scope)) = self.scope_in(path) else {
+            return false;
+        };
+        match action {
+            EditAction::Copy => self.selected_text(scope).is_some_and(|text| {
+                self.clipboard.write(&text);
+                true
+            }),
+            EditAction::SelectAll => self.select_all(scope),
+            _ => false,
         }
     }
 
-    fn press_selection(&mut self, path: &[ElementId], position: Point, clicks: u32, extend: bool) {
+    pub(crate) fn escape_selection(&mut self, path: &[ElementId]) -> bool {
+        self.scope_in(path)
+            .is_some_and(|(_, scope)| self.clear_selection(scope))
+    }
+
+    fn clear_selection(&mut self, scope: ElementId) -> bool {
+        let Some(range) = self
+            .selection_mut(scope)
+            .and_then(|state| state.range.take())
+        else {
+            return false;
+        };
+        self.refresh_selection(scope, &self.selection_leaves(scope), false);
+        range.visible()
+    }
+
+    pub(crate) fn press_selection(
+        &mut self,
+        path: &[ElementId],
+        position: Point,
+        clicks: u32,
+        extend: bool,
+    ) {
+        self.selection_drag = None;
         let target = self.scope_in(path);
-        for scope in self.selection_scopes() {
+        for index in 0..self.selection_scopes.len() {
+            let scope = self.selection_scopes[index];
             if target.is_none_or(|(_, target)| target != scope) {
-                self.set_range(scope, None);
+                self.clear_selection(scope);
             }
         }
         let Some((depth, scope)) = target else { return };
-        let claimed = path[depth + 1..].iter().any(|id| {
+        let path = &path[depth..];
+        let claimed = path.iter().any(|id| {
             self.elements.get(*id).is_some_and(|element| {
-                !element.listeners(On::Drag).is_empty()
+                element.flags.unselectable
+                    || element.disabled()
+                    || !element.listeners(On::Drag).is_empty()
                     || element.kind.text().is_some_and(|text| text.edit.is_some())
             })
         });
         let leaves = self.selection_leaves(scope);
-        let hit = self.selection_hit(&leaves, position);
-        let (Some(hit), false) = (hit, claimed || self.capture.is_some()) else {
-            self.set_range(scope, None);
+        let hit = (!claimed && self.capture.is_none())
+            .then(|| {
+                let list = path
+                    .iter()
+                    .copied()
+                    .find(|id| self.row_source(*id).is_some());
+                self.selection_hit(
+                    leaves
+                        .iter()
+                        .filter(|leaf| list.is_none() || leaf.list == list),
+                    position,
+                    path.last().copied(),
+                )
+            })
+            .flatten();
+        let Some(hit) = hit else {
+            self.clear_selection(scope);
             return;
         };
+        let list = hit.leaf.list;
         let anchor = self
             .selection(scope)
+            .filter(|state| extend && state.list == list && self.valid_selection(state))
             .and_then(|state| state.range)
-            .filter(|_| extend)
             .map(|range| range.anchor);
-        let (unit, origin) = match (anchor, clicks) {
-            (Some(anchor), _) => (Unit::Caret, (anchor, anchor)),
-            (None, 0 | 1) => (Unit::Caret, hit.span(Unit::Caret)),
-            (None, 2) => (Unit::Word, hit.span(Unit::Word)),
-            (None, _) => (Unit::Leaf, hit.span(Unit::Leaf)),
+        let unit = match clicks {
+            _ if anchor.is_some() => Unit::Caret,
+            0 | 1 => Unit::Caret,
+            2 => Unit::Word,
+            _ => Unit::Leaf,
         };
-        let drag = Drag {
+        let drag = SelectionDrag {
+            scope,
+            scroller: list.or_else(|| {
+                self.chain(hit.leaf.id)
+                    .into_iter()
+                    .rev()
+                    .find(|id| self.elements[*id].scroll().is_some())
+            }),
+            start: position,
             position,
+            started: false,
             unit,
-            origin,
-            outside: false,
+            origin: anchor.map_or_else(|| hit.span(unit), |anchor| (anchor, anchor)),
             ticked: None,
         };
-        if let Some(state) = self.selection_mut(scope) {
-            state.drag = Some(drag);
+        self.set_range(scope, list, drag.range(&hit), &leaves);
+        self.selection_drag = Some(drag);
+    }
+
+    pub(crate) fn move_selection(&mut self, position: Point, slop: f32) {
+        let Some(drag) = &mut self.selection_drag else {
+            return;
+        };
+        let travel = position - drag.start;
+        drag.started |= travel.x.hypot(travel.y) >= slop;
+        drag.position = position;
+        let scope = drag.scope;
+        if self.selection_overshoot().is_none()
+            && let Some(drag) = &mut self.selection_drag
+        {
+            drag.ticked = None;
         }
-        self.drag_to(scope, drag, &hit);
+        self.refresh_selection(scope, &self.selection_leaves(scope), true);
+    }
+
+    pub(crate) fn release_selection(&mut self) -> bool {
+        self.selection_drag.take().is_some_and(|drag| drag.started)
+    }
+
+    fn selection_overshoot(&self) -> Option<(ElementId, f32)> {
+        let drag = self.selection_drag?;
+        let scroller = drag.scroller.filter(|id| self.elements.contains_key(*id))?;
+        let view = self.window_bounds(scroller);
+        let y = drag.position.y;
+        let over = y - y.clamp(view.origin.y, view.max().y);
+        (over != 0.0).then_some((scroller, over))
     }
 
     pub(crate) fn selection_wake(&self, now: f64) -> Wake {
-        let scrolling = self.selection_scopes.iter().any(|id| {
-            self.selection(*id)
-                .and_then(|state| state.drag)
-                .is_some_and(|drag| drag.outside)
-        });
-        if scrolling {
-            Wake::At(now + AUTOSCROLL_FRAME)
-        } else {
-            Wake::Idle
-        }
+        self.selection_overshoot()
+            .map_or(Wake::Idle, |_| Wake::At(now + AUTOSCROLL_FRAME))
     }
 
     pub(crate) fn tick_selection(&mut self, now: f64) {
-        for scope in self.selection_scopes() {
-            let Some(drag) = self
-                .selection_mut(scope)
-                .and_then(|state| state.drag.as_mut())
-                .filter(|drag| drag.outside)
-            else {
-                continue;
-            };
-            let (last, y) = (drag.ticked.replace(now), drag.position.y);
-            let (Some(last), Some(scroller)) = (last, self.selection_scroller(scope)) else {
-                continue;
-            };
-            let view = self.window_bounds(scroller);
-            let over = if y < view.origin.y {
-                y - view.origin.y
-            } else {
-                y - view.max().y
-            };
-            let speed = (AUTOSCROLL_BASE + over.abs() * AUTOSCROLL_GAIN).min(AUTOSCROLL_MAX);
-            let delta = speed.copysign(over) * (now - last).max(0.0) as f32;
-            if let Some(layer) = self.layer_id(scroller, Slot::Content) {
-                self.scroll_by(layer, Point::new(0.0, delta));
-            }
-            self.extend_drag(scope);
+        let Some((scroller, over)) = self.selection_overshoot() else {
+            return;
+        };
+        let Some(drag) = &mut self.selection_drag else {
+            return;
+        };
+        let Some(last) = drag.ticked.replace(now) else {
+            return;
+        };
+        let scope = drag.scope;
+        let speed = (AUTOSCROLL_BASE + over.abs() * AUTOSCROLL_GAIN).min(AUTOSCROLL_MAX);
+        let delta = speed.copysign(over) * (now - last).max(0.0) as f32;
+        if let Some(layer) = self.layer_id(scroller, Slot::Content) {
+            self.scroll_by(layer, Point::new(0.0, delta));
         }
+        self.refresh_selection(scope, &self.selection_leaves(scope), true);
     }
 
     pub(crate) fn refresh_selections(&mut self) {
-        for scope in self.selection_scopes() {
-            let Some(state) = self.selection(scope).filter(|state| state.range.is_some()) else {
-                continue;
-            };
-            if state.drag.is_some() {
-                self.extend_drag(scope);
+        for index in 0..self.selection_scopes.len() {
+            let scope = self.selection_scopes[index];
+            if self
+                .selection(scope)
+                .is_some_and(|state| state.range.is_some())
+            {
+                self.refresh_selection(scope, &self.selection_leaves(scope), true);
             }
-            self.refresh_selection(scope);
         }
     }
 
-    fn set_range(&mut self, scope: ElementId, range: Option<TextRange>) {
-        let Some(state) = self
-            .selection_mut(scope)
-            .filter(|state| state.range != range)
-        else {
-            return;
-        };
-        state.range = range;
-        self.refresh_selection(scope);
-    }
-
-    fn extend_drag(&mut self, scope: ElementId) {
-        let Some(drag) = self.selection(scope).and_then(|state| state.drag) else {
-            return;
-        };
-        let leaves = self.selection_leaves(scope);
-        if let Some(hit) = self.selection_hit(&leaves, drag.position) {
-            self.drag_to(scope, drag, &hit);
+    fn set_range(
+        &mut self,
+        scope: ElementId,
+        list: Option<ElementId>,
+        range: TextRange,
+        leaves: &[Leaf],
+    ) {
+        let keep_endpoints = self
+            .selection(scope)
+            .is_some_and(|state| state.list == list && self.valid_selection(state));
+        if let Some(state) = self.selection_mut(scope) {
+            if !keep_endpoints {
+                state.endpoints.clear();
+            }
+            state.list = list;
+            state.range = Some(range);
         }
-    }
-
-    fn drag_to(&mut self, scope: ElementId, drag: Drag, hit: &Hit) {
-        let (start, end) = drag.origin;
-        let (before, after) = hit.span(drag.unit);
-        let range = if hit.point < start {
-            TextRange {
-                anchor: end,
-                focus: before,
-            }
-        } else {
-            TextRange {
-                anchor: start,
-                focus: after,
-            }
-        };
-        self.set_range(scope, Some(range));
+        self.refresh_selection(scope, leaves, false);
     }
 
     fn select_all(&mut self, scope: ElementId) -> bool {
-        let last = match self.row_source(scope) {
+        let leaves = self.selection_leaves(scope);
+        let list = self
+            .selection(scope)
+            .and_then(|state| state.list)
+            .filter(|id| self.chain(*id).contains(&scope))
+            .or_else(|| {
+                if leaves.iter().any(|leaf| leaf.list.is_none()) {
+                    None
+                } else {
+                    leaves.first().and_then(|leaf| leaf.list)
+                }
+            });
+        let last = match list.and_then(|id| self.row_source(id)) {
             Some(source) => untrack(|| (source.count)()).checked_sub(1),
-            None => self.selection_leaves(scope).last().map(Leaf::row),
+            None => leaves.iter().any(|leaf| leaf.list.is_none()).then_some(0),
         };
         let Some(last) = last else { return false };
-        let range = TextRange {
-            anchor: TextPoint::default(),
-            focus: TextPoint::new(last, usize::MAX, usize::MAX),
-        };
-        self.set_range(scope, Some(range));
+        self.set_range(
+            scope,
+            list,
+            TextRange {
+                anchor: TextPoint::default(),
+                focus: TextPoint::row_end(last),
+            },
+            &leaves,
+        );
         true
     }
 
-    fn refresh_selection(&mut self, scope: ElementId) {
-        let leaves = self.selection_leaves(scope);
-        let source = self.row_source(scope);
-        let Some(state) = self.selection_mut(scope) else {
+    fn row_source(&self, id: ElementId) -> Option<&RowSource> {
+        self.elements.get(id)?.extras()?.row_source.as_ref()
+    }
+
+    fn valid_selection(&self, state: &SelectionScope) -> bool {
+        let (Some(list), Some(range)) = (state.list, state.range) else {
+            return true;
+        };
+        self.row_source(list).is_some_and(|source| {
+            untrack(|| {
+                let count = (source.count)();
+                range.end().row < count
+                    && state.endpoints.iter().all(|endpoint| {
+                        endpoint.row < count && endpoint.identity == (source.identity)(endpoint.row)
+                    })
+            })
+        })
+    }
+
+    fn refresh_selection(&mut self, scope: ElementId, leaves: &[Leaf], follow_drag: bool) {
+        let Some(state) = self.selection(scope) else {
             return;
         };
-        let mut range = state.range;
-        let mut rows = take(&mut state.rows);
-        if let (Some(current), Some(source)) = (range, &source) {
-            let outdated = untrack(|| {
-                current.start().row >= (source.count)()
-                    || rows
-                        .iter()
-                        .any(|snapshot| snapshot.identity != (source.identity)(snapshot.row))
-            });
-            if outdated {
-                range = None;
-            }
-        }
-        let ends = range.map(|range| [range.start().row, range.end().row]);
-        rows.retain(|snapshot| ends.is_some_and(|ends| ends.contains(&snapshot.row)));
-        if let Some(ends) = ends {
-            for row in ends {
-                let pieces = self.pieces(&leaves, row);
-                if pieces.is_empty() {
-                    continue;
-                }
-                rows.retain(|snapshot| snapshot.row != row);
-                let identity = source
-                    .as_ref()
-                    .map_or(0, |source| untrack(|| (source.identity)(row)));
-                rows.push(RowSnapshot {
-                    row,
-                    identity,
-                    pieces,
-                });
-            }
-        }
-        let shown = range.filter(|range| range.anchor != range.focus);
-        for leaf in &leaves {
-            let Some(text) = self
-                .elements
-                .get_mut(leaf.id)
-                .and_then(|element| element.kind.text_mut())
-            else {
-                continue;
-            };
-            let selected = shown.and_then(|range| {
-                clip(
-                    leaf.row(),
-                    leaf.ordinal,
-                    &text.content,
-                    range.start(),
-                    range.end(),
+        let (list, mut range) = (
+            state.list,
+            state.range.filter(|_| self.valid_selection(state)),
+        );
+        if let Some(drag) = self.selection_drag.filter(|drag| drag.scope == scope) {
+            if range.is_none() {
+                self.selection_drag = None;
+            } else if follow_drag
+                && let Some(hit) = self.selection_hit(
+                    leaves.iter().filter(|leaf| leaf.list == list),
+                    drag.position,
+                    None,
                 )
-            });
+            {
+                range = Some(drag.range(&hit));
+            }
+        }
+        let mut endpoints = take(
+            &mut self
+                .selection_mut(scope)
+                .expect("selection scope")
+                .endpoints,
+        );
+        endpoints.retain(|row| range.is_some_and(|range| range.partial_endpoint(row.row)));
+        if let Some((source, range)) = list.and_then(|id| self.row_source(id)).zip(range) {
+            let start = range.start().row;
+            let end = range.end().row;
+            let rows = [start, end];
+            let unique = if start == end { &rows[..1] } else { &rows[..] };
+            for &row in unique.iter().filter(|row| range.partial_endpoint(**row)) {
+                let pieces: Vec<_> = leaves
+                    .iter()
+                    .filter(|leaf| leaf.list == list && leaf.row == row)
+                    .map(|leaf| {
+                        let (text, separator) = self.leaf_text(leaf);
+                        (text.to_owned(), separator)
+                    })
+                    .collect();
+                if !pieces.is_empty() {
+                    endpoints.retain(|endpoint| endpoint.row != row);
+                    endpoints.push(RowSnapshot {
+                        row,
+                        identity: untrack(|| (source.identity)(row)),
+                        pieces,
+                    });
+                }
+            }
+        }
+        let state = self.selection_mut(scope).expect("selection scope");
+        state.range = range;
+        state.endpoints = endpoints;
+        let shown = range.filter(|range| range.visible());
+        for leaf in leaves {
+            let text = self.elements[leaf.id].kind.text_mut().expect("text leaf");
+            let selected = shown
+                .filter(|_| leaf.list == list)
+                .and_then(|range| range.clip(leaf.row, leaf.ordinal, &text.content));
             if text.selected != selected {
                 text.selected = selected;
                 self.mark_element(leaf.id, Dirty::Paint);
-            }
-        }
-        if let Some(state) = self.selection_mut(scope) {
-            state.range = range;
-            state.rows = rows;
-            if range.is_none() {
-                state.drag = None;
             }
         }
     }
 
     fn selected_text(&self, scope: ElementId) -> Option<String> {
         let state = self.selection(scope)?;
-        let range = state.visible()?;
-        let (start, end) = (range.start(), range.end());
+        let range = state
+            .range
+            .filter(|range| range.visible() && self.valid_selection(state))?;
+        let first = range.start().row;
         let leaves = self.selection_leaves(scope);
-        let source = self.row_source(scope);
-        let mut out = String::new();
-        for row in start.row..=end.row {
-            let mounted = self.pieces(&leaves, row);
-            let fallback;
-            let pieces: &[Piece] = if !mounted.is_empty() {
-                &mounted
-            } else if let Some(snapshot) = state.rows.iter().find(|snapshot| snapshot.row == row) {
-                &snapshot.pieces
-            } else if let Some(text) = source.as_ref().and_then(|source| source.text.as_ref()) {
-                fallback = [Piece {
-                    leaf: 0,
-                    text: untrack(|| text(row)),
-                    separator: TextBreak::Line,
-                }];
-                &fallback
+        let mut mounted = leaves
+            .iter()
+            .filter(|leaf| leaf.list == state.list && leaf.row >= first)
+            .peekable();
+        let row_text = state
+            .list
+            .and_then(|id| self.row_source(id))
+            .and_then(|source| source.text.as_deref());
+        let (mut out, mut text) = (String::new(), String::new());
+        for row in first..=range.end().row {
+            let snapshot = if mounted.peek().is_some_and(|leaf| leaf.row == row) {
+                None
             } else {
-                continue;
+                state.endpoints.iter().find(|endpoint| endpoint.row == row)
             };
-            let mut text = String::new();
-            for piece in pieces {
-                if let Some(selected) = clip(row, piece.leaf, &piece.text, start, end) {
-                    if !text.is_empty() {
-                        text.push_str(piece.separator.as_str());
+            let current = from_fn(|| mounted.next_if(|leaf| leaf.row == row));
+            if let Some(read) = row_text.filter(|_| range.whole_row(row)) {
+                current.for_each(drop);
+                text = untrack(|| read(row));
+            } else {
+                let pieces = current.map(|leaf| self.leaf_text(leaf)).chain(
+                    snapshot
+                        .into_iter()
+                        .flat_map(|snapshot| &snapshot.pieces)
+                        .map(|(text, separator)| (text.as_str(), *separator)),
+                );
+                for (leaf, (piece, separator)) in pieces.enumerate() {
+                    if let Some(selected) = range.clip(row, leaf, piece) {
+                        if !text.is_empty() {
+                            text.push_str(separator.as_str());
+                        }
+                        text.push_str(&piece[selected]);
                     }
-                    text.push_str(&piece.text[selected]);
                 }
             }
             if !text.is_empty() {
@@ -507,53 +550,47 @@ impl Tree {
                     out.push_str(ROW_BREAK);
                 }
                 out.push_str(&text);
+                text.clear();
             }
         }
         (!out.is_empty()).then_some(out)
     }
 
-    fn pieces(&self, leaves: &[Leaf], row: usize) -> Vec<Piece> {
-        leaves
-            .iter()
-            .filter(|leaf| leaf.row() == row)
-            .filter_map(|leaf| {
-                let text = self.elements.get(leaf.id)?.kind.text()?;
-                Some(Piece {
-                    leaf: leaf.ordinal,
-                    text: text.content.clone(),
-                    separator: text.selection_break,
-                })
-            })
-            .collect()
+    fn leaf_text(&self, leaf: &Leaf) -> (&str, TextBreak) {
+        let text = self.elements[leaf.id].kind.text().expect("text leaf");
+        (&text.content, text.selection_break)
     }
 
     fn selection_leaves(&self, scope: ElementId) -> Vec<Leaf> {
-        let mut leaves = Vec::new();
-        let Some(root) = self.elements.get(scope) else {
-            return leaves;
-        };
-        let mut pending: Vec<(ElementId, Option<usize>, bool)> = root
-            .children
-            .iter()
-            .rev()
-            .map(|id| (*id, None, !root.unseen()))
-            .collect();
-        while let Some((id, row, visible)) = pending.pop() {
+        let mut leaves: Vec<Leaf> = Vec::new();
+        let mut plain = 0;
+        let mut pending = vec![(scope, None, None, true)];
+        while let Some((id, list, row, visible)) = pending.pop() {
             let Some(element) = self.elements.get(id) else {
                 continue;
             };
-            let extras = element.extras();
-            if element.flags.unselectable || extras.is_some_and(|extras| extras.selection.is_some())
-            {
+            if element.flags.unselectable || (id != scope && self.selection(id).is_some()) {
                 continue;
             }
-            let row = extras.and_then(|extras| extras.select_row).or(row);
+            let list = list.or_else(|| self.row_source(id).map(|_| id));
+            let row = row.or_else(|| element.extras().and_then(|extras| extras.select_row));
             let visible = visible && !element.unseen();
             if element.kind.text().is_some_and(|text| text.edit.is_none()) {
+                let index = row.unwrap_or(0);
+                let ordinal = if list.is_none() {
+                    plain += 1;
+                    plain - 1
+                } else {
+                    leaves
+                        .last()
+                        .filter(|leaf| (leaf.list, leaf.row) == (list, index))
+                        .map_or(0, |leaf| leaf.ordinal + 1)
+                };
                 leaves.push(Leaf {
                     id,
-                    row,
-                    ordinal: 0,
+                    list,
+                    row: index,
+                    ordinal,
                     visible,
                 });
             }
@@ -562,43 +599,38 @@ impl Tree {
                     .children
                     .iter()
                     .rev()
-                    .map(|child| (*child, row, visible)),
+                    .map(|child| (*child, list, row, visible)),
             );
-        }
-        if leaves.iter().any(|leaf| leaf.row.is_some()) {
-            leaves.retain(|leaf| leaf.row.is_some());
-        }
-        let mut current: Option<(Option<usize>, usize)> = None;
-        for leaf in &mut leaves {
-            let ordinal = match current {
-                Some((row, count)) if row == leaf.row => count,
-                _ => 0,
-            };
-            leaf.ordinal = ordinal;
-            current = Some((leaf.row, ordinal + 1));
         }
         leaves
     }
 
-    fn selection_hit(&self, leaves: &[Leaf], position: Point) -> Option<Hit> {
+    fn selection_hit<'a>(
+        &self,
+        leaves: impl Iterator<Item = &'a Leaf>,
+        position: Point,
+        target: Option<ElementId>,
+    ) -> Option<Hit<'a>> {
         let gap = |value: f32, low: f32, high: f32| (low - value).max(value - high).max(0.0);
         let (_, leaf) = leaves
-            .iter()
             .filter(|leaf| leaf.visible)
             .filter_map(|leaf| {
-                let text = self.elements.get(leaf.id)?.kind.text()?;
+                let text = self.elements[leaf.id].kind.text()?;
                 if text.content.is_empty() || text.layout.is_none() {
                     return None;
                 }
                 let rect = self.window_bounds(leaf.id);
-                let distance = (
-                    gap(position.y, rect.origin.y, rect.max().y),
-                    gap(position.x, rect.origin.x, rect.max().x),
-                );
-                Some((distance, leaf))
+                Some((
+                    (
+                        target != Some(leaf.id),
+                        gap(position.y, rect.origin.y, rect.max().y),
+                        gap(position.x, rect.origin.x, rect.max().x),
+                    ),
+                    leaf,
+                ))
             })
             .min_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(Ordering::Equal))?;
-        let text = self.elements.get(leaf.id)?.kind.text()?;
+        let text = self.elements[leaf.id].kind.text()?;
         let layout = text.layout.as_ref()?;
         let local = self.to_local(leaf.id, position) - text.inset;
         let offset = layout
@@ -608,76 +640,23 @@ impl Tree {
             .select_at(local.x, local.y, Granularity::Word)
             .range();
         Some(Hit {
-            point: TextPoint::new(leaf.row(), leaf.ordinal, offset),
+            leaf,
+            point: TextPoint::new(leaf.row, leaf.ordinal, offset),
             word,
             len: text.content.len(),
         })
     }
-
-    fn row_source(&self, scope: ElementId) -> Option<RowSource> {
-        let mut pending = vec![scope];
-        while let Some(id) = pending.pop() {
-            let element = self.elements.get(id)?;
-            if let Some(source) = element
-                .extras()
-                .and_then(|extras| extras.row_source.as_ref())
-            {
-                return Some(source.clone());
-            }
-            pending.extend(element.children.iter().rev());
-        }
-        None
-    }
-
-    fn selection_scroller(&self, scope: ElementId) -> Option<ElementId> {
-        let mut pending = vec![scope];
-        while let Some(id) = pending.pop() {
-            let Some(element) = self.elements.get(id) else {
-                continue;
-            };
-            if element.scroll().is_some() {
-                return Some(id);
-            }
-            pending.extend(element.children.iter().rev());
-        }
-        self.chain(scope)
-            .into_iter()
-            .rev()
-            .find(|id| self.elements[*id].scroll().is_some())
-    }
-
-    fn outside_scroller(&self, scope: ElementId, position: Point) -> bool {
-        self.selection_scroller(scope).is_some_and(|scroller| {
-            let view = self.window_bounds(scroller);
-            position.y < view.origin.y || position.y > view.max().y
-        })
-    }
 }
 
-fn clip(
-    row: usize,
-    leaf: usize,
-    content: &str,
-    start: TextPoint,
-    end: TextPoint,
-) -> Option<Range<usize>> {
-    let len = content.len();
-    let (first, last) = (TextPoint::new(row, leaf, 0), TextPoint::new(row, leaf, len));
-    if len == 0 {
-        return (start < first && end > first).then_some(0..0);
+impl SelectionDrag {
+    fn range(self, hit: &Hit<'_>) -> TextRange {
+        let (start, end) = self.origin;
+        let (before, after) = hit.span(self.unit);
+        let (anchor, focus) = if hit.point < start {
+            (end, before)
+        } else {
+            (start, after)
+        };
+        TextRange { anchor, focus }
     }
-    if end <= first || start >= last {
-        return None;
-    }
-    let from = if start > first {
-        content.floor_char_boundary(start.offset.min(len))
-    } else {
-        0
-    };
-    let to = if end < last {
-        content.floor_char_boundary(end.offset.min(len))
-    } else {
-        len
-    };
-    (from < to).then_some(from..to)
 }

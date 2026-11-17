@@ -10,7 +10,7 @@ use crate::style::Dirty;
 use crate::text::TextSystem;
 use crate::theme::Theme;
 use crate::tree::{
-    ActionHandler, ElementId, Event, FrameStats, Listeners, On, PaintCache, SelectOp, Tree, emit,
+    ActionHandler, ElementId, Event, FrameStats, Listeners, On, PaintCache, Tree, emit,
 };
 use crate::view::{BuildCx, Queue, View};
 use crate::window::{Appearance, EditAction, Menu, MenuItem, Sent, WindowCommand, WindowHandle};
@@ -577,7 +577,7 @@ impl Ui {
         let button = self.held.unwrap_or(PointerButton::Primary);
         self.dispatch(&path, On::PointerMove, position, button);
         if self.held == Some(PointerButton::Primary) {
-            self.tree.select(SelectOp::Drag(position));
+            self.tree.move_selection(position, DRAG_SLOP);
         }
         self.drag_moved(position);
     }
@@ -630,7 +630,7 @@ impl Ui {
         let handlers = self.tree.action_handlers(&path, action.type_id());
         if handlers.is_empty()
             && let Some(action) = action.downcast_ref::<EditAction>()
-            && self.tree.select(SelectOp::Edit(&path, *action))
+            && self.tree.select_edit(&path, *action)
         {
             self.flush();
             return true;
@@ -657,17 +657,17 @@ impl Ui {
             return true;
         }
         let path = self.tree.focus_path();
-        let op = match EditAction::from_key(&event) {
-            Some(action) => Some(SelectOp::Edit(&path, action)),
-            None if event.key == Key::Escape => Some(SelectOp::Escape(&path)),
-            None => None,
-        };
-        if op.is_some_and(|op| self.tree.select(op)) {
-            self.flush();
-            return true;
-        }
         if let Some((action, handlers)) = self.tree.binding(&path, &event) {
             return self.invoke_action(&*action, &handlers);
+        }
+        let selected = if event.key == Key::Escape {
+            self.tree.escape_selection(&path)
+        } else {
+            EditAction::from_key(&event).is_some_and(|action| self.tree.select_edit(&path, action))
+        };
+        if selected {
+            self.flush();
+            return true;
         }
         let shortcut = self
             .shortcuts
@@ -747,12 +747,12 @@ impl Ui {
         let path = self.tree.hover_path().to_vec();
         self.dispatch(&path, On::PointerDown, position, button);
         if button == PointerButton::Primary {
-            self.tree.select(SelectOp::Press {
-                path: &path,
+            self.tree.press_selection(
+                &path,
                 position,
-                clicks: self.clicks.map_or(1, |(_, _, count)| count),
-                extend: self.modifiers.get_untracked().shift,
-            });
+                self.clicks.map_or(1, |(_, _, count)| count),
+                self.modifiers.get_untracked().shift,
+            );
             let samples = Samples::new(self.time(), position);
             let targets = self.tree.listeners(&path, On::Drag);
             self.drag = targets.first().map(|(element, _)| Drag {
@@ -776,8 +776,9 @@ impl Ui {
         self.flush();
         let path = self.tree.pointer_path().to_vec();
         self.dispatch(&path, On::PointerUp, position, button);
-        if primary {
-            self.tree.select(SelectOp::Release);
+        let selected = primary && self.tree.release_selection();
+        if selected {
+            self.clicks = None;
         }
         self.tree.release_capture();
         self.refresh_pointer();
@@ -786,7 +787,7 @@ impl Ui {
         } else {
             Vec::new()
         };
-        if dragged.is_none() {
+        if dragged.is_none() && !selected {
             self.dispatch(&clicked, On::Click, position, button);
         }
         if self.outside {
@@ -801,7 +802,7 @@ impl Ui {
 
     fn release_press(&mut self) {
         self.held = None;
-        self.tree.select(SelectOp::Release);
+        self.tree.release_selection();
         if let (Some(drag), Some(position)) =
             (self.drag.take().filter(|drag| drag.started), self.pointer)
         {

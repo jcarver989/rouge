@@ -240,9 +240,13 @@ fn dragging_past_the_bottom_of_a_list_scrolls_it_and_extends_the_selection() -> 
     scene
         .ui
         .pointer_moved(Point::new(from.x, LIST_HEIGHT + 40.0));
-    while list.scroll_state().get_untracked().offset.y < 200.0 {
+    for _ in 0..60 {
+        if list.scroll_state().get_untracked().offset.y >= 200.0 {
+            break;
+        }
         scene.ui.advance(0.05);
     }
+    assert!(list.scroll_state().get_untracked().offset.y >= 200.0);
     scene.ui.pointer_up(PointerButton::Primary);
     scene.ui.advance(0.0);
     let copied = scene.copy().ok_or("nothing selected")?;
@@ -282,6 +286,63 @@ fn a_row_replaced_under_a_selection_drops_it_even_when_scrolled_out_of_view() ->
     scene.ui.advance(0.0);
     assert!(scene.copy().is_some());
     revision.set(1);
+    scene.ui.advance(0.0);
+    assert_eq!(scene.copy(), None);
+    Ok(())
+}
+
+#[test]
+fn a_selection_uses_the_list_it_started_in_and_does_not_hide_plain_text() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut scene = Scene::new(|| {
+        let list = |label: &'static str| {
+            div().h(ROW_HEIGHT).child(
+                virtual_list(|| 3, ROW_HEIGHT, move |row| text(format!("{label} {row}")))
+                    .row_text(move |row| format!("{label} {row}"))
+                    .size_full(),
+            )
+        };
+        div()
+            .flex()
+            .col()
+            .child(list("first"))
+            .child(list("second"))
+            .child(text("outside"))
+    });
+    scene.ui.click_text("second 0")?;
+    scene.ui.press("cmd-a");
+    assert_eq!(
+        scene.copy().as_deref(),
+        Some("second 0\n\nsecond 1\n\nsecond 2")
+    );
+    scene.ui.click_text("outside")?;
+    scene.ui.press("cmd-a");
+    assert_eq!(scene.copy().as_deref(), Some("outside"));
+    Ok(())
+}
+
+#[test]
+fn shrinking_an_unkeyed_list_invalidates_a_selection_past_its_new_end() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let size = signal(25);
+    let mut scene = Scene::new(move || {
+        div().h(LIST_HEIGHT).child(
+            virtual_list(
+                move || size.get(),
+                ROW_HEIGHT,
+                |row| text(format!("entry {row}")),
+            )
+            .row_text(move |row| {
+                assert!(row < size.get_untracked());
+                format!("entry {row}")
+            })
+            .size_full(),
+        )
+    });
+    scene.ui.click_text("entry 0")?;
+    scene.ui.press("cmd-a");
+    assert!(scene.copy().is_some_and(|text| text.ends_with("entry 24")));
+    size.set(1);
     scene.ui.advance(0.0);
     assert_eq!(scene.copy(), None);
     Ok(())

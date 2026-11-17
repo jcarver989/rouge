@@ -292,8 +292,15 @@ impl Tree {
             &mut self.press_path,
             &mut self.observers,
             &mut self.surfaces,
+            &mut self.selection_scopes,
         ] {
             list.retain(|e| elements.contains_key(*e));
+        }
+        if self
+            .selection_drag
+            .is_some_and(|drag| !elements.contains_key(drag.scope))
+        {
+            self.selection_drag = None;
         }
         if self
             .capture

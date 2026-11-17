@@ -49,7 +49,8 @@ pub use geometry::PaintRegion;
 pub(crate) use layers::{LayerSpec, Presence};
 pub(crate) use paint::PaintCache;
 pub(crate) use scroll::ScrollSpec;
-pub(crate) use selection::{RowSource, SelectOp, SelectionScope};
+use selection::SelectionDrag;
+pub(crate) use selection::{RowSource, SelectionScope};
 
 new_key_type! {
     pub(crate) struct ElementId;
@@ -351,6 +352,7 @@ pub(crate) struct Tree {
     surface_sinks: FxHashMap<SurfaceId, StatusSink>,
     window_visible: bool,
     selection_scopes: Vec<ElementId>,
+    selection_drag: Option<SelectionDrag>,
 }
 
 impl Tree {
@@ -391,6 +393,7 @@ impl Tree {
             surface_sinks: FxHashMap::default(),
             window_visible: true,
             selection_scopes: Vec::new(),
+            selection_drag: None,
         };
         tree.root = tree.create_element(ElementSpec {
             layout: root_layout(size),
