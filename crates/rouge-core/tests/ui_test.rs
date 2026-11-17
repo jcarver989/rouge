@@ -235,6 +235,21 @@ fn resize_relayouts() -> TestResult {
 }
 
 #[test]
+fn a_window_that_shrinks_and_grows_back_matches_one_drawn_fresh_at_that_size() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::canvas(footer);
+    ui.render()?;
+    ui.set_size(Size::new(200.0, 80.0));
+    ui.render()?;
+    ui.set_size(Size::new(200.0, 100.0));
+    let grown = ui.render()?;
+
+    let fresh = TestUi::canvas(footer).render()?;
+    assert_eq!(grown.pixels, fresh.pixels);
+    Ok(())
+}
+
+#[test]
 fn clicks_and_scrolls_bubble_from_the_element_under_the_pointer_and_can_be_stopped() {
     let _rt = Runtime::new().enter();
     let log = signal(Vec::<(&'static str, f32)>::new());
@@ -1090,4 +1105,13 @@ fn slide() -> Keyframes {
         .at(0.0, |pose| pose.translate_x(0.0))
         .at(1.0, |pose| pose.translate_x(40.0))
         .repeat()
+}
+
+fn footer() -> impl rouge_core::View {
+    div()
+        .size_full()
+        .flex()
+        .col()
+        .child(div().flex_1().bg(Color::BLUE))
+        .child(div().h(10.0).bg(Color::RED))
 }

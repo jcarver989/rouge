@@ -187,6 +187,12 @@ impl TestUi {
         Ok(actor)
     }
 
+    /// Resizes the window, as the platform does: the layout and the render target both follow.
+    pub fn set_size(&mut self, size: Size) {
+        self.size = size;
+        self.ui.set_size(size);
+    }
+
     pub fn surfaces(&mut self) -> Result<&mut Surfaces, TestError> {
         Ok(self.actor()?.surfaces())
     }
