@@ -60,6 +60,9 @@ too_many_lines = "allow"
 unnecessary_wraps = "allow"
 unreadable_literal = "allow"
 
+[workspace.lints.cargo]
+pedantic = { level = "warn", priority = -1 }
+
 [profile.wasm-release]
 inherits = "release"
 lto = "fat"

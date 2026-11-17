@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-framer = "0.1.2"
-framer-presets = "0.1.2"
+framer = { git = "https://github.com/jcarver989/framer", rev = "f4a61cd95f15c33ccd74a3c24e05757280d178d7" }
+framer-presets = { git = "https://github.com/jcarver989/framer", rev = "f4a61cd95f15c33ccd74a3c24e05757280d178d7" }
 
 [workspace]
