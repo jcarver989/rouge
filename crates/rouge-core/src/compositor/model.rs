@@ -790,6 +790,7 @@ impl LayerModel {
     }
 
     pub fn next_change(&self, since: f64) -> Option<f64> {
+        self.settles.filter(|end| *end > since)?;
         let motions = (self.motions.values())
             .filter_map(Animated::end)
             .filter(|end| *end > since)

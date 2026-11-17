@@ -172,6 +172,20 @@ fn input_helpers_target_elements_by_test_id() -> TestResult {
 struct Save;
 
 #[test]
+fn a_frame_that_changes_no_pixels_is_drawn_but_not_presented() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let color = signal(Color::RED);
+    let mut ui = TestUi::new(move || div().size(10.0).bg(move || color.get()));
+    assert_eq!(ui.draw()?.presented, 1, "the first frame is shown");
+    assert_eq!(ui.draw()?.presented, 0, "an identical frame is not");
+    color.set(Color::BLUE);
+    ui.advance(0.0);
+    assert_eq!(ui.draw()?.presented, 1, "a changed frame is shown again");
+    assert_eq!(ui.pixel(5, 5)?, [0, 0, 255, 255]);
+    Ok(())
+}
+
+#[test]
 fn compositor_frames_counts_only_the_frames_the_compositor_wakes_for() -> TestResult {
     let _rt = Runtime::new().enter();
     let steps = (0..4u8).fold(Keyframes::new(), |keyframes, step| {

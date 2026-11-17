@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
-use tracing::trace_span;
+use tracing::{trace, trace_span};
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
@@ -45,21 +45,26 @@ struct Window {
     clear: Color,
     scale: f32,
     presented: Option<f64>,
+    change: Option<f64>,
     owed: bool,
     surfaced: bool,
+    unshown: bool,
 }
 
 impl Window {
+    fn follow(&mut self) {
+        let model = self.compositor.model();
+        self.change = model.next_change(self.presented.unwrap_or(model.time()));
+    }
+
     fn wake_at(&self, now: f64) -> Option<f64> {
         if !self.config.visible {
             return None;
         }
-        let change = if self.owed || self.surfaced {
+        let change = if self.owed || self.surfaced || self.unshown {
             Some(now)
         } else {
-            self.compositor
-                .model()
-                .next_change(self.presented.unwrap_or(now))
+            self.change
         };
         change.map(|at| at.max(self.due_at()))
     }
@@ -146,8 +151,10 @@ impl CompositorActor {
                     clear: Color::TRANSPARENT,
                     scale: 1.0,
                     presented: None,
+                    change: None,
                     owed: false,
                     surfaced: false,
+                    unshown: false,
                 });
             }
             Message::Configure(id, config) => {
@@ -157,6 +164,7 @@ impl CompositorActor {
                 if (config.width, config.height) != window.target.size() {
                     (window.target).resize(&self.gpu, config.width, config.height);
                     window.presented = None;
+                    window.follow();
                 }
                 let hidden = window.config.visible && !config.visible;
                 window.config = config;
@@ -195,6 +203,7 @@ impl CompositorActor {
         window.clear = commit.clear.unwrap_or(window.clear);
         window.scale = commit.scale.unwrap_or(window.scale);
         window.owed = true;
+        window.follow();
         if !window.config.visible && !held {
             self.events.extend(window.acknowledge());
         }
@@ -252,38 +261,43 @@ impl CompositorActor {
         if !window.config.visible {
             return;
         }
-        let acquired = {
-            let _acquire = trace_span!("acquire").entered();
-            window.target.acquire(&self.gpu)
-        };
         window.presented = Some(now);
-        let frame = match acquired {
-            Acquire::Frame(frame) => frame,
-            Acquire::Retry => return,
-            Acquire::Skip => {
-                self.events.extend(window.acknowledge());
-                return;
-            }
-        };
+        window.follow();
         let (width, height) = window.target.size();
-        let scale = window.scale;
-        let scene = window.compositor.scene(scale, &self.surfaces, now);
+        let viewport = Viewport::new(width, height, window.scale);
+        let scene = window.compositor.scene(window.scale, &self.surfaces, now);
+        let (target, gpu, unshown) = (&mut window.target, &self.gpu, &mut window.unshown);
+        let (mut frame, mut retry) = (None, false);
         {
             let _encode = trace_span!("encode").entered();
-            window.renderer.render(
-                &frame.view,
-                Viewport::new(width, height, scale),
-                window.clear,
-                scene,
-                &self.surfaces,
-            );
+            let acquire = |changed: bool| {
+                *unshown |= changed;
+                if !*unshown {
+                    return None;
+                }
+                let _acquire = trace_span!("acquire").entered();
+                match target.acquire(gpu) {
+                    Acquire::Frame(acquired) => Some(frame.insert(acquired).view.clone()),
+                    Acquire::Retry => {
+                        retry = true;
+                        None
+                    }
+                    Acquire::Skip => None,
+                }
+            };
+            (window.renderer).draw(viewport, window.clear, scene, &self.surfaces, acquire);
         }
-        self.stats = window.renderer.stats();
-        {
+        if let Some(frame) = frame {
             let _present = trace_span!("present").entered();
             window.target.present(&self.gpu, frame);
+            window.unshown = false;
         }
         window.surfaced = false;
+        self.stats = window.renderer.stats();
+        trace!(target: "rouge::render", stats = ?self.stats, memory = ?window.renderer.memory());
+        if retry {
+            return;
+        }
         (self.surfaces).presented(Instant::now(), window.config.interval);
         self.events.extend(window.acknowledge());
     }

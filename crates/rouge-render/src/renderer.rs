@@ -278,6 +278,7 @@ impl<'a> Scene<'a> {
 pub struct RenderStats {
     pub instance_bytes_uploaded: u64,
     pub damaged: u64,
+    pub presented: u32,
     pub draw_calls: u32,
     pub layers: u32,
     pub backdrop_passes: u32,
@@ -2062,13 +2063,13 @@ impl Renderer {
         }
     }
 
-    pub fn render(
+    pub fn draw(
         &mut self,
-        target: &TextureView,
         viewport: Viewport,
         clear: Color,
         scene: Scene<'_>,
         surfaces: &Surfaces,
+        acquire: impl FnOnce(bool) -> Option<TextureView>,
     ) {
         self.stats = RenderStats::default();
         self.frame += 1;
@@ -2182,12 +2183,18 @@ impl Renderer {
             };
             self.encode(&mut encoder, destination, main, &plan, &mut stats);
         }
-        if let Some(scene) = scene {
-            let mut pass = begin_pass(&mut encoder, target, LoadOp::Clear(ClearColor::TRANSPARENT));
+        let changed = !matches!(redraw, Redraw::Unchanged);
+        if let (Some(scene), Some(target)) = (scene, acquire(changed)) {
+            let mut pass = begin_pass(
+                &mut encoder,
+                &target,
+                LoadOp::Clear(ClearColor::TRANSPARENT),
+            );
             pass.set_pipeline(&self.fullscreen[BlurKind::Copy as usize]);
             pass.set_bind_group(0, &scene.bind_group, &[]);
             pass.set_bind_group(1, &self.records_group, &[blit.page]);
             pass.draw(blit.vertices(), 0..1);
+            stats.presented += 1;
         }
         self.queue.submit([encoder.finish()]);
         self.stats = stats;

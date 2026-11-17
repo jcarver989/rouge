@@ -3,7 +3,7 @@ mod common;
 
 use common::{Stage, StageBuilder, WINDOW, square};
 use rouge_core::testing::{LINEAR, TestResult};
-use rouge_core::{CompositorEvent, Keyframes, LayerProp, Message};
+use rouge_core::{CompositorEvent, Keyframes, LayerProp, Message, MotionId};
 use std::error::Error;
 
 #[test]
@@ -47,6 +47,43 @@ fn a_compositor_only_animation_sends_nothing_back() -> TestResult {
         stage.actor.next_wake(1.6),
         None,
         "and then the compositor idles"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_layer_that_animates_again_after_settling_wakes_the_compositor_again() -> TestResult {
+    let mut stage = sliding()?;
+    stage.frame(0.0);
+    stage.frame(1.5);
+    assert_eq!(stage.actor.next_wake(1.6), None);
+    stage.run(2.0);
+    (stage.layers).set_prop(stage.child, LayerProp::TranslateX, 80.0, true);
+    stage.sync();
+    stage.frame(2.0);
+    assert!(
+        stage.actor.next_wake(2.1).is_some(),
+        "the second slide is still running"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_motion_that_animates_again_after_settling_wakes_the_compositor_again() -> TestResult {
+    let mut stage = StageBuilder::default().child(square()).build()?;
+    stage.bind(MotionId(1), 0.0);
+    let _first = stage.animate(MotionId(1), 40.0, LINEAR.into());
+    stage.sync();
+    stage.frame(0.0);
+    stage.frame(1.5);
+    assert_eq!(stage.actor.next_wake(1.6), None);
+    stage.run(2.0);
+    let _second = stage.animate(MotionId(1), 80.0, LINEAR.into());
+    stage.sync();
+    stage.frame(2.0);
+    assert!(
+        stage.actor.next_wake(2.1).is_some(),
+        "the second motion is still running"
     );
     Ok(())
 }

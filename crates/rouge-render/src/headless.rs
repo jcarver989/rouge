@@ -104,8 +104,10 @@ impl Headless {
 
     pub fn render(&mut self, clear: Color, scene: Scene<'_>, atlas: &mut Atlas) -> RenderStats {
         self.renderer.upload_atlas(&atlas.take_uploads());
-        self.renderer
-            .render(&self.view, self.viewport, clear, scene, &self.surfaces);
+        let view = &self.view;
+        (self.renderer).draw(self.viewport, clear, scene, &self.surfaces, |_| {
+            Some(view.clone())
+        });
         self.surfaces.maintain();
         self.renderer.stats()
     }
