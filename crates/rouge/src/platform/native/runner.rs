@@ -546,10 +546,10 @@ impl Compositing {
         };
         let (messages, mailbox, events) = mailbox();
         let epoch = Instant::now();
-        let host = if var("ROUGE_COMPOSITOR").is_ok_and(|mode| mode == "thread") {
-            Host::Thread(spawn(gpu.clone(), messages.clone(), mailbox, epoch, wake)?)
-        } else {
+        let host = if var("ROUGE_COMPOSITOR").is_ok_and(|mode| mode == "inline") {
             Host::Inline(Box::new(Inline::new(gpu, mailbox, epoch, wake)))
+        } else {
+            Host::Thread(spawn(gpu.clone(), messages.clone(), mailbox, epoch, wake)?)
         };
         Ok(Compositing {
             messages,
