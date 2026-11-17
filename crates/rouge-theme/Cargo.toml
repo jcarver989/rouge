@@ -1,13 +1,14 @@
 [package]
 name = "rouge-theme"
-description = "Renderer-neutral colors, UI and Markdown palettes, and semantic control states for Rouge apps"
+description = "Renderer-neutral colors, UI and Markdown palettes, and semantic control states for Rouge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-license-file.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme.workspace = true
+keywords = ["gui", "ui", "theme", "palette", "colors"]
+categories = ["gui"]
 
 [lints]
 workspace = true

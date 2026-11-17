@@ -764,7 +764,6 @@ How the design meets them:
 | **winit limitations**: popups and layer-shell on Wayland, native menus off macOS. | Popovers render in-window; Linux menus are rendered by Rouge. |
 | **Cross-API synchronization**: wgpu cannot see a foreign API writing a buffer it samples. | Read-only buffers from submit until the pool hands them out again, releases after GPU completion. Fences are deferred until the first foreign-API producer; they can be added to `Frame` without changing the rest of the protocol. |
 | **Linux GL-to-Vulkan sharing** varies by driver (DMA-BUF export, modifiers, NVIDIA). | Opaque-fd sharing is the contingency; a GPU blit into a shared image is the last resort. A CPU copy is not on the list. |
-| **Name**: "Rouge" is a placeholder. | Check crates.io availability before publishing. |
 
 ## 20. Planned: web view (`rouge-webview`)
 

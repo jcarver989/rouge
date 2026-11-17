@@ -1,13 +1,17 @@
 [package]
 name = "rouge"
-description = "A signal-driven, GPU-composited UI framework."
+description = "A signal-driven, GPU-composited UI framework for native apps and the web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-license-file.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme.workspace = true
+keywords = ["gui", "ui", "gpu", "reactive", "wgpu"]
+categories = ["gui", "wasm"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 markdown = ["syntax", "rouge-widgets/markdown", "dep:rouge-markdown"]

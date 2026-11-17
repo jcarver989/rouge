@@ -1,13 +1,14 @@
 [package]
 name = "rouge-macros"
-description = "The view! and #[component] macros for Rouge."
+description = "The view! and #[component] macros for Rouge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-license-file.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme.workspace = true
+keywords = ["gui", "ui", "view", "component", "jsx"]
+categories = ["development-tools::procedural-macro-helpers", "gui"]
 
 [lib]
 proc-macro = true

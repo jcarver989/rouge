@@ -1,13 +1,14 @@
 [package]
 name = "rouge-markdown"
-description = "Renderer-neutral Markdown documents, append streams and syntax-highlighted code blocks for Rouge apps"
+description = "Renderer-neutral Markdown documents, append streams and syntax-highlighted code blocks for Rouge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-license-file.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme.workspace = true
+keywords = ["markdown", "commonmark", "gfm", "parser", "streaming"]
+categories = ["text-processing", "parser-implementations"]
 
 [lints]
 workspace = true

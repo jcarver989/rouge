@@ -19,11 +19,11 @@ Rouge is heavily inspired by [Leptos](https://leptos.dev/) and [GPUI](https://gp
 
 ## Quick start
 
-Rouge needs Rust 1.100 or later. Rouge is not on crates.io yet, so add it from Git:
+Rouge needs Rust 1.100 or later. Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rouge = { git = "https://github.com/jcarver989/rouge" }
+rouge = "0.1"
 ```
 
 Put this code in `src/main.rs`:
@@ -107,7 +107,7 @@ div()
 Turn on the `persist` feature:
 
 ```toml
-rouge = { git = "https://github.com/jcarver989/rouge", features = ["persist"] }
+rouge = { version = "0.1", features = ["persist"] }
 ```
 
 Give each window a storage, then wrap a signal or a keyed list in `persisted`. On macOS and Linux, Rouge keeps the data in files. In the browser, Rouge keeps the data in `localStorage`.

@@ -1,13 +1,14 @@
 [package]
 name = "rouge-core"
-description = "Element tree, styles, layout, text, views and the layer compositor for Rouge."
+description = "Element tree, styles, layout, text, views and the layer compositor for Rouge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-license-file.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme.workspace = true
+keywords = ["gui", "ui", "layout", "compositor", "text"]
+categories = ["gui", "rendering"]
 
 [dependencies]
 rouge-macros.workspace = true

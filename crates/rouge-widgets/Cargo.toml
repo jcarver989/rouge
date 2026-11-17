@@ -1,13 +1,17 @@
 [package]
 name = "rouge-widgets"
-description = "Rouge's component set: bundled fonts, rem-based tokens, typography, icons and widgets."
+description = "Rouge's component set: bundled fonts, rem-based tokens, typography, icons and widgets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-license-file.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme.workspace = true
+keywords = ["gui", "ui", "widgets", "components", "icons"]
+categories = ["gui"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 markdown = ["syntax", "dep:rouge-markdown"]

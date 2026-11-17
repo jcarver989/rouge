@@ -6,7 +6,6 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-license-file = "LICENSE"
 rust-version = "1.100"
 repository = "https://github.com/jcarver989/rouge"
 readme = "README.md"

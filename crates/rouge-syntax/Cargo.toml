@@ -1,13 +1,14 @@
 [package]
 name = "rouge-syntax"
-description = "Portable Tree-sitter syntax highlighting, symbol tags and syntax themes for Rouge apps"
+description = "Tree-sitter syntax highlighting, symbol tags and syntax themes for Rouge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-license-file.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme = "README.md"
+keywords = ["tree-sitter", "syntax", "highlighting", "parser", "editor"]
+categories = ["text-processing", "text-editors"]
 
 [lints]
 workspace = true
