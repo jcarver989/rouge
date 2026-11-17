@@ -1,6 +1,6 @@
 use framer::Project;
 use framer::rust::CargoWorkspace;
-use framer_presets::{Rust, RustMonorepo, Workspace};
+use framer_presets::{Release, ReleasePlz, Rust, RustMonorepo, Workspace};
 use std::mem;
 use std::process::ExitCode;
 
@@ -21,6 +21,7 @@ fn main() -> ExitCode {
         RustMonorepo::new()
             .rust(Rust::new("1.100").targets(["aarch64-apple-ios", "aarch64-apple-ios-sim"]))
             .workspace(Workspace::new().license("MIT"))
+            .release(Release::new().release_plz(ReleasePlz::new().publish_to_crates_io().github_token()))
             .without_conventions(),
     );
     if let Some(workspace) = project.get_mut::<CargoWorkspace>() {
