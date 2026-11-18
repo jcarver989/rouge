@@ -538,6 +538,10 @@ impl Ui {
         self.tree.bounds_of_all(name)
     }
 
+    pub fn named_bounds(&self) -> Vec<(String, Rect)> {
+        self.tree.named_bounds()
+    }
+
     pub fn text_of(&self, name: &str) -> Option<String> {
         self.tree.text_of(name)
     }

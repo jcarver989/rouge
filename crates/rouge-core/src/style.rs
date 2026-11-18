@@ -7,6 +7,7 @@ use rouge_render::{Color, Corners, Point};
 use std::borrow::Cow;
 use std::mem::{replace, take};
 use std::rc::Rc;
+use taffy::style_helpers::{evenly_sized_tracks, span};
 use taffy::{
     AlignItems, AlignSelf, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
     Point as Axes, Position, Style as Layout,
@@ -139,6 +140,8 @@ pub enum Declaration {
     Position(Position),
     Overflow(Overflow),
     AspectRatio(f32),
+    GridColumns(u16),
+    ColumnSpan(u16),
     Length(&'static [Slot], Length),
     TextColor(Fill),
     TextSize(f32),
@@ -192,6 +195,11 @@ impl Declaration {
                 },
             ),
             Declaration::AspectRatio(ratio) => set(&mut layout.aspect_ratio, Some(ratio)),
+            Declaration::GridColumns(count) => set(
+                &mut layout.grid_template_columns,
+                evenly_sized_tracks(count),
+            ),
+            Declaration::ColumnSpan(count) => set(&mut layout.grid_column, span(count)),
             Declaration::Length(slots, length) => slots.iter().fold(false, |changed, slot| {
                 set_length(layout, *slot, length) | changed
             }),
@@ -454,6 +462,8 @@ pub trait Styled: Sized {
         line_height(f32) => Declaration::LineHeight;
         strikethrough(bool) => Declaration::Strikethrough;
         aspect_ratio(f32) => Declaration::AspectRatio;
+        grid_cols(u16) => Declaration::GridColumns;
+        col_span(u16) => Declaration::ColumnSpan;
         flex_grow(f32) => Declaration::FlexGrow;
         flex_shrink(f32) => Declaration::FlexShrink;
         border_color(Fill) => Declaration::BorderColor;

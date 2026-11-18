@@ -1,5 +1,6 @@
 use rouge_core::Corners;
 use rouge_core::testing::{BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder};
+use rouge_core::view;
 use rouge_core::{
     Color, Palette, Point, Rect, Size, Styled, Theme, UiPalette, div, dynamic, editable, rich_text,
     text,
@@ -420,5 +421,23 @@ fn invisible_elements_keep_their_space_but_paint_and_hit_nothing_until_revealed(
     ui.pointer_left();
     ui.advance(0.0);
     assert_eq!(ui.pixel(10, 10)?, rouge_core::testing::WHITE);
+    Ok(())
+}
+
+#[test]
+fn grid_columns_share_the_width_and_children_span_them() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().size(240.0, 100.0).build(|| {
+        view! {
+            <div grid grid_cols=12 w=240.0>
+                <div test_id="wide" col_span=8 h=10.0/>
+                <div test_id="narrow" col_span=4 h=20.0/>
+                <div test_id="wrapped" col_span=12 h=10.0/>
+            </div>
+        }
+    });
+    assert_eq!(ui.rect_of("wide")?, Rect::new(0.0, 0.0, 160.0, 10.0));
+    assert_eq!(ui.rect_of("narrow")?, Rect::new(160.0, 0.0, 80.0, 20.0));
+    assert_eq!(ui.rect_of("wrapped")?, Rect::new(0.0, 20.0, 240.0, 10.0));
     Ok(())
 }

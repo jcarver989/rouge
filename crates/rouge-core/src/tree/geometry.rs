@@ -40,6 +40,12 @@ impl Tree {
         });
     }
 
+    pub(crate) fn named_bounds(&self) -> Vec<(String, Rect)> {
+        self.visible_preorder(self.root)
+            .filter_map(|id| Some((self.test_id(id)?.into_owned(), self.window_bounds(id))))
+            .collect()
+    }
+
     pub(crate) fn bounds_of_all(&self, name: &str) -> Vec<Rect> {
         let mut bounds = Vec::new();
         for id in self.visible_preorder(self.root) {

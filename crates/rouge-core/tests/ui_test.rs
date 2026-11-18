@@ -1171,6 +1171,24 @@ fn footer() -> impl rouge_core::View {
         .child(div().h(10.0).bg(Color::RED))
 }
 
+#[test]
+fn named_bounds_lists_every_element_with_a_test_id_in_tree_order() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let ui = TestUi::new(|| {
+        view! {
+            <div test_id="outer" size=40.0>
+                <div size=8.0/>
+                <div test_id="inner" size=12.0/>
+            </div>
+        }
+    });
+    let bounds = ui.named_bounds();
+    let names: Vec<&str> = bounds.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["outer", "inner"]);
+    assert_eq!(bounds[1].1.size, Size::new(12.0, 12.0));
+    Ok(())
+}
+
 fn swipe_row_in_a_scroller(axis: DragAxis) -> (TestUi, Signal<ScrollState>, Signal<f32>) {
     let dragged = signal(0.0);
     let (ui, state) = scroller(move || {
