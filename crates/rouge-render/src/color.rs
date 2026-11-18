@@ -54,6 +54,22 @@ impl Color {
         Color { a, ..self }
     }
 
+    #[must_use]
+    pub fn over(self, background: Color) -> Color {
+        let below = background.a * (1.0 - self.a);
+        let a = self.a + below;
+        if a <= 0.0 {
+            return Color::TRANSPARENT;
+        }
+        let channel = |top: f32, bottom: f32| (top * self.a + bottom * below) / a;
+        Color::new(
+            channel(self.r, background.r),
+            channel(self.g, background.g),
+            channel(self.b, background.b),
+            a,
+        )
+    }
+
     pub fn premultiplied(self) -> [f32; 4] {
         [self.r * self.a, self.g * self.a, self.b * self.a, self.a]
     }
@@ -65,6 +81,13 @@ impl Color {
     pub fn to_rgba8(self) -> [u8; 4] {
         self.to_array()
             .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+    }
+}
+
+impl From<Color> for Rgba {
+    fn from(value: Color) -> Self {
+        let [r, g, b, a] = value.to_rgba8();
+        Rgba::new(r, g, b, a)
     }
 }
 
