@@ -1,3 +1,4 @@
+use crate::util::{TestId, chrome};
 use crate::{
     components::{ListRow, activate, chevron, list_row},
     icon::{Icon, IconName},
@@ -58,7 +59,7 @@ impl TreeRow {
         self
     }
 
-    pub fn expanded<U>(mut self, expanded: impl IntoProp<bool, U>) -> Self {
+    pub fn expanded<T>(mut self, expanded: impl IntoProp<bool, T>) -> Self {
         self.expanded = Some(expanded.into_prop());
         self
     }
@@ -68,12 +69,12 @@ impl TreeRow {
         self
     }
 
-    pub fn icon_color<U>(mut self, color: impl IntoProp<Fill, U>) -> Self {
+    pub fn icon_color<T>(mut self, color: impl IntoProp<Fill, T>) -> Self {
         self.icon_color = color.into_prop();
         self
     }
 
-    pub fn label_color<U>(mut self, color: impl IntoProp<Fill, U>) -> Self {
+    pub fn label_color<T>(mut self, color: impl IntoProp<Fill, T>) -> Self {
         self.label_color = color.into_prop();
         self
     }
@@ -83,7 +84,7 @@ impl TreeRow {
         self
     }
 
-    pub fn selection<U>(mut self, selection: impl IntoProp<SelectionState, U>) -> Self {
+    pub fn selection<T>(mut self, selection: impl IntoProp<SelectionState, T>) -> Self {
         self.selection = selection.into_prop();
         self
     }
@@ -108,18 +109,9 @@ impl TreeRow {
             .extend(children.into_iter().map(View::into_any));
         self
     }
-
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
-        self
-    }
 }
 
-impl DelegateStyle for TreeRow {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(TreeRow);
 
 impl View for TreeRow {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -149,7 +141,7 @@ impl View for TreeRow {
         };
         let caret = match expanded {
             Some(expanded) => {
-                let toggle = test_id.as_ref().map(|id| format!("{id}-toggle"));
+                let toggle = test_id.part("toggle");
                 let enabled = {
                     let selection = selection.clone();
                     move || selection.get() != SelectionState::Disabled
@@ -163,7 +155,7 @@ impl View for TreeRow {
             None => slot(),
         };
         let icon = icon.map(|icon| Icon::new(icon, icon_color));
-        let label_id = test_id.as_ref().map(|id| format!("{id}-label"));
+        let label_id = test_id.part("label");
         let row = list_row()
             .depth(depth)
             .selection(move || selection.get())

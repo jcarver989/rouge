@@ -1,18 +1,23 @@
+use crate::kbd::kbd;
 use crate::material::{Material, MaterialExt};
-use crate::tokens::Radius;
+use crate::sheet::Presenter;
+use crate::tokens::{POP_SCALE, Pace, Radius, Space};
 use crate::typography::UiStyles;
 use rouge_core::Role;
 use rouge_core::component;
+use rouge_core::view;
 use rouge_core::{
-    AnyView, BuildCx, DelegateStyle, Div, Key, PointerEvent, Pose, Rect, Styled, Tween, View, div,
-    overlay, show, text, window_size,
+    AnyView, BuildCx, Chord, DelegateStyle, Div, IntoChord, Key, PointerEvent, Pose, Rect, Styled,
+    View, div, dynamic, overlay, presentation, show, text, window_size,
 };
-use rouge_reactive::{Signal, Task, on_cleanup, signal, sleep, spawn};
+use rouge_reactive::{Signal, Task, memo, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
 const GAP: f32 = 4.0;
+
+pub(crate) const POPPED: Pose = Pose::new().opacity(0.0).scale(POP_SCALE);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Placement {
@@ -70,7 +75,7 @@ impl Placement {
     }
 }
 
-pub(crate) fn dismissable(layer: Div, panel: Div, dismiss: impl Fn() + Clone + 'static) -> Div {
+pub(crate) fn dismiss_layer(layer: Div, dismiss: impl Fn() + Clone + 'static) -> Div {
     let escape = dismiss.clone();
     layer
         .absolute()
@@ -82,31 +87,47 @@ pub(crate) fn dismissable(layer: Div, panel: Div, dismiss: impl Fn() + Clone + '
                 event.stop_propagation();
             }
         })
-        .child(panel.on_pointer_down(PointerEvent::stop_propagation))
 }
 
-fn floating(
-    open: impl Fn() -> bool + 'static,
-    exit: f32,
-    panel: impl Fn() -> Div + 'static,
-) -> impl View {
+fn dismissable(layer: Div, panel: Div, dismiss: impl Fn() + Clone + 'static) -> Div {
+    dismiss_layer(layer, dismiss).child(panel.on_pointer_down(PointerEvent::stop_propagation))
+}
+
+fn floating(open: impl Fn() -> bool + 'static, panel: impl Fn() -> Div + 'static) -> impl View {
     overlay(move || {
-        show(open, panel)
-            .enter(Pose::new().opacity(0.0), Tween::ms(120.0))
-            .exit(Pose::new().opacity(0.0), Tween::ms(exit))
+        view! {
+            <show when=open children=panel enter=(POPPED, Pace::Enter) exit=(POPPED, Pace::Exit)/>
+        }
     })
 }
 
 pub(crate) fn popup(
     open: Signal<bool>,
     backdrop: impl Fn(Div) -> Div + 'static,
+    place: impl Fn(Div) -> Div + 'static,
     content: impl Fn() -> Div + 'static,
 ) -> impl View {
-    floating(
-        move || open.get(),
-        100.0,
-        move || dismissable(backdrop(div()), content(), move || open.set(false)),
-    )
+    let presentation = presentation();
+    let handheld = memo(move || presentation.get().is_handheld());
+    let (backdrop, place, content) = (Rc::new(backdrop), Rc::new(place), Rc::new(content));
+    view! {
+        <dynamic>
+            {
+                let (backdrop, place, content) = (backdrop.clone(), place.clone(), content.clone());
+                if handheld.get() {
+                    Presenter::new(open)
+                        .present(move || content().into_any())
+                        .into_any()
+                } else {
+                    floating(
+                        move || open.get(),
+                        move || dismissable(backdrop(view! { <div/> }), place(content()), move || open.set(false)),
+                    )
+                    .into_any()
+                }
+            }
+        </dynamic>
+    }
 }
 
 fn anchored(target: impl View) -> (Div, Signal<Rect>) {
@@ -162,16 +183,10 @@ impl View for Popover {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (anchor, placement, content, material) =
             (self.anchor, self.placement, self.content, self.material);
-        let body = move || {
-            let body = div()
-                .material(material)
-                .focus_scope()
-                .autofocus()
-                .child(content());
-            placement.place(body, anchor)
-        };
+        let body = move || view! { <div focus_scope autofocus>{content()}</div> };
+        let place = move |body: Div| placement.place(body.material(material), anchor);
         self.root
-            .child(popup(self.open, |layer| layer, body))
+            .child(popup(self.open, |layer| layer, place, body))
             .build(cx);
     }
 }
@@ -179,6 +194,8 @@ impl View for Popover {
 pub struct Tooltip {
     root: Div,
     label: String,
+    shortcut: Option<Chord>,
+    content: Option<Rc<dyn Fn() -> AnyView>>,
     delay: Duration,
     anchor: Signal<Rect>,
 }
@@ -194,6 +211,8 @@ pub trait Hint: View + Sized {
         Tooltip {
             root,
             label: label.into(),
+            shortcut: None,
+            content: None,
             delay: Duration::from_millis(500),
             anchor,
         }
@@ -210,6 +229,17 @@ pub trait Hint: View + Sized {
 impl<T: View> Hint for T {}
 
 impl Tooltip {
+    #[track_caller]
+    pub fn shortcut(mut self, chord: impl IntoChord) -> Self {
+        self.shortcut = Some(chord.into_chord());
+        self
+    }
+
+    pub fn content<T: View>(mut self, content: impl Fn() -> T + 'static) -> Self {
+        self.content = Some(Rc::new(move || content().into_any()));
+        self
+    }
+
     pub fn delay(mut self, delay: Duration) -> Self {
         self.delay = delay;
         self
@@ -225,6 +255,7 @@ impl DelegateStyle for Tooltip {
 impl View for Tooltip {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (label, delay, anchor) = (self.label, self.delay, self.anchor);
+        let (shortcut, content) = (self.shortcut, self.content);
         let open = signal(false);
         let pending = Rc::new(Cell::new(None::<Task>));
         on_cleanup({
@@ -237,16 +268,22 @@ impl View for Tooltip {
         });
         let bubble = floating(
             move || open.get(),
-            80.0,
             move || {
-                let caption = text(label.clone()).small().color(Role::Text).no_wrap();
-                let bubble = div()
-                    .pass_through()
-                    .px(8.0)
-                    .py(4.0)
-                    .material(Material::Glass)
-                    .rounded(Radius::Control)
-                    .child(caption);
+                let body = match &content {
+                    Some(content) => content(),
+                    None => view! { <text small color=Role::Text no_wrap>{label.clone()}</text> }
+                        .into_any(),
+                };
+                let keys = shortcut
+                    .as_ref()
+                    .map(|chord| view! { <kbd>{chord.display()}</kbd> });
+                let bubble = view! {
+                    <div pass_through flex items_center gap=Space::X2 px=Space::X2 py=Space::X1
+                         material=Material::Glass rounded=Radius::Control>
+                        {body}
+                        {keys}
+                    </div>
+                };
                 Placement::Below.place(bubble, anchor)
             },
         );
@@ -313,7 +350,7 @@ impl View for HoverCard {
             placement,
             material,
         } = self;
-        floating(open, 100.0, move || {
+        floating(open, move || {
             let panel = div()
                 .material(material)
                 .on_pointer_down(PointerEvent::stop_propagation)

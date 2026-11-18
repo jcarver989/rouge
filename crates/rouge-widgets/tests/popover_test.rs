@@ -2,9 +2,11 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestResult, TestUi, counter};
-use rouge_core::{Color, Point, Rect, Role, Styled, Theme, div, show};
+use rouge_core::view;
+use rouge_core::{Color, InputKind, IntoChord, Point, Rect, Role, Size, Styled, Theme, div, show};
 use rouge_reactive::{Runtime, signal};
 use rouge_theme::UiPalette;
+use rouge_widgets::testing::component_test;
 use rouge_widgets::{Hint, Material, Placement, hover_card, popover, tooltip};
 use std::thread::sleep;
 use std::time::Duration;
@@ -160,6 +162,7 @@ fn a_glass_popover_lets_what_is_behind_it_show_through_its_panel() -> TestResult
     assert!(red > green, "glass shows the page through its tint");
     Ok(())
 }
+
 #[test]
 fn tooltip_appears_after_hovering_for_the_delay_and_hides_on_leave() {
     let _entered = Runtime::new().enter();
@@ -249,6 +252,77 @@ fn tooltip_takes_the_surface_of_a_dark_theme() -> TestResult {
 }
 
 #[test]
+fn a_tooltip_shows_a_shortcut_in_a_key_cap_or_rich_content() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test().size(300.0, 200.0).build(|| {
+        let plain = view! {
+            <div w=60.0 h=20.0 tooltip="Copy link" shortcut="secondary-c" delay=Duration::from_millis(1)/>
+        };
+        let rich = view! {
+            <div w=60.0 h=20.0 tooltip="Soft Machinery"
+                 content={|| view! { <div test_id="rich" size=40.0/> }} delay=Duration::from_millis(1)/>
+        };
+        view! {
+            <div size_full p=10.0 flex gap=40.0>
+                {plain}
+                {rich}
+            </div>
+        }
+    });
+    ui.pointer_moved(Point::new(20.0, 20.0));
+    assert!(ui.wait_until(|ui| ui.text_bounds("Copy link").is_some()));
+    let label = ui.text_bounds("Copy link").ok_or("no label")?;
+    let key = ui
+        .text_bounds(&"secondary-c".into_chord().display())
+        .ok_or("no shortcut")?;
+    assert!(
+        key.origin.x >= label.max().x,
+        "the key cap follows the label"
+    );
+    ui.pointer_moved(Point::new(120.0, 20.0));
+    assert!(ui.wait_until(|ui| ui.bounds_of("rich").is_some()));
+    assert!(
+        ui.text_bounds("Soft Machinery").is_none(),
+        "content replaces the caption"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_popover_scales_in_from_its_trigger_and_then_idles() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let open = signal(false);
+    let mut ui = builder().build(move || {
+        let trigger = view! { <div w=60.0 h=24.0/> };
+        let content = || view! { <div test_id="panel" size=80.0 bg=Color::RED/> };
+        view! {
+            <div size_full p=10.0>
+                <popover open=open trigger=trigger children=content material=Material::Bare/>
+            </div>
+        }
+    });
+    open.set(true);
+    ui.advance(0.0);
+    assert!(ui.is_animating());
+    ui.advance(1.0 / 60.0);
+    let panel = ui.rect_of("panel")?;
+    let (x, y) = (panel.origin.x as u32, panel.center().y as u32);
+    assert_ne!(
+        ui.pixel(x, y)?,
+        [255, 0, 0, 255],
+        "it starts smaller and faint"
+    );
+    ui.run(1.0);
+    assert_eq!(
+        ui.pixel(x, y)?,
+        [255, 0, 0, 255],
+        "and settles at full size"
+    );
+    assert_eq!(ui.compositor_frames(1.0)?, 0, "nothing animates at rest");
+    Ok(())
+}
+
+#[test]
 fn tooltip_unmounted_while_pending_never_opens() {
     let _entered = Runtime::new().enter();
     let mounted = signal(true);
@@ -264,4 +338,47 @@ fn tooltip_unmounted_while_pending_never_opens() {
     ui.advance(0.0);
     sleep(Duration::from_millis(40));
     ui.run(0.6);
+}
+
+#[test]
+fn a_popover_is_a_bottom_sheet_on_a_handheld() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let open = signal(false);
+    let mut ui = component_test()
+        .size(390.0, 700.0)
+        .input(InputKind::Touch)
+        .build(move || {
+            let trigger = view! { <div test_id="trigger" size=40.0/> };
+            view! {
+                <div size_full p=20.0>
+                    <popover open=open trigger=trigger>
+                        <div test_id="panel" h=200.0/>
+                    </popover>
+                </div>
+            }
+        });
+    ui.tap_on("trigger")?;
+    assert!(open.get());
+    ui.run(2.0);
+    let panel = ui.rect_of("panel")?;
+    assert_eq!(
+        (panel.origin.x, panel.size.width, panel.max().y),
+        (0.0, 390.0, 700.0),
+        "the content spans the bottom edge instead of hanging off its trigger"
+    );
+    assert_eq!(ui.compositor_frames(1.0)?, 0, "nothing animates at rest");
+    let grip = Point::new(195.0, panel.origin.y + 40.0);
+    ui.swipe_over(grip, Point::new(195.0, 690.0), 0.3);
+    ui.run(2.0);
+    assert!(!open.get(), "dragging it off the bottom closes it");
+    assert_eq!(ui.bounds_of("panel"), None);
+    ui.set_size(Size::new(900.0, 700.0));
+    open.set(true);
+    ui.run(2.0);
+    assert_eq!(
+        ui.rect_of("panel")?.origin,
+        Point::new(20.0, 64.0),
+        "at a regular width it is anchored again"
+    );
+    Ok(())
 }

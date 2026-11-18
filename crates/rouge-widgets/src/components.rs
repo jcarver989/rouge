@@ -1,19 +1,24 @@
 use crate::{
+    effects::{self, RIPPLE_SECONDS, Ripple},
     icon::{Icon, IconName},
     material::{Material, MaterialExt},
-    popover::{Hint, Placement, dismissable},
-    tokens,
+    popover::{Hint, POPPED, Placement, Tooltip, dismiss_layer},
+    progress::spinning,
+    sheet::{Detent, Presenter},
+    tokens::{self, Hold, MotionScale, Pace, Space},
     tree::indent,
     typography::UiStyles,
-    util::fade_when_disabled,
+    util::{Spot, TestId, chrome, fade_when_disabled, focus_ring, row_height, tone_icon},
 };
 use rouge_core::Role;
 use rouge_core::{
-    AnyView, Apply, BuildCx, Color, DelegateStyle, Div, Fill, FocusPolicy, IntoProp, Key,
-    LayoutTransition, Length, Path, Prop, Rect, Spring, StyleDelta, Styled, Text, Theme, View,
-    canvas, component, div, dynamic, overlay, pct, px, text, view,
+    AnyView, Apply, BackdropBlur, BuildCx, Chord, Color, Cursor, DelegateStyle, Div, DragAxis,
+    DragPhase, Fill, FocusPolicy, IntoChord, IntoProp, Key, Length, Path, Point, PointerButton,
+    PointerEvent, Pose, Presentation, Prop, Rect, Size, StyleDelta, Styled, Text, Theme, Timing,
+    View, auto, canvas, component, div, each, motion, overlay, pct, presentation, px, show, text,
+    view,
 };
-use rouge_reactive::{Callback, Signal, effect, memo, signal, use_context};
+use rouge_reactive::{Callback, Signal, signal, spawn, use_context};
 use rouge_theme::{
     ButtonVariant, ControlState, InteractionState, ModalSize, NoticeTone, SelectionState,
 };
@@ -24,6 +29,28 @@ pub enum ControlSize {
     Small,
     #[default]
     Medium,
+    Large,
+}
+
+impl ControlSize {
+    pub fn of(presentation: Presentation) -> Self {
+        if presentation.is_touch() {
+            ControlSize::Large
+        } else {
+            ControlSize::Medium
+        }
+    }
+
+    pub(crate) const fn metrics(self) -> (f32, f32) {
+        match self {
+            ControlSize::Small => (24.0, tokens::CONTROL_PADDING_X_SMALL),
+            ControlSize::Medium => (tokens::ROW_HEIGHT, tokens::CONTROL_PADDING_X_MEDIUM),
+            ControlSize::Large => (
+                tokens::CONTROL_HEIGHT_LARGE,
+                tokens::CONTROL_PADDING_X_LARGE,
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -40,9 +67,12 @@ pub struct Button {
     label: Prop<String>,
     icon: Option<IconName>,
     variant: ButtonVariant,
-    size: ControlSize,
+    size: Option<ControlSize>,
     tooltip: Option<String>,
     disabled: Prop<bool>,
+    loading: Prop<bool>,
+    confirm: Option<Hold>,
+    ripple: bool,
     selected: Prop<bool>,
     focus: FocusPolicy,
     on_click: Callback,
@@ -51,14 +81,17 @@ pub struct Button {
 }
 
 #[component]
-pub fn button<U>(label: impl IntoProp<String, U>) -> Button {
+pub fn button<T>(label: impl IntoProp<String, T>) -> Button {
     Button {
         label: label.into_prop(),
         icon: None,
         variant: ButtonVariant::default(),
-        size: ControlSize::default(),
+        size: None,
         tooltip: None,
         disabled: Prop::Static(false),
+        loading: Prop::Static(false),
+        confirm: None,
+        ripple: false,
         selected: Prop::Static(false),
         focus: FocusPolicy::Tab,
         on_click: Callback::default(),
@@ -79,7 +112,7 @@ impl Button {
     }
 
     pub fn control_size(mut self, size: ControlSize) -> Self {
-        self.size = size;
+        self.size = Some(size);
         self
     }
 
@@ -88,12 +121,27 @@ impl Button {
         self
     }
 
-    pub fn disabled<U>(mut self, disabled: impl IntoProp<bool, U>) -> Self {
+    pub fn disabled<T>(mut self, disabled: impl IntoProp<bool, T>) -> Self {
         self.disabled = disabled.into_prop();
         self
     }
 
-    pub fn selected<U>(mut self, selected: impl IntoProp<bool, U>) -> Self {
+    pub fn loading<T>(mut self, loading: impl IntoProp<bool, T>) -> Self {
+        self.loading = loading.into_prop();
+        self
+    }
+
+    pub fn confirm(mut self, hold: Hold) -> Self {
+        self.confirm = Some(hold);
+        self
+    }
+
+    pub fn ripple(mut self) -> Self {
+        self.ripple = true;
+        self
+    }
+
+    pub fn selected<T>(mut self, selected: impl IntoProp<bool, T>) -> Self {
         self.selected = selected.into_prop();
         self
     }
@@ -107,61 +155,76 @@ impl Button {
         self.on_click = on_click.into();
         self
     }
-
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
-        self
-    }
 }
 
-impl DelegateStyle for Button {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(Button);
 
 impl View for Button {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let variant = self.variant;
+        let (variant, theme) = (self.variant, Theme::current());
         let look = move |interaction, selected| {
-            move || Theme::control_style(variant, ControlState::new(interaction).selected(selected))
+            Theme::control_style(variant, ControlState::new(interaction).selected(selected))
         };
         let fill = move |interaction, selected| {
-            let look = look(interaction, selected);
-            move || look().background.unwrap_or_default()
+            move || {
+                let rest = look(InteractionState::Rest, false).background;
+                let state = look(interaction, selected).background;
+                let resolve = |fill: Option<Fill>| theme.resolve(fill.unwrap_or_default());
+                resolve(state).over(resolve(rest))
+            }
         };
-        let ink = move |interaction, selected| {
-            let look = look(interaction, selected);
-            move || look().foreground
+        let ink = move |interaction, selected| move || look(interaction, selected).foreground;
+        let edge = move || match variant {
+            ButtonVariant::Secondary => theme.resolve(Fill::Role(Role::Border)),
+            ButtonVariant::Destructive => theme.get().destructive.with_alpha(OUTLINE_ALPHA),
+            ButtonVariant::Primary | ButtonVariant::Ghost => Color::TRANSPARENT,
         };
-        let (height, padding) = match self.size {
-            ControlSize::Small => (24.0, tokens::CONTROL_PADDING_X_SMALL),
-            ControlSize::Medium => (tokens::ROW_HEIGHT, tokens::CONTROL_PADDING_X_MEDIUM),
+        let (size, presentation) = (self.size, presentation());
+        let metrics = move || {
+            size.unwrap_or_else(|| ControlSize::of(presentation.get()))
+                .metrics()
         };
+        let (height, padding) = (move || metrics().0, move || metrics().1);
         let disabled = Rc::new(self.disabled);
+        let loading = Rc::new(self.loading);
         let selected = Rc::new(self.selected);
-        let hovered = signal(false);
+        let (hovered, pressed) = (signal(false), signal(false));
+        let busy = {
+            let loading = loading.clone();
+            move || loading.get()
+        };
+        let spinner_id = self.test_id.part("spinner");
+        let spinner = view! {
+            <show when=busy.clone()>
+                <div test_id?={spinner_id.clone()} absolute inset=0.0 flex items_center justify_center pass_through>
+                    {spinning(tokens::ICON_SIZE, ink(InteractionState::Rest, false))}
+                </div>
+            </show>
+        };
         let icon = self.icon.map(|icon| {
-            let (disabled, selected) = (disabled.clone(), selected.clone());
+            let selected = selected.clone();
             Icon::new(icon, move || {
-                let interaction = if disabled.get() {
-                    InteractionState::Disabled
-                } else if hovered.get() {
+                let interaction = if hovered.get() {
                     InteractionState::Hovered
                 } else {
                     InteractionState::Rest
                 };
-                look(interaction, selected.get())().foreground
+                look(interaction, selected.get()).foreground
             })
         });
         let root = view! {
-            <div flex items_center justify_center flex_none gap=8.0 rounded=tokens::Radius::Control
-                 border=1.0 border_color=Color::TRANSPARENT h=height px=padding
+            <div relative flex items_center justify_center flex_none rounded=tokens::Radius::Control
+                 border=1.0 border_color=edge h=height px=padding
                  font_weight=500.0 bg={fill(InteractionState::Rest, false)}
                  text_color={ink(InteractionState::Rest, false)}
-                 on_hover={move |inside| hovered.set(inside)}>
-                {icon}
-                <text label no_wrap>{self.label}</text>
+                 on_hover={move |inside| hovered.set(inside)}
+                 on_press={move |down| pressed.set(down)}
+                 scale={move || if pressed.get() { tokens::PRESS_SCALE } else { 1.0 }}>
+                <div flex items_center gap=Space::X2 opacity={move || if busy() { 0.0 } else { 1.0 }}>
+                    {icon}
+                    <text label no_wrap>{self.label}</text>
+                </div>
+                {spinner}
             </div>
         }
         .hover(|style| {
@@ -175,18 +238,26 @@ impl View for Button {
                 .text_color(ink(InteractionState::Rest, true))
                 .font_weight(600.0)
         })
-        .focus_visible(|style| style.border_color(Role::Accent))
-        .disabled(|style| {
-            style
-                .bg(fill(InteractionState::Disabled, false))
-                .text_color(ink(InteractionState::Disabled, false))
-        })
         .is_selected({
             let selected = selected.clone();
             move || selected.get()
-        })
-        .enabled(move || !disabled.get());
-        let root = activate(root, self.on_click, self.focus);
+        });
+        let root = fade_when_disabled(focus_ring(root), &disabled)
+            .enabled(move || !disabled.get() && !loading.get())
+            .transition(Pace::Press);
+        let root = match self.confirm {
+            Some(hold) => confirming(root, hold, self.on_click, self.focus),
+            None => activate(root, self.on_click, self.focus),
+        };
+        let root = if self.ripple {
+            let ripple_id = self.test_id.part("ripple");
+            rippling(root, ripple_id, move || {
+                let ink = look(InteractionState::Rest, false).foreground;
+                theme.resolve(ink).with_alpha(RIPPLE_ALPHA)
+            })
+        } else {
+            root
+        };
         self.style
             .apply(root.when_some(self.test_id, Div::test_id))
             .hint(self.tooltip)
@@ -194,11 +265,94 @@ impl View for Button {
     }
 }
 
+const OUTLINE_ALPHA: f32 = 0.45;
+
+fn confirming(root: Div, hold: Hold, action: Callback, focus: FocusPolicy) -> Div {
+    let theme = Theme::current();
+    let (bounds, progress) = (signal(Rect::ZERO), motion(-OFFSTAGE));
+    let width = move || bounds.get_untracked().size.width;
+    let begin = move || {
+        progress.set(-width());
+        let arrival = progress.animate_to(0.0, hold);
+        spawn(async move {
+            if arrival.await {
+                action.call();
+                progress.animate_to(-width(), Pace::Exit);
+            }
+        });
+    };
+    let release = move || {
+        progress.animate_to(-width(), Pace::Exit);
+    };
+    let keyed = |key: &Key| matches!(key, Key::Enter | Key::Space);
+    let fill = view! {
+        <div absolute inset=0.0 pass_through
+             bg={move || theme.get().destructive.with_alpha(tokens::TINT_ALPHA)} translate_x=progress/>
+    };
+    root.overflow_hidden()
+        .track_bounds(bounds)
+        .cursor(Cursor::Pointer)
+        .focus_policy(focus)
+        .on_press(move |down| if down { begin() } else { release() })
+        .on_key_down(move |event| {
+            if keyed(&event.key) {
+                event.stop_propagation();
+                if !event.repeat {
+                    begin();
+                }
+            }
+        })
+        .on_key_up(move |event| {
+            if keyed(&event.key) {
+                release();
+            }
+        })
+        .child(fill)
+}
+
+const OFFSTAGE: f32 = 4096.0;
+
+fn rippling(root: Div, test_id: Option<String>, ink: impl Fn() -> Color + 'static) -> Div {
+    if MotionScale::current() == MotionScale::None {
+        return root;
+    }
+    let (spot, clock) = (signal(None::<(u64, Point)>), motion(0.0));
+    let wave = view! {
+        <each items={move || spot.get().into_iter().collect::<Vec<_>>()} key={|(press, _)| *press}
+             let:spot>
+            {
+                let (_, center) = spot.get_untracked();
+                effects::overlay(tokens::Radius::Control)
+                    .when_some(test_id.clone(), Div::test_id)
+                    .effect(Ripple { center, ink: ink() })
+            }
+        </each>
+    };
+    root.on_pointer_down(move |event| {
+        if event.button != PointerButton::Primary {
+            return;
+        }
+        let press = spot.with_untracked(|spot| spot.map_or(0, |(press, _)| press + 1));
+        spot.set(Some((press, event.local())));
+        clock.set(0.0);
+        let spent = clock.animate_to(1.0, Hold::seconds(RIPPLE_SECONDS));
+        spawn(async move {
+            if spent.await {
+                spot.set(None);
+            }
+        });
+    })
+    .child(wave)
+}
+
+const RIPPLE_ALPHA: f32 = 0.24;
+
 pub struct IconButton {
     icon: IconName,
     label: String,
     icon_size: f32,
     color: Option<Prop<Fill>>,
+    shortcut: Option<Chord>,
     disabled: Prop<bool>,
     selected: Prop<bool>,
     focus: FocusPolicy,
@@ -214,6 +368,7 @@ pub fn icon_button(icon: IconName, #[prop(into)] label: String) -> IconButton {
         label,
         icon_size: tokens::ICON_SIZE,
         color: None,
+        shortcut: None,
         disabled: Prop::Static(false),
         selected: Prop::Static(false),
         focus: FocusPolicy::Tab,
@@ -234,12 +389,18 @@ impl IconButton {
         self
     }
 
-    pub fn disabled<U>(mut self, disabled: impl IntoProp<bool, U>) -> Self {
+    #[track_caller]
+    pub fn shortcut(mut self, chord: impl IntoChord) -> Self {
+        self.shortcut = Some(chord.into_chord());
+        self
+    }
+
+    pub fn disabled<T>(mut self, disabled: impl IntoProp<bool, T>) -> Self {
         self.disabled = disabled.into_prop();
         self
     }
 
-    pub fn selected<U>(mut self, selected: impl IntoProp<bool, U>) -> Self {
+    pub fn selected<T>(mut self, selected: impl IntoProp<bool, T>) -> Self {
         self.selected = selected.into_prop();
         self
     }
@@ -253,24 +414,15 @@ impl IconButton {
         self.on_click = on_click.into();
         self
     }
-
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
-        self
-    }
 }
 
-impl DelegateStyle for IconButton {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(IconButton);
 
 impl View for IconButton {
     fn build(self, cx: &mut BuildCx<'_>) {
         let disabled = Rc::new(self.disabled);
         let selected = Rc::new(self.selected);
-        let hovered = signal(false);
+        let (hovered, pressed) = (signal(false), signal(false));
         let foreground = {
             let (disabled, selected, color) = (disabled.clone(), selected.clone(), self.color);
             move || match &color {
@@ -283,20 +435,25 @@ impl View for IconButton {
         };
         let root = view! {
             <div flex flex_none items_center justify_center size=tokens::ICON_BUTTON_SIZE
-                 rounded=tokens::Radius::Control on_hover={move |inside| hovered.set(inside)}>
+                 rounded=tokens::Radius::Control border=1.0 border_color=Color::TRANSPARENT
+                 on_hover={move |inside| hovered.set(inside)}
+                 on_press={move |down| pressed.set(down)}
+                 scale={move || if pressed.get() { tokens::PRESS_SCALE } else { 1.0 }}>
                 {Icon::new(self.icon, foreground).size(self.icon_size)}
             </div>
         }
         .hover(|style| style.bg(Role::SurfaceHover))
         .selected(|style| style.bg(Role::SurfaceSelected))
-        .focus_visible(|style| style.bg(Role::SurfaceSelected))
         .disabled(|style| style.bg(Color::TRANSPARENT))
         .is_selected(move || selected.get());
-        let root = fade_when_disabled(root, &disabled).enabled(move || !disabled.get());
+        let root = fade_when_disabled(focus_ring(root), &disabled)
+            .enabled(move || !disabled.get())
+            .transition(Pace::Press);
         let root = activate(root, self.on_click, self.focus);
         self.style
             .apply(root.when_some(self.test_id, Div::test_id))
             .tooltip(self.label)
+            .when_some(self.shortcut, Tooltip::shortcut)
             .build(cx);
     }
 }
@@ -371,18 +528,9 @@ impl<T> Checkbox<T> {
         self.disabled = disabled.into_prop();
         self
     }
-
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
-        self
-    }
 }
 
-impl<T> DelegateStyle for Checkbox<T> {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(impl[T] Checkbox<T>);
 
 impl<T: CheckModel> View for Checkbox<T> {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -407,20 +555,42 @@ impl<T: CheckModel> View for Checkbox<T> {
                     Path::builder().move_to(ax, ay).line_to(bx, by).build()
                 }
             };
-            let color = mark_color.unwrap_or_else(|| theme.get().text);
+            let color = mark_color.unwrap_or_else(|| theme.get().accent_foreground);
             painter.stroke_round(&path, (size.width / 6.0).min(2.0), color);
         })
         .size_full();
+        let drawn = move |shown: f32, hidden: f32| {
+            move || {
+                if model.state() == CheckState::Unchecked {
+                    hidden
+                } else {
+                    shown
+                }
+            }
+        };
+        let mark = view! {
+            <div size_full scale=drawn(1.0, MARK_SCALE) opacity=drawn(1.0, 0.0) transition=Pace::Press>
+                {mark}
+            </div>
+        };
         let disabled = Rc::new(self.disabled);
+        let marked = move |on: Role, off: Role| {
+            move || {
+                Fill::Role(if model.state() == CheckState::Unchecked {
+                    off
+                } else {
+                    on
+                })
+            }
+        };
         let root = view! {
-            <div flex_none size=tokens::CHECKBOX_SIZE rounded=tokens::Radius::Inner border=1.0 bg=Role::Canvas
-                 border_color=Role::TextMuted>
+            <div flex_none size=tokens::CHECKBOX_SIZE rounded=tokens::Radius::Inner border=1.0
+                 bg={marked(Role::Accent, Role::Elevated)} border_color={marked(Role::Accent, Role::Border)}>
                 {mark}
             </div>
         }
-        .hover(|style| style.border_color(Role::Accent))
-        .focus_visible(|style| style.border_color(Role::Accent));
-        let root = fade_when_disabled(root, &disabled)
+        .hover(|style| style.border_color(Role::Accent));
+        let root = fade_when_disabled(focus_ring(root), &disabled)
             .enabled(move || !disabled.get())
             .is_checked(move || model.state() == CheckState::Checked)
             .on_activate(move || model.toggle());
@@ -432,8 +602,10 @@ impl<T: CheckModel> View for Checkbox<T> {
     }
 }
 
+const MARK_SCALE: f32 = 0.5;
+
 #[derive(Clone, Copy)]
-struct SegmentIndicator(Signal<Option<(u64, Rect)>>);
+struct SegmentIndicator(Spot);
 
 pub struct SegmentedControl {
     root: Div,
@@ -446,11 +618,13 @@ pub struct SegmentedControl {
 pub fn segmented_control() -> SegmentedControl {
     SegmentedControl {
         root: view! {
-            <div relative flex items_center gap=4.0 p=4.0 rounded=tokens::Radius::Control bg=Role::Chrome/>
+            <div relative flex items_center gap=Space::X1 p=Space::X1 rounded=tokens::Radius::Control bg=Role::Chrome/>
         },
         indicator: StyleDelta::default()
             .rounded(tokens::Radius::Inner)
-            .bg(Role::SurfaceSelected),
+            .bg(Role::Elevated)
+            .border(1.0)
+            .border_color(Role::BorderSubtle),
         segments: Vec::new(),
         test_id: None,
     }
@@ -487,41 +661,12 @@ impl DelegateStyle for SegmentedControl {
 
 impl View for SegmentedControl {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let (control, selected) = (signal(Rect::ZERO), signal(None::<(u64, Rect)>));
-        let placed = signal(None::<Rect>);
-        effect(move || {
-            if let Some((_, at)) = selected.get() {
-                let origin = control.get().origin;
-                let at = Rect::new(
-                    at.origin.x - origin.x,
-                    at.origin.y - origin.y,
-                    at.size.width,
-                    at.size.height,
-                );
-                placed.set_if_changed(Some(at));
-            }
-        });
-        let ready = memo(move || placed.with(Option::is_some));
-        let indicator = Cell::new(Some((
-            self.indicator,
-            self.test_id.as_ref().map(|id| format!("{id}-indicator")),
-        )));
-        let indicator = dynamic(move || {
-            let (style, test_id) = ready.get().then(|| indicator.take()).flatten()?;
-            let geometry = move |f: fn(Rect) -> f32| move || placed.get().map_or(0.0, f);
-            let pill = view! {
-                <div absolute left={geometry(|at| at.origin.x)} top={geometry(|at| at.origin.y)}
-                     w={geometry(|at| at.size.width)} h={geometry(|at| at.size.height)}
-                     layout_transition={LayoutTransition::new(Spring::snappy()).size()}/>
-            }
-            .when(move || selected.with(Option::is_none), Styled::invisible)
-            .when_some(test_id, Div::test_id);
-            Some(style.apply(pill))
-        });
-        self.root
+        let spot = Spot::new();
+        let (style, id) = (self.indicator, self.test_id.part("indicator"));
+        let indicator = spot.follower(move |layer| style.apply(layer).when_some(id, Div::test_id));
+        spot.contain(self.root)
             .when_some(self.test_id, Div::test_id)
-            .track_bounds(control)
-            .provide(SegmentIndicator(selected))
+            .provide(SegmentIndicator(spot))
             .child(indicator)
             .children(self.segments)
             .build(cx);
@@ -564,12 +709,12 @@ impl Segment {
         self
     }
 
-    pub fn selected<U>(mut self, selected: impl IntoProp<bool, U>) -> Self {
+    pub fn selected<T>(mut self, selected: impl IntoProp<bool, T>) -> Self {
         self.selected = selected.into_prop();
         self
     }
 
-    pub fn disabled<U>(mut self, disabled: impl IntoProp<bool, U>) -> Self {
+    pub fn disabled<T>(mut self, disabled: impl IntoProp<bool, T>) -> Self {
         self.disabled = disabled.into_prop();
         self
     }
@@ -578,18 +723,9 @@ impl Segment {
         self.on_click = on_click.into();
         self
     }
-
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
-        self
-    }
 }
 
-impl DelegateStyle for Segment {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(Segment);
 
 impl View for Segment {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -609,7 +745,7 @@ impl View for Segment {
             tokens::CONTROL_PADDING_X_MEDIUM
         };
         let detail = detail.filter(|_| icon.is_some()).map(|detail| {
-            let detail_id = test_id.as_ref().map(|id| format!("{id}-detail"));
+            let detail_id = test_id.part("detail");
             view! { <div test_id?=detail_id><text small>{detail}</text></div> }
         });
         let (caption, hint) = if icon.is_some() {
@@ -618,9 +754,9 @@ impl View for Segment {
             (Some(label), None)
         };
         let root = view! {
-            <div h=24.0 flex items_center justify_center gap=4.0 px=padding rounded=tokens::Radius::Inner
-                 text_color=Role::TextMuted>
-                {icon.map(|icon| Icon::new(icon, Role::TextMuted))}
+            <div h=24.0 flex items_center justify_center gap=Space::X1 px=padding rounded=tokens::Radius::Inner
+                 text_color=Role::TextSecondary>
+                {icon.map(|icon| Icon::new(icon, Role::TextSecondary))}
                 {detail}
                 {caption.map(|caption| view! { <text small>{caption}</text> })}
             </div>
@@ -629,20 +765,9 @@ impl View for Segment {
         .selected(|style| style.text_color(Role::Text));
         let selected = Rc::new(selected);
         let root = match use_context::<SegmentIndicator>() {
-            Some(SegmentIndicator(indicator)) => {
-                let bounds = signal(Rect::ZERO);
-                let (key, on) = (bounds.id(), selected.clone());
-                effect(move || {
-                    let at = bounds.get();
-                    if on.get() && at.size.width > 0.0 {
-                        indicator.set_if_changed(Some((key, at)));
-                    } else if indicator
-                        .with_untracked(|held| held.is_some_and(|(held, _)| held == key))
-                    {
-                        indicator.set(None);
-                    }
-                });
-                root.track_bounds(bounds)
+            Some(SegmentIndicator(spot)) => {
+                let on = selected.clone();
+                spot.track(root, move || on.get())
             }
             None => root.selected(|style| style.bg(Role::SurfaceSelected)),
         }
@@ -660,15 +785,17 @@ impl View for Segment {
 pub struct Disclosure {
     expanded: Prop<bool>,
     on_toggle: Callback,
+    body: Option<Rc<dyn Fn() -> AnyView>>,
     test_id: Option<String>,
     children: Vec<AnyView>,
 }
 
 #[component]
-pub fn disclosure<U>(expanded: impl IntoProp<bool, U>) -> Disclosure {
+pub fn disclosure<T>(expanded: impl IntoProp<bool, T>) -> Disclosure {
     Disclosure {
         expanded: expanded.into_prop(),
         on_toggle: Callback::default(),
+        body: None,
         test_id: None,
         children: Vec::new(),
     }
@@ -677,6 +804,30 @@ pub fn disclosure<U>(expanded: impl IntoProp<bool, U>) -> Disclosure {
 impl Disclosure {
     pub fn on_toggle(mut self, on_toggle: impl Into<Callback>) -> Self {
         self.on_toggle = on_toggle.into();
+        self
+    }
+
+    pub fn body<T: View>(mut self, body: impl Fn() -> T + 'static) -> Self {
+        self.body = Some(Rc::new(move || body().into_any()));
+        self
+    }
+
+    pub fn accordion<T: Clone + PartialEq + 'static>(
+        mut self,
+        open: Signal<Option<T>>,
+        key: T,
+    ) -> Self {
+        let held = key.clone();
+        self.expanded = (move || open.with(|open| open.as_ref() == Some(&held))).into_prop();
+        self.on_toggle = Callback::from(move || {
+            open.update(|open| {
+                *open = if open.as_ref() == Some(&key) {
+                    None
+                } else {
+                    Some(key.clone())
+                };
+            });
+        });
         self
     }
 
@@ -699,24 +850,49 @@ impl Disclosure {
 
 impl View for Disclosure {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let root = view! {
-            <div flex items_center gap=8.0>
-                {chevron(self.expanded)}
+        let expanded = Rc::new(self.expanded);
+        let open = {
+            let expanded = expanded.clone();
+            move || expanded.get()
+        };
+        let header = view! {
+            <div flex items_center gap=Space::X2 min_h=tokens::ICON_BUTTON_SIZE rounded=tokens::Radius::Inner border=1.0
+                 border_color=Color::TRANSPARENT>
+                {chevron(open.clone())}
                 <div>{self.children}</div>
             </div>
         };
-        activate(root, self.on_toggle, FocusPolicy::Tab)
-            .when_some(self.test_id, Div::test_id)
-            .build(cx);
+        let header = activate(focus_ring(header), self.on_toggle, FocusPolicy::Tab)
+            .when_some(self.test_id, Div::test_id);
+        let Some(body) = self.body else {
+            return header.build(cx);
+        };
+        let hidden = Pose::new().opacity(0.0);
+        let panel = view! {
+            <show when=open enter=(hidden, Pace::Enter) exit=(hidden, Pace::Exit)>
+                <div pl=DISCLOSURE_INDENT>{body()}</div>
+            </show>
+        };
+        view! {
+            <div flex col layout_transition=Pace::Layout>
+                {header}
+                {panel}
+            </div>
+        }
+        .build(cx);
     }
 }
 
-pub(crate) fn chevron<U>(expanded: impl IntoProp<bool, U>) -> Div {
+const DISCLOSURE_INDENT: f32 = tokens::ICON_SIZE_SMALL + 8.0;
+
+pub(crate) fn chevron<T>(expanded: impl IntoProp<bool, T>) -> Div {
     let expanded = expanded.into_prop();
-    div()
-        .flex_none()
-        .child(Icon::new(IconName::ChevronRight, Role::TextMuted).size(tokens::ICON_SIZE_SMALL))
-        .rotate(move || if expanded.get() { 90.0 } else { 0.0 })
+    view! {
+        <div flex_none
+             rotate={move || if expanded.get() { 90.0 } else { 0.0 }} transition=Pace::Move>
+            {Icon::new(IconName::ChevronRight, Role::TextMuted).size(tokens::ICON_SIZE_SMALL)}
+        </div>
+    }
 }
 
 #[component]
@@ -754,7 +930,7 @@ pub fn section_header(#[prop(into)] title: String) -> SectionHeader {
 }
 
 impl SectionHeader {
-    pub fn expanded<U>(mut self, expanded: impl IntoProp<bool, U>) -> Self {
+    pub fn expanded<T>(mut self, expanded: impl IntoProp<bool, T>) -> Self {
         self.expanded = expanded.into_prop();
         self
     }
@@ -788,18 +964,9 @@ impl SectionHeader {
         self.on_toggle = on_toggle.into();
         self
     }
-
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
-        self
-    }
 }
 
-impl DelegateStyle for SectionHeader {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(SectionHeader);
 
 impl View for SectionHeader {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -813,9 +980,9 @@ impl View for SectionHeader {
                 root.invisible().group_hover(group.clone(), Styled::visible)
             }
         });
-        let toggle = self.test_id.as_ref().map(|id| format!("{id}-toggle"));
+        let toggle = self.test_id.part("toggle");
         let heading = view! {
-            <div flex items_center gap=8.0>
+            <div flex items_center gap=Space::X2>
                 {self.icon.map(|icon| Icon::new(icon, Role::TextMuted))}
                 <text title primary>{self.title}</text>
                 {self.detail.map(|detail| view! { <muted_text>{detail}</muted_text> })}
@@ -827,7 +994,7 @@ impl View for SectionHeader {
             .when_some(toggle, Disclosure::test_id)
             .child(heading);
         let root = view! {
-            <div flex items_center justify_between px=8.0 h=tokens::GROUP_HEIGHT bg=Role::Chrome>
+            <div flex items_center justify_between px=Space::X2 h=tokens::GROUP_HEIGHT bg=Role::Chrome>
                 {disclosure}
                 {action}
             </div>
@@ -839,10 +1006,89 @@ impl View for SectionHeader {
     }
 }
 
+pub struct RowAction {
+    label: String,
+    icon: Option<IconName>,
+    destructive: bool,
+    on_select: Callback,
+    test_id: Option<String>,
+}
+
+pub fn row_action(label: impl Into<String>, on_select: impl Into<Callback>) -> RowAction {
+    RowAction {
+        label: label.into(),
+        icon: None,
+        destructive: false,
+        on_select: on_select.into(),
+        test_id: None,
+    }
+}
+
+impl RowAction {
+    pub fn icon(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    pub fn destructive(mut self) -> Self {
+        self.destructive = true;
+        self
+    }
+
+    pub fn test_id(mut self, id: impl Into<String>) -> Self {
+        self.test_id = Some(id.into());
+        self
+    }
+
+    fn cell(
+        self,
+        ink: Role,
+        chosen: impl Fn() + 'static,
+        focused: impl Fn(bool) + Clone + 'static,
+    ) -> Div {
+        let (on_select, blurred) = (self.on_select, focused.clone());
+        let icon = self.icon.map(|icon| Icon::new(icon, ink));
+        let cell = view! {
+            <div flex flex_none items_center justify_center gap=Space::X1 px=Space::X2 border=1.0
+                 border_color=Color::TRANSPARENT text_color=ink test_id?=self.test_id
+                 on_focus={move |_| focused(true)} on_blur={move |_| blurred(false)}>
+                {icon}
+                <text label no_wrap>{self.label}</text>
+            </div>
+        };
+        focus_ring(cell).on_activate(move || {
+            on_select.call();
+            chosen();
+        })
+    }
+
+    fn chip(self, focused: impl Fn(bool) + Clone + 'static) -> Div {
+        let ink = if self.destructive {
+            Role::Destructive
+        } else {
+            Role::Text
+        };
+        self.cell(ink, || {}, focused)
+            .h(tokens::ICON_BUTTON_SIZE)
+            .rounded(tokens::Radius::Inner)
+            .hover(|style| style.bg(Role::SurfaceHover))
+    }
+
+    fn block(self, chosen: impl Fn() + 'static, focused: impl Fn(bool) + Clone + 'static) -> Div {
+        let (fill, ink) = if self.destructive {
+            (Role::Destructive, Role::DestructiveForeground)
+        } else {
+            (Role::Accent, Role::AccentForeground)
+        };
+        self.cell(ink, chosen, focused).px(Space::X4).bg(fill)
+    }
+}
+
 pub struct ListRow {
     depth: usize,
     selection: Prop<SelectionState>,
     on_click: Callback,
+    actions: Vec<RowAction>,
     test_id: Option<String>,
     style: StyleDelta,
     children: Vec<AnyView>,
@@ -854,6 +1100,7 @@ pub fn list_row() -> ListRow {
         depth: 0,
         selection: Prop::Static(SelectionState::None),
         on_click: Callback::default(),
+        actions: Vec::new(),
         test_id: None,
         style: StyleDelta::default(),
         children: Vec::new(),
@@ -861,23 +1108,23 @@ pub fn list_row() -> ListRow {
 }
 
 impl ListRow {
+    pub fn action(mut self, action: RowAction) -> Self {
+        self.actions.push(action);
+        self
+    }
+
     pub fn depth(mut self, depth: usize) -> Self {
         self.depth = depth;
         self
     }
 
-    pub fn selection<U>(mut self, selection: impl IntoProp<SelectionState, U>) -> Self {
+    pub fn selection<T>(mut self, selection: impl IntoProp<SelectionState, T>) -> Self {
         self.selection = selection.into_prop();
         self
     }
 
     pub fn on_click(mut self, on_click: impl Into<Callback>) -> Self {
         self.on_click = on_click.into();
-        self
-    }
-
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
         self
     }
 
@@ -893,11 +1140,7 @@ impl ListRow {
     }
 }
 
-impl DelegateStyle for ListRow {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(ListRow);
 
 impl View for ListRow {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -920,7 +1163,7 @@ impl View for ListRow {
             move || look().background.unwrap_or_default()
         };
         let root = view! {
-            <div flex items_center min_h=tokens::ROW_HEIGHT pl={8.0 + indent(self.depth)} pr=8.0 gap=8.0
+            <div flex items_center min_h={row_height()} pl={8.0 + indent(self.depth)} pr=Space::X2 gap=Space::X2
                  rounded=tokens::Radius::Inner text_color={move || look().foreground}>
                 {self.children}
             </div>
@@ -928,18 +1171,101 @@ impl View for ListRow {
         .hover(|style| style.bg(Role::SurfaceHover))
         .selected(|style| style.bg(background))
         .is_selected(shown)
-        .enabled(move || selection.get() != SelectionState::Disabled);
-        let root = activate(root, self.on_click, FocusPolicy::Tab);
-        self.style
-            .apply(root.when_some(self.test_id, Div::test_id))
-            .build(cx);
+        .enabled(move || selection.get() != SelectionState::Disabled)
+        .when_some(self.test_id, Div::test_id);
+        let root = if self.actions.is_empty() {
+            activate(root, self.on_click, FocusPolicy::Tab)
+        } else if presentation().get_untracked().is_touch() {
+            swiped(root, self.actions, self.on_click)
+        } else {
+            hovered(root, self.actions, self.on_click)
+        };
+        self.style.apply(root).build(cx);
     }
 }
+
+fn hovered(root: Div, actions: Vec<RowAction>, on_click: Callback) -> Div {
+    let (over, within) = (signal(false), signal(0u32));
+    let focused = move |on: bool| {
+        within.update(|count| *count = count.saturating_add_signed(if on { 1 } else { -1 }));
+    };
+    let chips = actions.into_iter().map(|action| action.chip(focused));
+    let tray = view! {
+        <div flex flex_none items_center gap=Space::X1
+             opacity={move || {
+                 if over.get() || within.get() > 0 {
+                     1.0
+                 } else {
+                     0.0
+                 }
+             }}
+             transition=Pace::Move>
+            {..chips}
+        </div>
+    };
+    activate(root, on_click, FocusPolicy::Tab)
+        .on_hover(move |inside| over.set(inside))
+        .child(tray.ml(auto()))
+}
+
+fn swiped(root: Div, actions: Vec<RowAction>, on_click: Callback) -> Div {
+    let (x, origin, tray) = (motion(0.0), signal(0.0), signal(Size::ZERO));
+    let rest = move |open: bool| {
+        let to = if open {
+            -tray.get_untracked().width
+        } else {
+            0.0
+        };
+        x.animate_to(to, Pace::Gesture);
+    };
+    let blocks = actions
+        .into_iter()
+        .map(|action| action.block(move || rest(false), rest));
+    let strip = view! {
+        <div absolute left=pct(100.0) top=0.0 bottom=0.0 flex track_size=tray>{..blocks}</div>
+    };
+    let row = root
+        .relative()
+        .translate_x(x)
+        .drag_axis(DragAxis::Horizontal)
+        .on_drag(move |event| {
+            let width = tray.get_untracked().width;
+            match event.phase {
+                DragPhase::Start => origin.set(x.get()),
+                DragPhase::Move => {
+                    let to = origin.get_untracked() + event.translation.x;
+                    let past = (-width - to).max(0.0);
+                    x.set(to.clamp(-width, 0.0) - past * SWIPE_RESISTANCE);
+                }
+                DragPhase::End => {
+                    let projected = x.get() + event.velocity.x * SWIPE_PROJECTION;
+                    let to = if projected < -width / 2.0 {
+                        -width
+                    } else {
+                        0.0
+                    };
+                    x.fling_to(to, event.velocity.x, Timing::from(Pace::Gesture));
+                }
+            }
+        })
+        .on_activate(move || {
+            if x.get() < 0.0 {
+                rest(false);
+            } else {
+                on_click.call();
+            }
+        })
+        .child(strip);
+    view! { <div relative overflow_hidden>{row}</div> }
+}
+
+const SWIPE_RESISTANCE: f32 = 0.2;
+const SWIPE_PROJECTION: f32 = 0.2;
 
 #[component]
 pub fn action_bar() -> Div {
     view! {
-        <div flex items_center justify_end gap=8.0 min_h=tokens::BAR_HEIGHT px=12.0 bg=Role::Chrome/>
+        <div flex items_center justify_end gap=Space::X2 min_h=tokens::BAR_HEIGHT px=Space::X3 bg=Role::Chrome/>
     }
 }
 
@@ -1004,12 +1330,13 @@ impl View for Backdrop {
             test_id,
             children,
         } = self;
-        overlay(move || {
+        let children = Cell::new(Some(children));
+        let scrim = move || {
             let inner = view! {
-                <div flex col min_h=0.0 max_h=pct(100.0) max_w=pct(100.0)>{children}</div>
+                <div flex col min_h=0.0 max_h=pct(100.0) max_w=pct(100.0)>{children.take()}</div>
             };
             let root = view! {
-                <div flex col focus_scope autofocus tab_index=-1 test_id?=test_id
+                <div flex col focus_scope autofocus tab_index=-1 test_id?={test_id.clone()}
                      on_key_down={move |event| {
                          if event.key != Key::Tab {
                              event.stop_propagation();
@@ -1019,7 +1346,11 @@ impl View for Backdrop {
             let (root, inner) = if let Some(anchor) = anchor_below {
                 (root, Placement::Below.place(inner, anchor))
             } else {
-                let root = root.items_center().p(16.0).bg(Role::Scrim);
+                let root = root
+                    .items_center()
+                    .p(Space::X4)
+                    .bg(Role::Scrim)
+                    .backdrop(BackdropBlur::new(SCRIM_BLUR));
                 let root = if align_top {
                     root.justify_start().pt(tokens::MODAL_TOP_OFFSET)
                 } else {
@@ -1027,11 +1358,21 @@ impl View for Backdrop {
                 };
                 (root, inner)
             };
-            dismissable(root, inner, move || on_dismiss.call())
-        })
+            let inner = Cell::new(Some(inner.on_pointer_down(PointerEvent::stop_propagation)));
+            dismiss_layer(root, move || on_dismiss.call()).child(view! {
+                <show when={|| true} enter=(POPPED, Pace::Enter)>{inner.take()}</show>
+            })
+        };
+        view! {
+            <overlay>
+                <show when={|| true} children=scrim enter=(Pose::new().opacity(0.0), Pace::Enter)/>
+            </overlay>
+        }
         .build(cx);
     }
 }
+
+const SCRIM_BLUR: f32 = 8.0;
 
 fn modal_width(size: ModalSize) -> Length {
     px(match size {
@@ -1111,9 +1452,31 @@ impl Modal {
 
 impl View for Modal {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let backdrop_id = self.test_id.as_ref().map(|id| format!("{id}-backdrop"));
+        if presentation().get_untracked().is_handheld() {
+            let parts = Cell::new(Some((self.title, self.hint, self.children)));
+            let presenter = Presenter {
+                detents: vec![Detent::Large],
+                test_id: self.test_id,
+                on_closed: self.on_dismiss,
+                ..Presenter::new(signal(true))
+            };
+            let content = move || {
+                let (title, hint, children) = parts.take().unwrap_or_default();
+                view! {
+                    <div flex col flex_1 min_h=0.0 gap=Space::X2 px=Space::X4 pb=Space::X4>
+                        <text heading primary>{title}</text>
+                        {hint.map(|hint| view! { <muted_text>{hint}</muted_text> })}
+                        <div flex col flex_1 min_h=0.0>{children}</div>
+                    </div>
+                }
+                .into_any()
+            };
+            presenter.present(content).build(cx);
+            return;
+        }
+        let backdrop_id = self.test_id.part("backdrop");
         let panel = view! {
-            <div test_id?=self.test_id flex col gap=8.0 p=16.0 w={modal_width(self.size)}
+            <div test_id?=self.test_id flex col gap=Space::X2 p=Space::X4 w={modal_width(self.size)}
                  max_w=pct(100.0) h?=self.height overflow_hidden material=Material::Glass>
                 <text heading primary>{self.title}</text>
                 {self.hint.map(|hint| view! { <muted_text>{hint}</muted_text> })}
@@ -1140,8 +1503,10 @@ pub fn empty_state(
     #[prop(into)] detail: String,
 ) -> Div {
     view! {
-        <div flex col items_center justify_center p=16.0 gap=8.0>
-            {Icon::new(icon, Role::TextMuted)}
+        <div flex col items_center justify_center p=Space::X4 gap=Space::X2>
+            <div flex flex_none items_center justify_center size=tokens::BAR_HEIGHT material=Material::GlassControl>
+                {Icon::new(icon, Role::TextSecondary)}
+            </div>
             <text title primary>{title}</text>
             <muted_text>{detail}</muted_text>
         </div>
@@ -1149,18 +1514,18 @@ pub fn empty_state(
 }
 
 #[component]
-pub fn notification(#[prop(into)] message: String, tone: NoticeTone) -> Div {
+pub fn notification(#[prop(into)] message: String, tone: NoticeTone, title: Option<String>) -> Div {
     let fg = move || Theme::notice_style(tone).foreground;
-    let icon = match tone {
-        NoticeTone::Error | NoticeTone::Warning => IconName::TriangleAlert,
-        NoticeTone::Positive => IconName::CircleCheck,
-        _ => IconName::Info,
-    };
+    let titled = title.is_some();
     view! {
-        <div flex items_center gap=8.0 p=8.0 rounded=tokens::Radius::Control
+        <div flex gap=Space::X2 p=Space::X2 rounded=tokens::Radius::Control
+             when:items_start=titled when:items_center={!titled}
              bg={move || Theme::notice_style(tone).background.unwrap_or_default()}>
-            {Icon::new(icon, fg)}
-            <text body color=fg>{message}</text>
+            {Icon::new(tone_icon(tone), fg)}
+            <div flex col flex_1 min_w=0.0>
+                {title.map(|title| view! { <text label color=fg>{title}</text> })}
+                <text body color=fg>{message}</text>
+            </div>
         </div>
     }
 }

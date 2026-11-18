@@ -36,6 +36,7 @@ fn shared_menu_actions_reach_the_focused_editor() -> TestResult {
     ui.type_text("replacement");
     assert_eq!(value.get(), "replacement");
     assert!(!MenuItem::Separator.dispatch(&mut ui));
+    assert!(!MenuItem::label("Edit").dispatch(&mut ui));
     Ok(())
 }
 

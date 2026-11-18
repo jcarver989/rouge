@@ -1,9 +1,10 @@
 use crate::components::list_row;
 use crate::icon::{Icon, IconName};
+use crate::kbd::kbd;
 use crate::material::{Material, MaterialExt};
 use crate::popover::{Placement, popup};
 use crate::roving::RovingFocus;
-use crate::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, MENU_WIDTH, Radius};
+use crate::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, MENU_WIDTH, Radius, Space};
 use crate::typography::UiStyles;
 use crate::util::focus_ring;
 use rouge_core::Role;
@@ -50,24 +51,22 @@ fn trigger(
             close();
         }
     });
-    let row = div()
-        .test_id(format!("menu-{}", menu.title))
-        .preserve_focus()
-        .track_bounds(anchor)
-        .px(12.0)
-        .py(4.0)
-        .hover(|style| style.bg(hover))
-        .on_click(move |event| {
-            event.stop_propagation();
-            open.toggle();
-        })
-        .child(text(menu.title))
-        .child(popup(open, Div::preserve_focus, move || {
-            placement.place(
-                render_items(&menu.items, open, focus, close.clone()),
-                anchor,
-            )
-        }));
+    let row = view! {
+        <div test_id={format!("menu-{}", menu.title)} preserve_focus track_bounds=anchor px=Space::X3
+             py=Space::X1 hover={|style| style.bg(hover)}
+             on_click={move |event| {
+                 event.stop_propagation();
+                 open.toggle();
+             }}>
+            <text>{menu.title}</text>
+            {popup(
+                open,
+                Div::preserve_focus,
+                move |panel| placement.place(floating_menu(panel), anchor),
+                move || render_items(&menu.items, open, focus, close.clone()),
+            )}
+        </div>
+    };
     (row, open)
 }
 
@@ -79,12 +78,20 @@ fn render_items(
 ) -> Div {
     let actionable = items
         .iter()
-        .filter(|item| !matches!(item, MenuItem::Separator));
+        .filter(|item| !matches!(item, MenuItem::Separator | MenuItem::Label(_)));
     let handles = RovingFocus::new(actionable.count());
     let mut index = 0;
     let rows = items.iter().cloned().map(|item| {
-        if matches!(item, MenuItem::Separator) {
-            return div().my(4.0).border_t(1.0).border_color(Role::Border);
+        match item {
+            MenuItem::Separator => {
+                return view! {
+                    <div mx=Space::X2 my=Space::X1 border_t=1.0 border_color=Role::BorderSubtle/>
+                };
+            }
+            MenuItem::Label(title) => {
+                return view! { <div px=Space::X2 pt=Space::X2 pb=Space::X1><text caption muted no_wrap>{title}</text></div> };
+            }
+            MenuItem::Item { .. } | MenuItem::Submenu(_) => {}
         }
         let current = index;
         index += 1;
@@ -117,7 +124,7 @@ fn render_items(
                 let icon = icon.clone().map(|icon| Icon::new(icon, fg));
                 let shortcut = shortcut
                     .as_ref()
-                    .map(|chord| view! { <text caption muted>{chord.display()}</text> });
+                    .map(|chord| view! { <kbd>{chord.display()}</kbd> });
                 let row = view! {
                     <list_row test_id=id on_click={move || clicked()}>
                         {icon}
@@ -127,7 +134,7 @@ fn render_items(
                 };
                 (div().rounded(Radius::Inner).child(row), activate, false)
             }
-            MenuItem::Separator => unreachable!(),
+            MenuItem::Separator | MenuItem::Label(_) => unreachable!(),
         };
         if matches!(focus, MenuFocus::Take) {
             let handles = handles.clone();
@@ -153,13 +160,18 @@ fn render_items(
         row
     });
     focus
-        .apply(div().material(Material::Glass))
+        .apply(view! { <div/> })
         .flex()
         .col()
-        .p(4.0)
+        .p(Space::X1)
+        .children(rows)
+}
+
+fn floating_menu(panel: Div) -> Div {
+    panel
+        .material(Material::Glass)
         .w(MENU_WIDTH)
         .max_w(pct(100.0))
-        .children(rows)
 }
 
 pub struct ContextMenu {
@@ -202,8 +214,9 @@ impl View for ContextMenu {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (items, focus, dropdown) = (self.items, self.focus, self.dropdown);
         let (open, at, anchor) = (signal(false), signal(Point::ZERO), signal(Rect::ZERO));
-        let body = move || {
-            let menu = render_items(&items, open, focus, Rc::new(move || open.set(false)));
+        let body = move || render_items(&items, open, focus, Rc::new(move || open.set(false)));
+        let place = move |menu: Div| {
+            let menu = floating_menu(menu);
             if dropdown {
                 let width = move || anchor.get().size.width;
                 Placement::Below.place(menu.min_w(width), anchor)
@@ -236,7 +249,8 @@ impl View for ContextMenu {
                 }
             })
         };
-        root.child(popup(open, |layer| layer, body)).build(cx);
+        root.child(popup(open, |layer| layer, place, body))
+            .build(cx);
     }
 }
 
@@ -260,7 +274,7 @@ pub fn select<T: Clone + PartialEq + 'static>(
         })
     });
     let label = view! {
-        <div flex flex_1 items_center justify_between gap=8.0>
+        <div flex flex_1 items_center justify_between gap=Space::X2>
             <text body primary no_wrap>{current}</text>
             {Icon::new(IconName::ChevronDown, Role::TextMuted).size(ICON_SIZE_SMALL)}
         </div>
@@ -269,7 +283,7 @@ pub fn select<T: Clone + PartialEq + 'static>(
     menu.root = focus_ring(menu.root)
         .flex()
         .items_center()
-        .px(12.0)
+        .px(Space::X3)
         .h(GROUP_HEIGHT)
         .min_w(120.0)
         .border(1.0)

@@ -29,7 +29,7 @@ fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
     );
     assert_near(
         img.pixel(100, 12),
-        palette.border.to_rgba8(),
+        palette.surface_selected.over(Color::WHITE).to_rgba8(),
         "the rest of the track",
     );
     assert_near(

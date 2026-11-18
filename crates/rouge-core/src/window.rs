@@ -96,6 +96,7 @@ pub enum MenuItem {
         destructive: bool,
     },
     Separator,
+    Label(String),
     Submenu(Menu),
 }
 
@@ -119,6 +120,10 @@ impl MenuItem {
         }
     }
 
+    pub fn label(title: impl Into<String>) -> Self {
+        MenuItem::Label(title.into())
+    }
+
     pub fn activate(&self) {
         match self {
             MenuItem::Item {
@@ -126,7 +131,7 @@ impl MenuItem {
                 ..
             } => on_select(),
             MenuItem::Item { .. } => window_handle().dispatch_menu_item(self.clone()),
-            MenuItem::Separator | MenuItem::Submenu(_) => {}
+            MenuItem::Separator | MenuItem::Label(_) | MenuItem::Submenu(_) => {}
         }
     }
 
@@ -187,7 +192,7 @@ impl MenuItem {
                 ui.invoke(|| on_select());
                 true
             }
-            MenuItem::Separator | MenuItem::Submenu(_) => false,
+            MenuItem::Separator | MenuItem::Label(_) | MenuItem::Submenu(_) => false,
         }
     }
 }

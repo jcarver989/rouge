@@ -2,7 +2,7 @@ use crate::icon::{Icon, IconName};
 use crate::tokens::Radius;
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, DelegateStyle, Div, Ease, IntoProp, Keyframes, StyleDelta, Styled, View, auto,
+    BuildCx, DelegateStyle, Div, Ease, Fill, IntoProp, Keyframes, StyleDelta, Styled, View, auto,
     component, div, pct, view,
 };
 
@@ -45,10 +45,10 @@ impl View for Separator {
 }
 
 #[component]
-pub fn progress<U>(value: impl IntoProp<f32, U>) -> Div {
+pub fn progress<T>(value: impl IntoProp<f32, T>) -> Div {
     let value = value.into_prop();
     view! {
-        <div h=4.0 min_w=40.0 rounded=Radius::Full bg=Role::Border overflow_hidden>
+        <div h=4.0 min_w=40.0 rounded=Radius::Full bg=Role::SurfaceSelected overflow_hidden>
             <div h_full bg=Role::Accent w={move || pct(value.get().clamp(0.0, 1.0) * 100.0)}/>
         </div>
     }
@@ -56,6 +56,10 @@ pub fn progress<U>(value: impl IntoProp<f32, U>) -> Div {
 
 #[component]
 pub fn spinner() -> Div {
+    spinning(20.0, Role::Accent)
+}
+
+pub(crate) fn spinning<T>(size: f32, color: impl IntoProp<Fill, T>) -> Div {
     let spin = Keyframes::new()
         .at(0.0, |pose| pose.rotate(0.0))
         .at(1.0, |pose| pose.rotate(360.0))
@@ -63,8 +67,8 @@ pub fn spinner() -> Div {
         .ease(Ease::Linear)
         .repeat();
     view! {
-        <div flex_none size=20.0 animate=spin>
-            {Icon::new(IconName::LoaderCircle, Role::Accent).size(20.0)}
+        <div flex_none size=size animate=spin>
+            {Icon::new(IconName::LoaderCircle, color).size(size)}
         </div>
     }
 }

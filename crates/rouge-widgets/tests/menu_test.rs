@@ -3,8 +3,8 @@ mod common;
 use common::builder;
 use rouge_core::testing::TestResult;
 use rouge_core::{
-    Chord, EditAction, Key, Menu, MenuItem, Modifiers, Point, PointerButton, Styled, Theme,
-    WindowCommand, div, editable, focus_handle, view,
+    Chord, Div, EditAction, InputKind, Key, Menu, MenuItem, Modifiers, Point, PointerButton,
+    Styled, Theme, WindowCommand, div, editable, focus_handle, view,
 };
 use rouge_reactive::{Runtime, signal};
 use rouge_theme::UiPalette;
@@ -246,12 +246,10 @@ fn menu_items_can_be_given_their_own_test_id() -> TestResult {
     let _entered = Runtime::new().enter();
     let (mut ui, chosen) = component_test().size(320.0, 220.0).build_with(|| {
         let chosen = signal(false);
-        let items =
-            [MenuItem::callback("Archive inactive threads", move || chosen.set(true)).id("archive")];
-        let root = view! {
-            <div size_full><context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu></div>
-        };
-        (root, chosen)
+        let items = [
+            MenuItem::callback("Archive inactive threads", move || chosen.set(true)).id("archive"),
+        ];
+        (dropdown(items), chosen)
     });
     ui.click_on("trigger")?;
     ui.run(0.2);
@@ -270,11 +268,7 @@ fn hovering_a_dropdown_item_highlights_its_row() -> TestResult {
             MenuItem::callback("First", || {}).id("first"),
             MenuItem::callback("Second", || {}).id("second"),
         ];
-        view! {
-            <div size_full>
-                <context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu>
-            </div>
-        }
+        dropdown(items)
     });
     ui.click_on("trigger")?;
     ui.run(0.3);
@@ -289,4 +283,85 @@ fn hovering_a_dropdown_item_highlights_its_row() -> TestResult {
     let hovered = ui.pixel(x, y)?;
     assert_ne!(resting, hovered, "the hovered row is highlighted");
     Ok(())
+}
+
+#[test]
+fn group_labels_are_skipped_by_the_keyboard_and_shortcuts_sit_in_a_key_cap() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, chosen) = component_test().size(320.0, 220.0).build_with(|| {
+        let chosen = signal(0);
+        let items = [
+            MenuItem::label("Queue"),
+            MenuItem::callback("Play next", move || chosen.set(1)).shortcut("secondary-enter"),
+            MenuItem::label("Library"),
+            MenuItem::callback("Remove", move || chosen.set(2)).destructive(),
+        ];
+        (dropdown(items), chosen)
+    });
+    ui.click_on("trigger")?;
+    ui.run(0.3);
+    let label = ui.text_bounds("Library").ok_or("the label is drawn")?;
+    let first = ui.rect_of("menu-item-Play next")?;
+    let last = ui.rect_of("menu-item-Remove")?;
+    assert!(first.max().y <= label.origin.y && label.max().y <= last.origin.y);
+    ui.press("down");
+    ui.press("enter");
+    assert_eq!(
+        chosen.get(),
+        2,
+        "arrows step from item to item over the label"
+    );
+    ui.run(0.3);
+    ui.click_on("trigger")?;
+    ui.run(0.3);
+    let label = ui.text_bounds("Library").ok_or("the label is drawn")?;
+    chosen.set(0);
+    ui.click_at(label.center().x, label.center().y);
+    ui.run(0.3);
+    assert_eq!(chosen.get(), 0, "a label does nothing");
+    assert!(
+        ui.bounds_of("menu-item-Remove").is_some(),
+        "and leaves the menu open"
+    );
+    Ok(())
+}
+
+#[test]
+fn select_lists_its_options_in_a_sheet_on_a_handheld() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let value = signal(1u32);
+    let mut ui = component_test()
+        .size(390.0, 700.0)
+        .input(InputKind::Touch)
+        .build(move || {
+            let options = [(1, "One".to_owned()), (2, "Two".to_owned())];
+            view! {
+                <div size_full p=10.0>
+                    <select value=value options=options w=140.0/>
+                </div>
+            }
+        });
+    ui.tap(Point::new(30.0, 22.0));
+    ui.run(2.0);
+    let row = ui.rect_of("menu-item-Two")?;
+    assert_eq!(
+        (row.size.height, row.size.width > 300.0, row.max().y > 600.0),
+        (44.0, true, true),
+        "touch sized rows across the bottom of the window: {row:?}"
+    );
+    ui.tap_on("menu-item-Two")?;
+    assert_eq!(value.get(), 2);
+    ui.run(2.0);
+    assert_eq!(
+        ui.bounds_of("menu-item-Two"),
+        None,
+        "choosing closes the sheet"
+    );
+    Ok(())
+}
+
+fn dropdown<const N: usize>(items: [MenuItem; N]) -> Div {
+    view! {
+        <div size_full><context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu></div>
+    }
 }
