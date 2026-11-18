@@ -3199,6 +3199,7 @@ dependencies = [
  "rouge-render",
  "rouge-syntax",
  "rouge-theme",
+ "zeno",
 ]
 
 [[package]]

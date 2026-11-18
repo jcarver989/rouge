@@ -3,6 +3,8 @@ use rouge_core::{Color, Styled, div};
 use rouge_reactive::Runtime;
 use rouge_widgets::testing::component_test;
 use rouge_widgets::*;
+use std::fs;
+use std::path::Path;
 
 #[test]
 fn bundled_faces_and_lucide_paths_render() -> TestResult {
@@ -32,5 +34,27 @@ fn every_icon_stays_inside_its_box() -> TestResult {
             .find(|&(x, y)| image.pixel(x, y)[3] != 0);
         assert_eq!(outside, None, "{name:?} paints outside its box");
     }
+    Ok(())
+}
+
+#[test]
+fn every_icon_path_parses_to_the_end() -> TestResult {
+    let icons = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons");
+    let mut truncated = Vec::new();
+    for entry in fs::read_dir(icons)? {
+        let path = entry?.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "path")
+            && zeno::validate_svg(fs::read_to_string(&path)?.trim()).is_err()
+        {
+            truncated.extend(
+                path.file_stem()
+                    .map(|name| name.to_string_lossy().into_owned()),
+            );
+        }
+    }
+    truncated.sort();
+    assert_eq!(truncated, Vec::<String>::new());
     Ok(())
 }
