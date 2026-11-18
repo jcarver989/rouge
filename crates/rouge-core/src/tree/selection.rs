@@ -399,17 +399,17 @@ impl Tree {
                     leaves.first().and_then(|leaf| leaf.list)
                 }
             });
-        let last = match list.and_then(|id| self.row_source(id)) {
+        let end_row = match list.and_then(|id| self.row_source(id)) {
             Some(source) => untrack(|| (source.count)()).checked_sub(1),
             None => leaves.iter().any(|leaf| leaf.list.is_none()).then_some(0),
         };
-        let Some(last) = last else { return false };
+        let Some(end_row) = end_row else { return false };
         self.set_range(
             scope,
             list,
             TextRange {
                 anchor: TextPoint::default(),
-                focus: TextPoint::row_end(last),
+                focus: TextPoint::row_end(end_row),
             },
             &leaves,
         );
