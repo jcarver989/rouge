@@ -34,6 +34,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Fontconfig development files
         run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Vulkan software rendering
+        if: github.job == 'test' && runner.os == 'Linux'
+        run: sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
       - run: just lint
   test:
     name: Test
@@ -50,6 +53,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Fontconfig development files
         run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Vulkan software rendering
+        if: github.job == 'test' && runner.os == 'Linux'
+        run: sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
       - run: just test-ci
       - name: Upload test results
         if: always()
@@ -73,6 +79,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Fontconfig development files
         run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Vulkan software rendering
+        if: github.job == 'test' && runner.os == 'Linux'
+        run: sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
       - run: just doc-check
   framer:
     name: Generated files
