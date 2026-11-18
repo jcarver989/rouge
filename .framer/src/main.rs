@@ -1,7 +1,7 @@
 use framer::Project;
 use framer::github::Step;
 use framer::rust::CargoWorkspace;
-use framer_presets::{Release, ReleasePlz, Rust, RustMonorepo, Workspace};
+use framer_presets::{Ci, Release, ReleasePlz, Rust, RustMonorepo, Workspace};
 use std::mem;
 use std::process::ExitCode;
 
@@ -22,17 +22,13 @@ fn main() -> ExitCode {
         RustMonorepo::new()
             .rust(Rust::new("1.100").targets(["aarch64-apple-ios", "aarch64-apple-ios-sim"]))
             .workspace(Workspace::new().license("MIT"))
+            .ci(Ci::new().setup(install_fontconfig()))
             .release(
                 Release::new().release_plz(
                     ReleasePlz::new()
                         .publish_to_crates_io()
                         .github_token()
-                        .setup(
-                            Step::run(
-                                "sudo apt-get update && sudo apt-get install -y libfontconfig-dev",
-                            )
-                            .name("Install Fontconfig development files"),
-                        ),
+                        .setup(install_fontconfig()),
                 ),
             )
             .without_conventions(),
@@ -42,4 +38,9 @@ fn main() -> ExitCode {
         *lints = mem::take(lints).allow_clippy(ALLOWED_PEDANTIC_LINTS);
     }
     project.synth()
+}
+
+fn install_fontconfig() -> Step {
+    Step::run("sudo apt-get update && sudo apt-get install -y libfontconfig-dev")
+        .name("Install Fontconfig development files")
 }
