@@ -175,6 +175,32 @@ just web todomvc rouge    # TodoMVC
 
 Then open <http://localhost:8000> in a browser that supports WebGPU.
 
+### On Android
+
+Android support is experimental. You must have the Android SDK (`ANDROID_HOME` with build-tools and a platform), a Java runtime, the Android NDK (`ANDROID_NDK_HOME`), [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk) and the `aarch64-linux-android` Rust target installed.
+
+```sh
+just android              # TodoMVC on the connected device or emulator
+```
+
+An Android app is a `cdylib` that exports `android_main` and gives the activity to Rouge:
+
+```rust
+use rouge::platform::AndroidApp;
+use rouge::prelude::*;
+
+#[unsafe(no_mangle)]
+extern "Rust" fn android_main(android: AndroidApp) {
+    let run = App::new()
+        .android(android)
+        .window(WindowOptions::default(), counter)
+        .run();
+    if let Err(error) = run {
+        eprintln!("{error}");
+    }
+}
+```
+
 ## Crates
 
 For most apps, use only the `rouge` crate. It exports all of the other crates.
@@ -195,7 +221,8 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 
 ## Limits
 
-- Rouge does not support Windows or mobile devices.
+- Rouge does not support Windows.
+- On Android, text comes from key events only. Input methods that compose text, autocorrect and swipe typing do not work yet.
 - Rouge draws all widgets itself. The widgets do not look like the native widgets of the platform.
 - Accessibility is not available yet.
 - In the browser, Rouge needs WebGPU. Full WebGL2 support is not available yet.
