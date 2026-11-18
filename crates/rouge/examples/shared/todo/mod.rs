@@ -1,47 +1,47 @@
 mod model;
-mod sky;
+mod rings;
 mod tokens;
 
 use model::{Filter, Todos};
+use rings::{Touch, ring_field};
+use rouge::core::presentation;
 use rouge::prelude::*;
-use rouge::widgets::{
-    CheckModel, CheckState, IconName, icon_button, inline_edit, segment, segmented_control,
+use rouge::widgets::tokens::{
+    CONTROL_HEIGHT_LARGE, FLOATING_INSET, HAIRLINE, ICON_BUTTON_SIZE, Pace, Radius, Space,
 };
-use sky::night_sky;
+use rouge::widgets::{
+    CheckModel, CheckState, ControlSize, IconName, UiStyles, icon_button, inline_edit, kbd,
+    list_row, row_action, segment, segmented_control,
+};
 use tokens::{
-    ACCENT, BODY_SIZE, CARD_RADIUS, CARD_WIDTH, CHECKBOX, COMPACT_WIDTH, CONTROL, DANGER_TINT,
-    DUSK, EDIT_RING, EDITOR_HEIGHT, FAINT, FOOTER_Y, FROST, GAP, GLASS, HAIRLINE, HEADER_Y,
-    HEADING, INSET, LINE, NIGHT, PAGE_BOTTOM, PAGE_TOP, RING, ROSE, ROW_ENTER, ROW_EXIT,
-    ROW_HEIGHT, Radius, SMALL_SIZE, STACK, STAR, TAB_HEIGHT, TAB_WIDTH, TINT, TITLE_LINE_HEIGHT,
-    TITLE_SIZE, TITLE_WEIGHT, UI_FONT, UNCHECKED_SCALE, WASH,
+    CARD_WIDTH, EDITOR_HEIGHT, ROW_ENTER, ROW_EXIT, TABS_HEIGHT, TITLE_LINE_HEIGHT, TITLE_SIZE,
 };
 
 pub(crate) fn todo_app() -> impl View {
-    Theme::provide(UiPalette {
-        accent: Rgba::rgb(ACCENT),
-        ..UiPalette::dark()
-    });
+    let appearance = appearance();
+    let palette = move || UiPalette::for_dark(appearance.get() == Appearance::Dark);
+    let theme = Theme::provide(untrack(palette));
+    effect(move || theme.set(palette()));
     let todos = Todos::new();
     let has_todos = move || !todos.items.is_empty();
+    let touch = stored(Touch::Unused);
+    let card = signal(Rect::ZERO);
     view! {
-        <div size_full relative bg=NIGHT font=UI_FONT text_color=FROST>
-            <night_sky/>
+        <div size_full relative on_pointer_down={move |event: &PointerEvent| touch.set(Touch::Press(event.position))}>
+            <ring_field todos touch card/>
             <scroll_view size_full>
                 <scroll>
-                    <div flex col items_center w_full px=INSET pt=PAGE_TOP pb=PAGE_BOTTOM>
-                        <text text_size=TITLE_SIZE font_weight=TITLE_WEIGHT line_height=TITLE_LINE_HEIGHT color=HEADING>
-                            "todos"
-                        </text>
-                        <div flex col w_full max_w=CARD_WIDTH mt=STACK rounded=CARD_RADIUS test_id="card"
-                             backdrop=GLASS shadow={BoxShadow::lg()}>
-                            <new_todo todos/>
+                    <div flex col items_center w_full px=Space::X4 pt=Space::X12 pb=Space::X12>
+                        <text w_full max_w=CARD_WIDTH display text_size=TITLE_SIZE line_height=TITLE_LINE_HEIGHT primary>"todos"</text>
+                        <div flex col w_full max_w=CARD_WIDTH mt=Space::X6 material=Material::Clear track_bounds=card test_id="card">
+                            <new_todo todos touch/>
                             <show when=has_todos>
                                 <todo_list todos/>
                                 <footer todos/>
                             </show>
                         </div>
                         <show when=has_todos>
-                            <text text_size=SMALL_SIZE color=DUSK mt=STACK>"Double-click a todo to edit it"</text>
+                            <hint/>
                         </show>
                     </div>
                 </scroll>
@@ -51,25 +51,26 @@ pub(crate) fn todo_app() -> impl View {
 }
 
 #[component]
-fn new_todo(todos: Todos) -> impl View {
+fn new_todo(todos: Todos, touch: Stored<Touch>) -> impl View {
+    let accent = Theme::current().get_untracked().accent;
     let draft = signal(String::new());
     let add = move |title: &str| {
+        touch.set(Touch::Card);
         todos.add(title);
         draft.set(String::new());
     };
     view! {
-        <div flex items_center gap=GAP px=INSET py=HEADER_Y>
-            <div flex_none size=CONTROL>
+        <div flex items_center gap=Space::X3 px=Space::X4 py=Space::X4>
+            <div flex flex_none items_center justify_center size=ICON_BUTTON_SIZE>
                 <show when={move || !todos.items.is_empty()}>
-                    <icon_button icon=IconName::ChevronDown label="Toggle all" size=CONTROL rounded=Radius::Full
-                                 color={move || if todos.remaining.get() == 0 { FROST } else { FAINT }}
-                                 hover:bg=TINT focus_visible:bg=TINT
+                    <icon_button icon=IconName::ChevronDown label="Toggle all"
+                                 selected={move || todos.remaining.get() == 0}
                                  on_click={move || todos.toggle_all()} test_id="toggle-all"/>
                 </show>
             </div>
             <div flex_1 min_w=0.0>
-                <editable value=draft w_full text_size=BODY_SIZE color=FROST caret_color=STAR
-                          placeholder=("What needs to be done?", DUSK)
+                <editable value=draft w_full reading color=Role::Text caret_color=accent
+                          placeholder=("What needs to be done?", Role::TextMuted)
                           autofocus on_submit=add test_id="new-todo"/>
             </div>
         </div>
@@ -79,9 +80,9 @@ fn new_todo(todos: Todos) -> impl View {
 #[component]
 fn todo_list(todos: Todos) -> impl View {
     view! {
-        <div flex col border_t=HAIRLINE border_color=LINE>
+        <div flex col p=FLOATING_INSET border_t=HAIRLINE border_color=Role::BorderSubtle>
             <each items=todos.visible key={|id| *id} let:id
-                  enter=(ROW_ENTER, Spring::snappy()) exit=(ROW_EXIT, Spring::snappy())>
+                  enter=(ROW_ENTER, Pace::Layout) exit=(ROW_EXIT, Pace::Exit)>
                 <todo_row todos id={id.get_untracked()}/>
             </each>
         </div>
@@ -92,46 +93,45 @@ fn todo_list(todos: Todos) -> impl View {
 fn todo_row(todos: Todos, id: u64) -> impl View {
     let done = todos.items.select(id, |todo| todo.done);
     let title = todos.items.select(id, |todo| todo.title.clone());
+    let ink = done.pick(Fill::Role(Role::TextMuted), Fill::Role(Role::Text));
+    let delete = row_action("Delete", move || {
+        todos.items.remove(&id);
+    })
+    .icon(IconName::X)
+    .destructive()
+    .test_id("delete");
     view! {
-        <div flex items_center gap=GAP px=INSET h=ROW_HEIGHT border_b=HAIRLINE border_color=LINE
-             hover:bg=WASH group="todo" layout_transition={Spring::smooth()} test_scope={format!("todo-{id}")}>
-            <div flex flex_none items_center justify_center size=CONTROL
-                 scale={done.pick(1.0, UNCHECKED_SCALE)} transition={Spring::bouncy()}>
-                <checkbox checked={Done(todos, id)} mark_color=NIGHT size=CHECKBOX rounded=Radius::Full border=RING bg=Color::TRANSPARENT
-                          border_color=FAINT hover:border_color=FROST focus_visible:border_color=FROST
-                          checked:bg=STAR checked:border_color=STAR test_id="toggle"/>
-            </div>
-            <inline_edit value=title flex_1 font=UI_FONT text_size=BODY_SIZE
-                         text_color={done.pick(FAINT, FROST)} strikethrough=done
-                         editing:flex editing:items_center editing:h=EDITOR_HEIGHT editing:px=GAP editing:ml={-(GAP + HAIRLINE)}
-                         editing:bg=WASH editing:border_color=EDIT_RING editing:rounded=Radius::Control editing:text_color=FROST
-                         on_commit={move |title: String| todos.rename(id, &title)} test_id="title"/>
-            <icon_button icon=IconName::X label="Delete" size=CONTROL rounded=Radius::Full color=ROSE
-                         invisible group_hover=("todo", Styled::visible) hover:bg=DANGER_TINT
-                         on_click={move || { todos.items.remove(&id); }} test_id="delete"/>
+        <div layout_transition=Pace::Layout test_scope={format!("todo-{id}")}>
+            <list_row h=CONTROL_HEIGHT_LARGE px=Space::X2 gap=Space::X3 action=delete>
+                <div flex flex_none items_center justify_center size=ICON_BUTTON_SIZE>
+                    <checkbox checked={Done(todos, id)} test_id="toggle"/>
+                </div>
+                <inline_edit value=title flex_1 min_w=0.0 reading text_color=ink strikethrough=done
+                             editing:flex editing:items_center editing:h=EDITOR_HEIGHT editing:px=Space::X2
+                             editing:ml={-(Space::X2.px() + HAIRLINE)} editing:rounded=Radius::Control
+                             on_commit={move |title: String| todos.rename(id, &title)} test_id="title"/>
+            </list_row>
         </div>
     }
 }
 
 #[component]
 fn footer(todos: Todos) -> impl View {
-    let window = window_size();
-    let compact = move || window.get().width < COMPACT_WIDTH;
+    let presentation = presentation();
+    let compact = move || presentation.get().is_compact();
+    let edge = Space::X3.px();
     let items_left = move || match todos.remaining.get() {
         1 => "1 item left".to_owned(),
         count => format!("{count} items left"),
     };
     view! {
-        <div relative flex justify_center px=INSET pt=FOOTER_Y text_size=SMALL_SIZE text_color=DUSK
-             pb={move || if compact() { FOOTER_Y + GAP + TAB_HEIGHT } else { FOOTER_Y }}>
-            <div absolute left=INSET right=INSET bottom=FOOTER_Y h=TAB_HEIGHT flex items_center justify_between>
-                <text test_id="items-left">{items_left}</text>
+        <div relative flex justify_center px=Space::X4 pt=edge border_t=HAIRLINE border_color=Role::BorderSubtle
+             pb={move || if compact() { edge + Space::X3.px() + TABS_HEIGHT } else { edge }}>
+            <div absolute left=Space::X4 right=Space::X4 bottom=edge h=TABS_HEIGHT flex items_center justify_between>
+                <text small muted test_id="items-left">{items_left}</text>
                 <show when={move || todos.remaining.get() < todos.items.len()}>
-                    <div flex items_center h=TAB_HEIGHT px=GAP rounded=Radius::Full
-                         hover:text_color=FROST focus_visible:bg=TINT
-                         on_activate={move || todos.items.retain(|todo| !todo.done)} test_id="clear-completed">
-                        "Clear completed"
-                    </div>
+                    <button label="Clear completed" variant=ButtonVariant::Ghost control_size=ControlSize::Small
+                            on_click={move || todos.items.retain(|todo| !todo.done)} test_id="clear-completed"/>
                 </show>
             </div>
             <filter_tabs todos/>
@@ -144,16 +144,26 @@ fn filter_tabs(todos: Todos) -> impl View {
     let window = window_handle();
     let tabs = Filter::ALL.map(|filter| {
         view! {
-            <segment label={format!("{filter:?}")} w=TAB_WIDTH h_full rounded=Radius::Full text_color=DUSK
+            <segment label={format!("{filter:?}")}
                      selected={move || todos.filter.get() == filter} on_click={move || window.navigate(filter.route())}
                      test_id={format!("filter-{filter:?}").to_lowercase()}/>
         }
     });
     view! {
-        <segmented_control h=TAB_HEIGHT p=0.0 gap=0.0 bg=Color::TRANSPARENT
-                           indicator:rounded=Radius::Full indicator:bg=TINT indicator:border=HAIRLINE indicator:border_color=LINE>
-            {..tabs}
-        </segmented_control>
+        <segmented_control>{..tabs}</segmented_control>
+    }
+}
+
+#[component]
+fn hint() -> impl View {
+    view! {
+        <div flex flex_wrap items_center justify_center gap=Space::X1 mt=Space::X6>
+            <text small muted>"Double-click a todo to edit it."</text>
+            <kbd>"Enter"</kbd>
+            <text small muted>"saves,"</text>
+            <kbd>"Esc"</kbd>
+            <text small muted>"cancels."</text>
+        </div>
     }
 }
 

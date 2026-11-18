@@ -11,6 +11,7 @@ use rouge::core::testing::{TestResult, TestUi, TestUiBuilder};
 use rouge::persist::MemoryStorage;
 use rouge::prelude::*;
 use rouge::widgets::bundled_fonts;
+use rouge::widgets::tokens::MotionScale;
 use shared::counter_view::counter;
 use shared::diff::{Patch, SAMPLE, diff_view};
 use shared::effects_view::effects_demo;
@@ -108,11 +109,109 @@ fn the_todomvc_example_adds_completes_filters_and_clears() -> TestResult {
     assert!(ui.bounds_of("clear-completed").is_none());
     ui.click_on("toggle-all")?;
     assert!(ui.text_bounds("0 items left").is_some());
+    ui.hover_on("todo-1")?;
+    ui.run(0.5);
     ui.click_on("todo-1-delete")?;
     ui.run(0.5);
     assert!(
         ui.bounds_of("toggle-all").is_none(),
         "the list and footer hide when empty"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_todomvc_rings_follow_the_list_and_not_the_filter() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(640.0, 760.0, todo::todo_app);
+    let bare = lower_field(&mut ui)?;
+    add(&mut ui, "First proof");
+    add(&mut ui, "Second proof");
+    ui.run(3.0);
+    let open = lower_field(&mut ui)?;
+    assert!(open != bare, "each todo draws a ring");
+    ui.click_on("filter-completed")?;
+    ui.run(1.0);
+    assert!(
+        lower_field(&mut ui)? == open,
+        "filters do not move the rings"
+    );
+    ui.click_on("filter-all")?;
+    ui.click_on("todo-0-toggle")?;
+    ui.advance(0.05);
+    let inking = lower_field(&mut ui)?;
+    ui.run(3.0);
+    let inked = lower_field(&mut ui)?;
+    assert!(inked != open && inking != open && inking != inked);
+    assert_eq!(
+        ui.compositor_frames(1.0)?,
+        0,
+        "the rings are clockless at rest"
+    );
+    ui.click_on("todo-0-toggle")?;
+    ui.run(3.0);
+    assert!(
+        lower_field(&mut ui)? == open,
+        "reopening returns the ring to graphite"
+    );
+    ui.click_on("toggle-all")?;
+    ui.run(3.0);
+    ui.click_on("clear-completed")?;
+    ui.run(3.0);
+    assert!(
+        lower_field(&mut ui)? == bare,
+        "an empty list leaves bare paper"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_todomvc_change_sends_one_wave_that_leaves_no_trace() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(640.0, 760.0, todo::todo_app);
+    assert!(
+        ui.bounds_of("wave").is_none(),
+        "nothing moves before a change"
+    );
+    add(&mut ui, "Proof");
+    assert!(ui.bounds_of("wave").is_some(), "adding sends a wave");
+    ui.run(1.0);
+    let bent = lower_field(&mut ui)?;
+    ui.run(2.0);
+    assert!(ui.bounds_of("wave").is_none(), "the wave unmounts");
+    assert!(lower_field(&mut ui)? != bent, "the wave bent the rings");
+    assert_eq!(ui.compositor_frames(1.0)?, 0, "nothing draws at rest");
+    Ok(())
+}
+
+#[test]
+fn reduced_motion_and_saved_todos_land_on_the_final_rings() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = example(640.0, 760.0, || {
+        MotionScale::None.provide();
+        todo::todo_app()
+    });
+    add(&mut ui, "Proof");
+    let open = lower_field(&mut ui)?;
+    ui.click_on("todo-0-toggle")?;
+    let inked = lower_field(&mut ui)?;
+    ui.run(1.0);
+    assert!(inked != open && inked == lower_field(&mut ui)?);
+    assert!(
+        ui.bounds_of("wave").is_none(),
+        "reduced motion sends no wave"
+    );
+    let storage = MemoryStorage::default();
+    storage.insert("todos", r#"[{"id":0,"title":"Proof","done":true}]"#);
+    let mut restored = saved_todos(&storage);
+    assert!(
+        restored.bounds_of("wave").is_none(),
+        "restoring sends no wave"
+    );
+    restored.run(1.0);
+    assert!(
+        lower_field(&mut restored)? == inked,
+        "saved todos restore the same rings"
     );
     Ok(())
 }
@@ -281,4 +380,10 @@ fn example<T: View>(width: f32, height: f32, root: impl FnOnce() -> T) -> TestUi
         .size(width, height)
         .fonts(bundled_fonts())
         .build(root)
+}
+
+fn lower_field(ui: &mut TestUi) -> Result<Vec<u8>, Box<dyn Error>> {
+    let image = ui.render()?;
+    let start = (image.height * 3 / 4 * image.width * 4) as usize;
+    Ok(image.pixels[start..].to_vec())
 }
