@@ -14,8 +14,8 @@ use std::time::Duration;
 use tokio::sync::Notify;
 #[cfg(not(target_arch = "wasm32"))]
 use {
+    crate::platform::{Current, WinitPlatform},
     rouge_reactive::spawn_blocking,
-    std::env::{home_dir, var_os},
     std::fs::{create_dir_all, read_to_string, rename, write as write_file},
     std::io::Result as IoResult,
     std::path::{Path, PathBuf},
@@ -224,19 +224,7 @@ fn write(file: &Path, json: &str) -> IoResult<()> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn config_dir(name: &str) -> Option<PathBuf> {
-    if let Some(dir) = var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|dir| dir.is_absolute())
-    {
-        return Some(dir.join(name.to_lowercase()));
-    }
-    if cfg!(any(target_os = "macos", target_os = "ios")) {
-        home_dir().map(|home| home.join("Library/Application Support").join(name))
-    } else if cfg!(target_os = "windows") {
-        var_os("APPDATA").map(|root| PathBuf::from(root).join(name))
-    } else {
-        home_dir().map(|home| home.join(".config").join(name.to_lowercase()))
-    }
+    Current::config_dir(name)
 }
 
 #[cfg(target_arch = "wasm32")]

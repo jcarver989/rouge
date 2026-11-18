@@ -6,28 +6,53 @@ mod trace;
 pub use super::css_cursor;
 
 pub use host::Mounted;
-pub(crate) use host::{mount, run};
 
+use super::Platform;
+use crate::app::{App, AppError};
+use host::{mount, run};
 use rouge_core::Key;
 #[cfg(feature = "open-url")]
 use std::io::Error as IoError;
+use thiserror::Error;
 
-pub(crate) fn warn(message: &str) {
-    web_sys::console::warn_1(&format!("rouge: {message}").into());
+#[derive(Debug, Error)]
+pub enum Error {}
+
+impl App {
+    pub async fn mount(self) -> Result<Mounted, AppError> {
+        mount(self).await
+    }
 }
 
-pub(crate) fn log(message: &str) {
-    web_sys::console::log_1(&message.into());
-}
+#[derive(Default)]
+pub(crate) struct Options;
 
-#[cfg(feature = "open-url")]
-pub(crate) fn open_url(url: &str) -> Result<(), IoError> {
-    let opened = web_sys::window()
-        .and_then(|window| window.open_with_url_and_target(url, "_blank").ok())
-        .flatten();
-    opened
-        .map(|_| ())
-        .ok_or_else(|| IoError::other("the browser blocked the new tab"))
+pub(crate) struct Web;
+
+impl Platform for Web {
+    type Options = Options;
+
+    fn run(app: App, _options: Self::Options) -> Result<(), AppError> {
+        run(app)
+    }
+
+    fn log(message: &str) {
+        web_sys::console::log_1(&message.into());
+    }
+
+    fn warn(message: &str) {
+        web_sys::console::warn_1(&format!("rouge: {message}").into());
+    }
+
+    #[cfg(feature = "open-url")]
+    fn open_url(url: &str) -> Result<(), IoError> {
+        let opened = web_sys::window()
+            .and_then(|window| window.open_with_url_and_target(url, "_blank").ok())
+            .flatten();
+        opened
+            .map(|_| ())
+            .ok_or_else(|| IoError::other("the browser blocked the new tab"))
+    }
 }
 
 #[doc(hidden)]

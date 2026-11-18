@@ -1,10 +1,11 @@
-use crate::platform;
+use crate::platform::{Current, Error as PlatformError, Options, Platform};
 #[cfg(not(target_arch = "wasm32"))]
 use rouge_core::ThreadError;
 use rouge_core::{AnyView, Decorations, Menu, View};
 use rouge_render::{GpuError, Size};
 use rouge_widgets::bundled_fonts;
 use std::borrow::Cow;
+use std::mem::take;
 use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle;
@@ -89,9 +90,8 @@ pub enum AppError {
     Surface(#[from] CreateSurfaceError),
     #[error("the GPU adapter cannot present to the window surface")]
     UnsupportedSurface,
-    #[cfg(target_os = "macos")]
-    #[error("failed to create application menu: {0}")]
-    Menu(#[from] muda::Error),
+    #[error(transparent)]
+    Platform(#[from] PlatformError),
     #[error(transparent)]
     Gpu(#[from] GpuError),
     #[cfg(not(target_arch = "wasm32"))]
@@ -107,6 +107,7 @@ pub struct App {
     pub(crate) fonts: Vec<Cow<'static, [u8]>>,
     #[cfg(feature = "tokio-rt")]
     pub(crate) tokio: Option<Handle>,
+    pub(crate) platform: Options,
 }
 
 impl Default for App {
@@ -117,6 +118,7 @@ impl Default for App {
             fonts: bundled_fonts().map(Cow::Borrowed).collect(),
             #[cfg(feature = "tokio-rt")]
             tokio: None,
+            platform: Options::default(),
         }
     }
 }
@@ -155,12 +157,8 @@ impl App {
         self
     }
 
-    pub fn run(self) -> Result<(), AppError> {
-        platform::run(self)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub async fn mount(self) -> Result<platform::web::Mounted, AppError> {
-        platform::web::mount(self).await
+    pub fn run(mut self) -> Result<(), AppError> {
+        let options = take(&mut self.platform);
+        Current::run(self, options)
     }
 }

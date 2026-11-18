@@ -1,14 +1,10 @@
-#[cfg(target_os = "ios")]
-use super::PrimaryTouch;
-#[cfg(target_os = "macos")]
-use super::menu::NativeMenus;
 use super::{
-    NativeClipboard, Wheel, WheelGesture, appearance, cursor_icon, logical_point, modifiers,
-    named_key, pointer_button, window_command,
+    PrimaryTouch, Wheel, WheelGesture, WinitPlatform, appearance, cursor_icon, logical_point,
+    modifiers, named_key, pointer_button, window_command,
 };
 use crate::app::{App, AppError, RootFn, WindowOptions};
 use crate::driver::{Driver, Inline, Setup, TextInput, connect};
-use crate::platform::{default_menus, window_root};
+use crate::platform::{Current, Options, Platform, default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use pollster::block_on;
 use rouge_core::{
@@ -18,8 +14,6 @@ use rouge_core::{
 use rouge_reactive::Runtime;
 #[cfg(feature = "tokio-rt")]
 use rouge_reactive::set_tokio;
-#[cfg(target_os = "ios")]
-use rouge_render::Edges;
 use rouge_render::{Gpu, Point, Target};
 use std::borrow::Cow;
 use std::env::var;
@@ -39,19 +33,18 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
     ElementState, Ime, KeyEvent as WinitKeyEvent, MouseScrollDelta, TouchPhase, WindowEvent,
 };
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, SmolStr};
-#[cfg(not(target_os = "ios"))]
-use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
 
-pub(crate) fn run(app: App) -> Result<(), AppError> {
+const DETACH_TIMEOUT: Duration = Duration::from_secs(1);
+
+pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
     let bar = !app.menus.is_empty();
+    let event_loop = Current::event_loop(options)?;
     let menus = default_menus(app.menus);
-    let event_loop = EventLoop::new()?;
     let waker = event_loop.create_proxy();
-    #[cfg(target_os = "macos")]
-    let native_menus = NativeMenus::new(menus.clone(), waker.clone())?;
+    let platform = Current::new(&menus, &waker)?;
     let proxy = waker.clone();
     let runtime = Runtime::with_waker(move || {
         let _ = proxy.send_event(());
@@ -64,8 +57,7 @@ pub(crate) fn run(app: App) -> Result<(), AppError> {
     event_loop.set_control_flow(ControlFlow::Wait);
     let profile = ProfileSettings::read(|name| var(name.to_ascii_uppercase()).ok());
     let mut runner = Runner {
-        #[cfg(target_os = "macos")]
-        native_menus,
+        platform,
         _trace: trace(&profile),
         waker,
         gpu: None,
@@ -85,12 +77,15 @@ pub(crate) fn run(app: App) -> Result<(), AppError> {
     let closed = runner.compositor.take().map_or(Ok(()), Compositing::close);
     runner.windows.clear();
     runner.closing.clear();
-    runner.error.map_or(closed, Err)
+    let result = runner.error.map_or(closed, Err);
+    if result.is_ok() {
+        Current::exit();
+    }
+    result
 }
 
 struct Runner {
-    #[cfg(target_os = "macos")]
-    native_menus: NativeMenus,
+    platform: Current,
     _trace: Option<FlushGuard>,
     waker: EventLoopProxy<()>,
     gpu: Option<(Instance, Gpu)>,
@@ -119,7 +114,7 @@ impl Runner {
             .with_maximized(options.maximized)
             .with_decorations(options.decorations == Decorations::Server)
             .with_resizable(options.resizable);
-        if !cfg!(target_os = "ios") {
+        if !Current::MOBILE {
             attributes = attributes
                 .with_inner_size(LogicalSize::new(options.size.width, options.size.height));
             if let Some(size) = options.min_size {
@@ -139,8 +134,8 @@ impl Runner {
             Some(compositor) => compositor,
             None => (self.compositor).insert(Compositing::open(&gpu, self.waker.clone())?),
         };
-        let physical = surface_size(&window);
-        let chrome = !cfg!(target_os = "ios")
+        let physical = Current::surface_size(&window);
+        let chrome = !Current::MOBILE
             && (options.decorations == Decorations::Client || !window.is_decorated());
         let bar = if self.bar {
             self.menus.clone()
@@ -153,7 +148,7 @@ impl Runner {
             scale: window.scale_factor() as f32,
             interval: refresh_interval(&window),
             epoch: compositor.epoch,
-            appearance: appearance(window.theme()),
+            appearance: Current::appearance(&window),
             menus: &self.menus,
             fonts: &self.fonts,
             profile: &self.profile,
@@ -166,26 +161,39 @@ impl Runner {
             surface,
             setup,
             compositor.messages.clone(),
-            NativeClipboard::new(),
+            Current::clipboard(),
             move || window_root(title, bar, chrome, root),
         )?;
-        let notify = window.clone();
-        driver.attach(match compositor.host {
-            Host::Thread(_) => target,
-            Host::Inline(_) => target.before_present(move || notify.pre_present_notify()),
-        });
+        driver.attach(compositor.target(target, &window));
         self.windows.push(WindowState {
             window,
             driver,
             occluded: false,
             wheel: Wheel::default(),
-            #[cfg(target_os = "ios")]
             touch: PrimaryTouch::default(),
             modifiers: Modifiers::NONE,
         });
-        #[cfg(target_os = "ios")]
         if let Some(state) = self.windows.last_mut() {
             state.sync_safe_area();
+        }
+        Ok(())
+    }
+
+    fn reattach(&mut self) -> Result<(), AppError> {
+        let (Some((instance, gpu)), Some(compositor)) = (&self.gpu, &self.compositor) else {
+            return Ok(());
+        };
+        for state in &mut self.windows {
+            let surface = instance.create_surface(state.window.clone())?;
+            state.resize(
+                Current::surface_size(&state.window),
+                state.window.scale_factor(),
+            );
+            let target = state.driver.target(gpu, surface)?;
+            (state.driver).reattach(compositor.target(target, &state.window));
+            state.occluded = false;
+            state.driver.ui().set_visible(true);
+            state.window.request_redraw();
         }
         Ok(())
     }
@@ -236,7 +244,7 @@ impl Runner {
             }
             open
         });
-        if quit || self.windows.is_empty() {
+        if quit || (self.windows.is_empty() && self.pending.is_empty()) {
             self.windows.clear();
             event_loop.exit();
         }
@@ -245,12 +253,35 @@ impl Runner {
 
 impl ApplicationHandler for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if Current::SURFACE_LOST_ON_SUSPEND
+            && let Err(error) = self.reattach()
+        {
+            self.error = Some(error);
+            event_loop.exit();
+            return;
+        }
         for (options, root) in take(&mut self.pending) {
             if let Err(error) = self.open(event_loop, options, root) {
                 self.error = Some(error);
                 event_loop.exit();
                 return;
             }
+        }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if !Current::SURFACE_LOST_ON_SUSPEND {
+            return;
+        }
+        let Some(compositor) = &mut self.compositor else {
+            return;
+        };
+        for state in &mut self.windows {
+            state.occluded = true;
+            state.driver.ui().set_visible(false);
+            let detached = state.driver.detach();
+            compositor.turn();
+            drop(detached.recv_timeout(DETACH_TIMEOUT));
         }
     }
 
@@ -271,16 +302,13 @@ impl ApplicationHandler for Runner {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
-        #[cfg(target_os = "macos")]
-        {
-            let ui = self
-                .windows
-                .iter_mut()
-                .find(|state| state.window.has_focus())
-                .map(|state| state.driver.ui());
-            if self.native_menus.dispatch(ui) {
-                self.windows.clear();
-            }
+        let ui = self
+            .windows
+            .iter_mut()
+            .find(|state| state.window.has_focus())
+            .map(|state| state.driver.ui());
+        if self.platform.menu_events(ui) {
+            self.windows.clear();
         }
         self.process_window_commands(event_loop, None);
     }
@@ -335,7 +363,6 @@ struct WindowState {
     driver: Driver,
     occluded: bool,
     wheel: Wheel,
-    #[cfg(target_os = "ios")]
     touch: PrimaryTouch,
     modifiers: Modifiers,
 }
@@ -363,7 +390,7 @@ impl WindowState {
             WindowEvent::Resized(size) => self.resize(size, self.window.scale_factor()),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.refresh_interval();
-                self.resize(surface_size(&self.window), scale_factor);
+                self.resize(Current::surface_size(&self.window), scale_factor);
             }
             WindowEvent::Moved(_) => self.refresh_interval(),
             WindowEvent::CursorMoved { position, .. } => {
@@ -382,8 +409,7 @@ impl WindowState {
                 ..
             } => ui.pointer_up(pointer_button(button)),
             WindowEvent::MouseWheel { delta, phase, .. } => self.wheel(delta, phase),
-            #[cfg(target_os = "ios")]
-            WindowEvent::Touch(touch) => {
+            WindowEvent::Touch(touch) if Current::MOBILE => {
                 if let Some(phase) = self.touch.input(touch.id, touch.phase) {
                     let position = logical_point(touch.location, ui.scale());
                     ui.touch(phase, position);
@@ -415,7 +441,7 @@ impl WindowState {
     }
 
     fn key(&mut self, event: WinitKeyEvent) {
-        let key = match unmodified_key(&event) {
+        let key = match Current::key(&event) {
             WinitKey::Named(named) => named_key(named),
             WinitKey::Character(text) => Key::character(&text),
             _ => Key::Other,
@@ -424,13 +450,17 @@ impl WindowState {
         key_event.text = event.text.as_ref().map(SmolStr::to_string);
         key_event.repeat = event.repeat;
         let ui = self.driver.ui();
-        match event.state {
+        let handled = match event.state {
             ElementState::Pressed => ui.key_down(key_event),
             ElementState::Released => ui.key_up(key_event),
         };
+        if !handled {
+            Current::unhandled_key(&event);
+        }
     }
 
     fn sync_platform(&mut self) {
+        Current::sync(&self.window, self.driver.ui());
         let changes = self.driver.changes();
         if let Some(cursor) = changes.cursor {
             self.window.set_cursor(cursor_icon(cursor));
@@ -459,15 +489,15 @@ impl WindowState {
         if resized.is_some() && !self.occluded {
             self.driver.step();
         }
-        #[cfg(target_os = "ios")]
         self.sync_safe_area();
         self.window.request_redraw();
     }
 
-    #[cfg(target_os = "ios")]
     fn sync_safe_area(&mut self) {
-        let insets = safe_area(&self.window);
-        self.driver.ui().set_safe_area(insets);
+        if Current::MOBILE {
+            let insets = Current::safe_area(&self.window);
+            self.driver.ui().set_safe_area(insets);
+        }
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
@@ -486,45 +516,6 @@ impl WindowState {
             WheelGesture::Coast => {}
         }
     }
-}
-
-#[cfg(not(target_os = "ios"))]
-fn surface_size(window: &Window) -> PhysicalSize<u32> {
-    window.inner_size()
-}
-
-#[cfg(target_os = "ios")]
-fn surface_size(window: &Window) -> PhysicalSize<u32> {
-    window.outer_size()
-}
-
-#[cfg(target_os = "ios")]
-fn safe_area(window: &Window) -> Edges {
-    let (Ok(inner), Ok(outer)) = (window.inner_position(), window.outer_position()) else {
-        return Edges::ZERO;
-    };
-    let (inner_size, outer_size) = (window.inner_size(), window.outer_size());
-    let scale = window.scale_factor() as f32;
-    let left = (inner.x - outer.x) as f32;
-    let top = (inner.y - outer.y) as f32;
-    let right = outer_size.width as f32 - inner_size.width as f32 - left;
-    let bottom = outer_size.height as f32 - inner_size.height as f32 - top;
-    Edges {
-        top: (top / scale).max(0.0),
-        right: (right / scale).max(0.0),
-        bottom: (bottom / scale).max(0.0),
-        left: (left / scale).max(0.0),
-    }
-}
-
-#[cfg(not(target_os = "ios"))]
-fn unmodified_key(event: &WinitKeyEvent) -> WinitKey {
-    event.key_without_modifiers()
-}
-
-#[cfg(target_os = "ios")]
-fn unmodified_key(event: &WinitKeyEvent) -> WinitKey {
-    event.logical_key.clone()
 }
 
 enum Host {
@@ -557,6 +548,16 @@ impl Compositing {
             epoch,
             host,
         })
+    }
+
+    fn target(&self, target: Target, window: &Arc<Window>) -> Target {
+        match self.host {
+            Host::Thread(_) => target,
+            Host::Inline(_) => {
+                let notify = window.clone();
+                target.before_present(move || notify.pre_present_notify())
+            }
+        }
     }
 
     fn turn(&mut self) -> Option<Instant> {
@@ -592,9 +593,7 @@ fn deliver(
 }
 
 fn refresh_interval(window: &Window) -> Duration {
-    let millihertz = window
-        .current_monitor()
-        .and_then(|monitor| monitor.refresh_rate_millihertz())
+    let millihertz = Current::refresh_millihertz(window)
         .filter(|rate| *rate > 0)
         .unwrap_or(60_000);
     Duration::from_secs_f64(1000.0 / f64::from(millihertz))

@@ -3,11 +3,11 @@ use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use rouge_core::{Clipboard, ClipboardMedia, PasteRequest};
 
-pub(crate) struct NativeClipboard(Option<SystemClipboard>);
+pub(crate) struct DesktopClipboard(Option<SystemClipboard>);
 
-impl NativeClipboard {
+impl DesktopClipboard {
     pub(crate) fn new() -> Self {
-        NativeClipboard(SystemClipboard::new().ok())
+        DesktopClipboard(SystemClipboard::new().ok())
     }
 
     fn media(&mut self) -> Option<ClipboardMedia> {
@@ -33,7 +33,7 @@ impl NativeClipboard {
     }
 }
 
-impl Clipboard for NativeClipboard {
+impl Clipboard for DesktopClipboard {
     fn write(&mut self, text: &str) {
         if let Some(clipboard) = &mut self.0 {
             let _ = clipboard.set_text(text);

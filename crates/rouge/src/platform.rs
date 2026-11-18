@@ -1,7 +1,8 @@
 cfg_select! {
     target_arch = "wasm32" => {
         pub mod web;
-        pub(crate) use web::{log, run, warn};
+        pub(crate) use web::Web as Current;
+        pub use web::Error;
     }
     _ => {
         mod native;
@@ -10,34 +11,75 @@ cfg_select! {
             PrimaryTouch, Wheel, WheelGesture, appearance, cursor_icon, logical_point, logical_size,
             modifiers, named_key, pointer_button, scroll_delta,
         };
-        pub(crate) use native::{log, run, warn};
+        #[cfg(feature = "persist")]
+        pub(crate) use native::WinitPlatform;
+        cfg_select! {
+            target_os = "android" => {
+                mod android;
+                pub(crate) use android::Android as Current;
+                pub use android::{AndroidApp, Error};
+            }
+            target_os = "ios" => {
+                mod ios;
+                pub(crate) use ios::Ios as Current;
+                pub use ios::Error;
+            }
+            target_os = "macos" => {
+                mod macos;
+                pub(crate) use macos::MacOs as Current;
+                pub use macos::Error;
+            }
+            _ => {
+                mod desktop;
+                pub(crate) use desktop::Desktop as Current;
+                pub use desktop::Error;
+            }
+        }
     }
 }
 
-use crate::app::RootFn;
-#[cfg(target_os = "ios")]
-use rouge_core::safe_area;
-use rouge_core::{AnyView, Cursor, Menu, View, window_handle};
-#[cfg(not(target_os = "macos"))]
-use rouge_core::{Styled, div};
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-use rouge_widgets::menu_bar;
-use rouge_widgets::window_chrome;
+use crate::app::{App, AppError, RootFn};
+use rouge_core::{AnyView, Cursor, Menu, Styled, View, div, safe_area, window_handle};
+use rouge_widgets::{menu_bar, window_chrome};
 #[cfg(feature = "open-url")]
 use std::io::Error as IoError;
 
 pub(crate) const LINE_SCROLL: f32 = 40.0;
 
+pub(crate) type Options = <Current as Platform>::Options;
+
+pub(crate) trait Platform {
+    type Options: Default;
+
+    const MOBILE: bool = false;
+    const MENU_BAR: bool = true;
+    const WINDOW_MENU: bool = false;
+
+    fn run(app: App, options: Self::Options) -> Result<(), AppError>;
+
+    fn log(message: &str) {
+        eprintln!("{message}");
+    }
+
+    fn warn(message: &str) {
+        eprintln!("rouge: {message}");
+    }
+
+    #[cfg(feature = "open-url")]
+    fn open_url(url: &str) -> Result<(), IoError>;
+}
+
+pub(crate) fn log(message: &str) {
+    Current::log(message);
+}
+
+pub(crate) fn warn(message: &str) {
+    Current::warn(message);
+}
+
 #[cfg(feature = "open-url")]
 pub fn open_url(url: &str) -> Result<(), IoError> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        open::that(url)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        web::open_url(url)
-    }
+    Current::open_url(url)
 }
 
 #[doc(hidden)]
@@ -60,8 +102,7 @@ pub(crate) fn default_menus(mut menus: Vec<Menu>) -> Vec<Menu> {
     if !has(&menus, "Edit") {
         menus.insert(menus.len().min(1), Menu::edit());
     }
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-    if !has(&menus, "Window") {
+    if Current::WINDOW_MENU && !has(&menus, "Window") {
         menus.push(Menu::window());
     }
     menus
@@ -78,8 +119,10 @@ pub(crate) fn window_root(title: String, menus: Vec<Menu>, chrome: bool, root: R
     }
 }
 
-#[cfg(target_os = "ios")]
 fn safe_area_root(root: AnyView) -> AnyView {
+    if !Current::MOBILE {
+        return root;
+    }
     let insets = safe_area();
     div()
         .size_full()
@@ -93,28 +136,15 @@ fn safe_area_root(root: AnyView) -> AnyView {
         .into_any()
 }
 
-#[cfg(not(target_os = "ios"))]
-fn safe_area_root(root: AnyView) -> AnyView {
-    root
-}
-
 fn menu_root(menus: Vec<Menu>, root: AnyView) -> AnyView {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        let _ = menus;
-        root
+    if !Current::MENU_BAR || menus.is_empty() {
+        return root;
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    {
-        if menus.is_empty() {
-            return root;
-        }
-        div()
-            .size_full()
-            .flex()
-            .col()
-            .child(menu_bar(menus))
-            .child(div().flex_1().min_h(0.0).root_host().child(root))
-            .into_any()
-    }
+    div()
+        .size_full()
+        .flex()
+        .col()
+        .child(menu_bar(menus))
+        .child(div().flex_1().min_h(0.0).root_host().child(root))
+        .into_any()
 }

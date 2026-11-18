@@ -8,9 +8,11 @@ use rouge_core::{
 use rouge_render::{Affine, Gpu, Point, Rect, Size, Surfaces, Target};
 use std::borrow::Cow;
 use std::sync::mpsc::Sender;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 use web_time::Instant;
-use wgpu::{Instance, PresentMode, Surface, SurfaceTarget};
+use wgpu::{Instance, PresentMode, Surface, SurfaceConfiguration, SurfaceTarget};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum TextInput {
@@ -100,6 +102,8 @@ pub(crate) struct Driver {
     profile: Option<Profile>,
     cursor: Option<Cursor>,
     text_input: Option<TextInput>,
+    #[cfg(not(target_arch = "wasm32"))]
+    present_mode: Option<PresentMode>,
 }
 
 impl Driver {
@@ -129,31 +133,8 @@ impl Driver {
         ui.set_appearance(appearance);
         ui.set_clipboard(clipboard);
         ui.bind_menus(menus);
-        let capabilities = surface.get_capabilities(&gpu.adapter);
-        let mut config = surface
-            .get_default_config(&gpu.adapter, width.max(1), height.max(1))
-            .ok_or(AppError::UnsupportedSurface)?;
-        if let Some(linear) = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|format| !format.is_srgb())
-        {
-            config.format = linear;
-        }
-        config.present_mode = PresentMode::AutoVsync;
-        if let Some(mode) = profile.present_mode {
-            if capabilities.present_modes.contains(&mode)
-                || matches!(mode, PresentMode::AutoVsync | PresentMode::AutoNoVsync)
-            {
-                config.present_mode = mode;
-            } else {
-                warn(&format!(
-                    "present mode {mode:?} is not supported here ({:?})",
-                    capabilities.present_modes
-                ));
-            }
-        }
+        let present_mode = profile.present_mode;
+        let config = swapchain(gpu, &surface, (width, height), present_mode)?;
         let environment = || {
             format!(
                 "{:?}\n{:?} {}x{} at scale {}",
@@ -188,8 +169,29 @@ impl Driver {
             profile,
             cursor: None,
             text_input: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            present_mode,
         };
         Ok((driver, Target::swapchain(gpu, surface, config)))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn detach(&self) -> Receiver<Target> {
+        let (reply, detached) = channel();
+        self.send(Message::Detach(self.window, reply));
+        detached
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn target(&self, gpu: &Gpu, surface: Surface<'static>) -> Result<Target, AppError> {
+        let pixels = (self.config.width, self.config.height);
+        let config = swapchain(gpu, &surface, pixels, self.present_mode)?;
+        Ok(Target::swapchain(gpu, surface, config))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reattach(&self, target: Target) {
+        self.send(Message::Attach(self.window, target));
     }
 
     pub(crate) fn attach(&self, target: Target) {
@@ -341,4 +343,38 @@ impl Driver {
         }
         changes
     }
+}
+
+fn swapchain(
+    gpu: &Gpu,
+    surface: &Surface<'static>,
+    (width, height): (u32, u32),
+    present_mode: Option<PresentMode>,
+) -> Result<SurfaceConfiguration, AppError> {
+    let capabilities = surface.get_capabilities(&gpu.adapter);
+    let mut config = surface
+        .get_default_config(&gpu.adapter, width.max(1), height.max(1))
+        .ok_or(AppError::UnsupportedSurface)?;
+    if let Some(linear) = capabilities
+        .formats
+        .iter()
+        .copied()
+        .find(|format| !format.is_srgb())
+    {
+        config.format = linear;
+    }
+    config.present_mode = PresentMode::AutoVsync;
+    if let Some(mode) = present_mode {
+        if capabilities.present_modes.contains(&mode)
+            || matches!(mode, PresentMode::AutoVsync | PresentMode::AutoNoVsync)
+        {
+            config.present_mode = mode;
+        } else {
+            warn(&format!(
+                "present mode {mode:?} is not supported here ({:?})",
+                capabilities.present_modes
+            ));
+        }
+    }
+    Ok(config)
 }

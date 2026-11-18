@@ -1,13 +1,80 @@
+use super::Platform;
+use super::native::clipboard::DesktopClipboard;
+use super::native::{WinitPlatform, run};
+use crate::app::{App, AppError};
 use muda::accelerator::{Key as NativeKey, KeyAccelerator, Modifiers};
 use muda::{
     Menu as NativeMenu, MenuEvent, MenuId, MenuItem as NativeItem, PredefinedMenuItem, Submenu,
 };
-use rouge_core::{Chord, Key, Menu, MenuItem, Ui};
+use rouge_core::{Chord, Clipboard, Key, Menu, MenuItem, Ui};
 use std::collections::HashMap;
+#[cfg(feature = "persist")]
+use std::env::home_dir;
+#[cfg(feature = "open-url")]
+use std::io::Error as IoError;
+#[cfg(feature = "persist")]
+use std::path::PathBuf;
+use thiserror::Error;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use winit::event::KeyEvent;
 use winit::event_loop::EventLoopProxy;
+use winit::keyboard::Key as WinitKey;
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
-pub(crate) struct NativeMenus {
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("failed to create application menu: {0}")]
+    Menu(#[from] muda::Error),
+}
+
+#[derive(Default)]
+pub(crate) struct Options;
+
+pub(crate) struct MacOs {
+    menus: NativeMenus,
+}
+
+impl Platform for MacOs {
+    type Options = Options;
+
+    const MENU_BAR: bool = false;
+    const WINDOW_MENU: bool = true;
+
+    fn run(app: App, options: Self::Options) -> Result<(), AppError> {
+        run(app, options)
+    }
+
+    #[cfg(feature = "open-url")]
+    fn open_url(url: &str) -> Result<(), IoError> {
+        open::that(url)
+    }
+}
+
+impl WinitPlatform for MacOs {
+    fn new(menus: &[Menu], waker: &EventLoopProxy<()>) -> Result<Self, AppError> {
+        let menus = NativeMenus::new(menus.to_vec(), waker.clone()).map_err(Error::Menu)?;
+        Ok(MacOs { menus })
+    }
+
+    fn clipboard() -> impl Clipboard + 'static {
+        DesktopClipboard::new()
+    }
+
+    #[cfg(feature = "persist")]
+    fn default_config_dir(name: &str) -> Option<PathBuf> {
+        home_dir().map(|home| home.join("Library/Application Support").join(name))
+    }
+
+    fn key(event: &KeyEvent) -> WinitKey {
+        event.key_without_modifiers()
+    }
+
+    fn menu_events(&mut self, ui: Option<&mut Ui>) -> bool {
+        self.menus.dispatch(ui)
+    }
+}
+
+struct NativeMenus {
     _menu: NativeMenu,
     actions: HashMap<MenuId, MenuItem>,
     quit: MenuId,
@@ -15,7 +82,7 @@ pub(crate) struct NativeMenus {
 }
 
 impl NativeMenus {
-    pub(crate) fn new(menus: Vec<Menu>, proxy: EventLoopProxy<()>) -> Result<Self, muda::Error> {
+    fn new(menus: Vec<Menu>, proxy: EventLoopProxy<()>) -> Result<Self, muda::Error> {
         let menu = NativeMenu::new();
         let app = Submenu::new("Application", true);
         app.append(&PredefinedMenuItem::about(None, None))?;
@@ -49,7 +116,7 @@ impl NativeMenus {
         })
     }
 
-    pub(crate) fn dispatch(&mut self, mut ui: Option<&mut Ui>) -> bool {
+    fn dispatch(&mut self, mut ui: Option<&mut Ui>) -> bool {
         let mut quit = false;
         while let Ok(id) = self.events.try_recv() {
             if id == self.quit {

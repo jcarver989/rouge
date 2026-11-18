@@ -1,29 +1,82 @@
-#[cfg(not(target_os = "ios"))]
-mod clipboard;
-#[cfg(target_os = "macos")]
-mod menu;
-#[cfg(target_os = "ios")]
-mod pasteboard;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub(crate) mod clipboard;
 mod runner;
-
-#[cfg(not(target_os = "ios"))]
-use clipboard::NativeClipboard;
-#[cfg(target_os = "ios")]
-use pasteboard::NativeClipboard;
 
 pub(crate) use runner::run;
 
-use super::{LINE_SCROLL, css_cursor};
+use super::{LINE_SCROLL, Platform, css_cursor};
+use crate::app::AppError;
 use rouge_core::{
-    Appearance, Cursor, Key, Modifiers, PointerButton, ResizeEdge, TouchPhase as UiTouchPhase,
-    WindowCommand,
+    Appearance, Clipboard, Cursor, Key, Menu, Modifiers, PointerButton, ResizeEdge,
+    TouchPhase as UiTouchPhase, Ui, WindowCommand,
 };
-use rouge_render::{Point, Size};
+use rouge_render::{Edges, Point, Size};
+#[cfg(feature = "persist")]
+use std::env::var_os;
+#[cfg(feature = "persist")]
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{MouseButton, MouseScrollDelta, TouchPhase};
-use winit::keyboard::{ModifiersState, NamedKey};
+use winit::event::{KeyEvent, MouseButton, MouseScrollDelta, TouchPhase};
+use winit::event_loop::{EventLoop, EventLoopProxy};
+use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, ResizeDirection, Theme, Window};
+
+pub(crate) trait WinitPlatform: Platform + Sized {
+    const SURFACE_LOST_ON_SUSPEND: bool = false;
+
+    fn new(menus: &[Menu], waker: &EventLoopProxy<()>) -> Result<Self, AppError>;
+
+    fn clipboard() -> impl Clipboard + 'static;
+
+    #[cfg(feature = "persist")]
+    fn default_config_dir(name: &str) -> Option<PathBuf>;
+
+    #[cfg(feature = "persist")]
+    fn config_dir(name: &str) -> Option<PathBuf> {
+        var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| dir.join(name.to_lowercase()))
+            .or_else(|| Self::default_config_dir(name))
+    }
+
+    fn event_loop(_options: Self::Options) -> Result<EventLoop<()>, AppError> {
+        Ok(EventLoop::new()?)
+    }
+
+    fn surface_size(window: &Window) -> PhysicalSize<u32> {
+        window.inner_size()
+    }
+
+    fn safe_area(_window: &Window) -> Edges {
+        Edges::ZERO
+    }
+
+    fn appearance(window: &Window) -> Appearance {
+        appearance(window.theme())
+    }
+
+    fn refresh_millihertz(window: &Window) -> Option<u32> {
+        window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+    }
+
+    fn key(event: &KeyEvent) -> WinitKey {
+        event.logical_key.clone()
+    }
+
+    fn unhandled_key(_event: &KeyEvent) {}
+
+    fn sync(_window: &Window, _ui: &mut Ui) {}
+
+    fn menu_events(&mut self, _ui: Option<&mut Ui>) -> bool {
+        false
+    }
+
+    fn exit() {}
+}
 
 const MOMENTUM_GAP: Duration = Duration::from_millis(50);
 
@@ -213,12 +266,4 @@ pub(crate) fn window_command(window: &Window, command: WindowCommand) {
         | WindowCommand::Menu(_)
         | WindowCommand::Navigate(_) => {}
     }
-}
-
-pub(crate) fn warn(message: &str) {
-    eprintln!("rouge: {message}");
-}
-
-pub(crate) fn log(message: &str) {
-    eprintln!("{message}");
 }
