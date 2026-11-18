@@ -38,6 +38,8 @@ mod tag_input;
 pub mod testing;
 mod toast;
 pub mod tokens;
+#[cfg(feature = "markdown")]
+mod transcript;
 mod tree;
 pub mod typography;
 mod util;
@@ -93,6 +95,8 @@ pub use syntax::{CODE_WRAP, syntax_spans};
 pub use tabs::{Tabs, tabs};
 pub use tag_input::{TagInput, tag_input};
 pub use toast::{Toast, Toasts, toast};
+#[cfg(feature = "markdown")]
+pub use transcript::{Composer, Message, Transcript, composer, transcript};
 pub use tree::{TreeRow, indent, tree_row};
 pub use typography::UiStyles;
 pub use window_chrome::window_chrome;
