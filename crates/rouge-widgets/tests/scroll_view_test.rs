@@ -2,8 +2,9 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestError, TestResult, TestUi, WHITE};
+use rouge_core::view;
 use rouge_core::{
-    Point, PointerButton, ScrollState, Scrollable, Styled, div, scroll, virtual_list,
+    InputKind, Point, PointerButton, ScrollState, Scrollable, Styled, div, scroll, virtual_list,
 };
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
@@ -174,5 +175,39 @@ fn overflow_shows_a_thumb_that_tracks_only_its_own_list() -> TestResult {
     ui.drag_on("scroll-thumb-vertical", Point::new(thumb.x, 180.0))?;
     assert!((state.get().offset.y - 740.0).abs() < 1.0);
     assert!(other.get().offset.y.abs() < 0.01);
+    Ok(())
+}
+
+#[test]
+fn pulling_past_the_top_starts_a_refresh_that_the_caller_ends() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let refreshing = signal(false);
+    let mut ui = component_test()
+        .size(300.0, 400.0)
+        .input(InputKind::Touch)
+        .build(move || {
+            view! {
+                <scroll_view refresh=refreshing size_full>
+                    <scroll>
+                        <div h=2000.0/>
+                    </scroll>
+                </scroll_view>
+            }
+        });
+    ui.swipe(Point::new(150.0, 100.0), Point::new(150.0, 120.0));
+    ui.run(2.0);
+    assert!(!refreshing.get(), "a short pull springs back");
+    assert_eq!(ui.bounds_of("refresh-indicator"), None);
+    ui.swipe(Point::new(150.0, 100.0), Point::new(150.0, 300.0));
+    assert!(refreshing.get(), "pulled past the threshold");
+    ui.run(2.0);
+    assert!(
+        ui.bounds_of("refresh-spinner").is_some(),
+        "the spinner stays while refreshing"
+    );
+    refreshing.set(false);
+    ui.run(2.0);
+    assert_eq!(ui.bounds_of("refresh-indicator"), None);
+    assert_eq!(ui.compositor_frames(1.0)?, 0, "nothing animates at rest");
     Ok(())
 }

@@ -1,5 +1,5 @@
-use rouge_core::testing::{TestResult, TestUi};
-use rouge_core::{Length, Styled, View, div, pct, px, text, view};
+use rouge_core::testing::{TestError, TestResult, TestUi, assert_near};
+use rouge_core::{Color, Length, Point, Styled, UiPalette, View, div, pct, px, text, view};
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::*;
@@ -284,6 +284,47 @@ fn a_long_list_beside_a_preview_scrolls_inside_the_picker() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn one_highlight_layer_slides_between_rows_and_scrolls_with_them() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle) = component_test().size(600.0, 460.0).build_with(|| {
+        let items = (0..40)
+            .map(|i| PickerItem::new(format!("option-{i}"), format!("Item {i}")))
+            .collect();
+        let handle = SearchPickerHandle::new(items, |_| {});
+        let picker =
+            view! { <search_picker handle test_id="picker" max_list_height=Length::Px(112.0)/> };
+        (picker, handle)
+    });
+    ui.run(0.5);
+    assert!(covers(&mut ui, "option-0")?);
+    let accent = UiPalette::light().map(Color::from).accent.to_rgba8();
+    let row = ui.rect_of("option-0")?;
+    assert_near(
+        ui.pixel(row.origin.x as u32 + 2, row.center().y as u32)?,
+        accent,
+        "the highlight is a flat accent fill",
+    );
+    let created = ui.stats().elements_created;
+    handle.move_highlight(2);
+    ui.advance(0.0);
+    assert!(ui.is_animating(), "the highlight slides");
+    ui.run(0.5);
+    assert!(covers(&mut ui, "option-2")?);
+    assert_eq!(ui.stats().elements_created, created, "the same layer moved");
+    let before = ui.rect_of("option-2")?;
+    ui.scroll_on("picker-results", Point::new(0.0, -20.0))?;
+    ui.advance(1.0 / 60.0);
+    assert_ne!(ui.rect_of("option-2")?, before, "the list scrolled");
+    assert!(
+        covers(&mut ui, "option-2")?,
+        "scrolling carries the highlight with its row"
+    );
+    ui.run(0.5);
+    assert_eq!(ui.compositor_frames(1.0)?, 0, "nothing animates at rest");
+    Ok(())
+}
+
 struct SearchPickerTest {
     items: Vec<PickerItem>,
     unfiltered: bool,
@@ -328,6 +369,15 @@ impl SearchPickerTest {
         });
         (ui, handle, events)
     }
+}
+
+fn covers(ui: &mut TestUi, row: &str) -> Result<bool, TestError> {
+    let (highlight, row) = (ui.rect_of("picker-highlight")?, ui.rect_of(row)?);
+    let near = |a: f32, b: f32| (a - b).abs() < 0.1;
+    Ok(near(highlight.origin.x, row.origin.x)
+        && near(highlight.origin.y, row.origin.y)
+        && near(highlight.size.width, row.size.width)
+        && near(highlight.size.height, row.size.height))
 }
 
 fn visible<const N: usize>(ui: &mut TestUi, ids: [&'static str; N]) -> Vec<&'static str> {

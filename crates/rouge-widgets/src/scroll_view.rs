@@ -1,10 +1,17 @@
-use crate::tokens::{Radius, SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH};
-use rouge_core::component;
-use rouge_core::{
-    BuildCx, DelegateStyle, Div, DragPhase, Point, PointerButton, PointerEvent, ScrollLinked,
-    ScrollState, Scrollable, Styled, Theme, View, div, show,
+use crate::icon::{Icon, IconName};
+use crate::material::{Material, MaterialExt};
+use crate::popover::POPPED;
+use crate::progress::spinning;
+use crate::tokens::{
+    GROUP_HEIGHT, ICON_SIZE, Pace, Radius, SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH,
 };
-use rouge_reactive::{Signal, memo, signal};
+use rouge_core::component;
+use rouge_core::view;
+use rouge_core::{
+    BuildCx, DelegateStyle, Div, DragPhase, Point, PointerButton, PointerEvent, Role, ScrollLinked,
+    ScrollState, Scrollable, Styled, Theme, View, div, dynamic, show,
+};
+use rouge_reactive::{Signal, effect, memo, signal};
 use std::cell::Cell;
 
 const THUMB_INSET: f32 = 2.0;
@@ -26,6 +33,7 @@ pub struct ScrollView<T> {
     root: Div,
     content: T,
     state: Option<Signal<ScrollState>>,
+    refreshing: Option<Signal<bool>>,
 }
 
 #[component]
@@ -34,6 +42,14 @@ pub fn scroll_view<T: Scrollable + Styled>(children: T) -> ScrollView<T> {
         root: div().relative(),
         content: children,
         state: None,
+        refreshing: None,
+    }
+}
+
+impl<T> ScrollView<T> {
+    pub fn refresh(mut self, refreshing: Signal<bool>) -> Self {
+        self.refreshing = Some(refreshing);
+        self
     }
 }
 
@@ -54,12 +70,63 @@ impl<T: Scrollable + Styled> View for ScrollView<T> {
     fn build(self, cx: &mut BuildCx<'_>) {
         let state = self.state.unwrap_or_else(|| signal(ScrollState::default()));
         let bars = [Axis::Vertical, Axis::Horizontal].map(|axis| scrollbar_if_needed(state, axis));
+        let refresher = self
+            .refreshing
+            .map(|refreshing| refresher(state, refreshing));
         self.root
             .child(self.content.size_full().scroll_state(state))
             .children(bars)
+            .child(refresher)
             .build(cx);
     }
 }
+
+fn refresher(state: Signal<ScrollState>, refreshing: Signal<bool>) -> impl View {
+    let pull = memo(move || (-state.get().offset.y).max(0.0));
+    effect(move || {
+        if pull.get() >= REFRESH_PULL && !refreshing.get_untracked() {
+            refreshing.set(true);
+        }
+    });
+    let badge = move || {
+        let mark = view! {
+            <dynamic>
+                {if refreshing.get() {
+                    spinning(ICON_SIZE, Role::Accent)
+                        .test_id("refresh-spinner")
+                        .into_any()
+                } else {
+                    Icon::new(IconName::ArrowDown, Role::TextMuted).into_any()
+                }}
+            </dynamic>
+        };
+        let disc = view! {
+            <div flex items_center justify_center size=GROUP_HEIGHT material=Material::Glass
+                 rounded=Radius::Full>
+                {mark}
+            </div>
+        };
+        view! {
+            <div test_id="refresh-indicator" absolute top=8.0 left=0.0 right=0.0 flex justify_center
+                 pass_through
+                 opacity={move || {
+                     if refreshing.get() {
+                         1.0
+                     } else {
+                         (pull.get() / REFRESH_PULL).min(1.0)
+                     }
+                 }}>
+                {disc}
+            </div>
+        }
+    };
+    view! {
+        <show when={move || refreshing.get() || pull.get() > 0.0} children=badge
+             enter=(POPPED, Pace::Enter) exit=(POPPED, Pace::Exit)/>
+    }
+}
+
+const REFRESH_PULL: f32 = 48.0;
 
 #[derive(Clone, Copy)]
 enum Axis {

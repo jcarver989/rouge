@@ -2,9 +2,11 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::TestResult;
+use rouge_core::view;
 use rouge_core::{Point, PointerButton, Rect, Styled, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::slider;
+use rouge_widgets::testing::component_test;
 
 #[test]
 fn slider_follows_the_pointer_snaps_to_steps_and_takes_arrow_keys() {
@@ -53,5 +55,51 @@ fn the_thumb_is_placed_by_layout_alone_on_the_first_frame() -> TestResult {
     value.set(100.0);
     ui.advance(0.0);
     assert_eq!(ui.bounds(219.0, 18.0)?, Rect::new(211.0, 10.0, 16.0, 16.0));
+    Ok(())
+}
+
+#[test]
+fn a_formatted_slider_shows_a_value_tip_while_hovered_or_dragged() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let value = signal(50.0f32);
+    let mut ui = component_test().size(300.0, 120.0).build(move || {
+        view! {
+            <div pt=60.0 px=10.0>
+                <slider value=value test_id="volume" range={(0.0, 100.0)} step=1.0
+                     format={|value| format!("{value:.0}%")} w=216.0/>
+            </div>
+        }
+    });
+    assert!(ui.bounds_of("volume-tip").is_none());
+    assert_eq!(
+        ui.compositor_frames(1.0)?,
+        0,
+        "an idle slider draws nothing"
+    );
+    let center = ui.center_of("volume")?;
+    ui.pointer_moved(center);
+    ui.run(0.5);
+    let tip = ui.rect_of("volume-tip")?;
+    assert!(
+        tip.max().y <= ui.rect_of("volume")?.origin.y,
+        "above the thumb"
+    );
+    assert!(
+        (tip.center().x - center.x).abs() <= 2.0,
+        "centred on the thumb: {tip:?} over {center:?}"
+    );
+    assert!(ui.text_bounds("50%").is_some());
+    ui.pointer_down(PointerButton::Primary);
+    ui.pointer_moved(center + Point::new(50.0, 80.0));
+    ui.run(0.5);
+    assert!(ui.text_bounds("75%").is_some(), "the tip follows the value");
+    assert!(
+        ui.bounds_of("volume-tip").is_some(),
+        "it stays while dragging outside"
+    );
+    ui.pointer_up(PointerButton::Primary);
+    ui.run(0.5);
+    assert!(ui.bounds_of("volume-tip").is_none());
+    assert_eq!(ui.compositor_frames(1.0)?, 0);
     Ok(())
 }
