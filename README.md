@@ -14,7 +14,7 @@ Rouge is heavily inspired by [Leptos](https://leptos.dev/) and [GPUI](https://gp
 - **Effects are built in.** You can use blur, backdrop blur, liquid glass, shadows, masks and blend modes. You can also write your own effects in WGSL.
 - **One codebase for three platforms.** The same code runs on macOS, on Linux and in the browser (WebAssembly and WebGPU).
 - **Two ways to write views.** Use Rust builder chains, or use JSX-style markup with `view!`. Both make the same calls, so you can use them together.
-- **A full set of widgets.** Rouge has buttons, text inputs, menus, popovers, tabs, modals, sliders and more. Markdown and syntax highlighting are optional features.
+- **A full set of widgets.** Rouge has buttons, text inputs, menus, popovers, tabs, modals, sheets, sliders and more. On a phone-sized touch window the same popovers, menus and modals present as bottom sheets, and tabs become a floating tab bar. Markdown and syntax highlighting are optional features.
 - **Easy to test.** `TestUi` runs your UI without a window. A test can click, type and press keys, and then examine the result.
 
 ## Quick start
