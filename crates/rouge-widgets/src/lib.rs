@@ -1,3 +1,6 @@
+mod avatar;
+mod badge;
+mod breadcrumb;
 mod choice;
 mod code_input;
 mod components;
@@ -33,12 +36,16 @@ mod tabs;
 mod tag_input;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
+mod toast;
 pub mod tokens;
 mod tree;
 pub mod typography;
 mod util;
 mod window_chrome;
 
+pub use avatar::{Avatar, AvatarGroup, avatar, avatar_group};
+pub use badge::badge;
+pub use breadcrumb::{Breadcrumb, breadcrumb};
 pub use choice::{Radio, Toggle, radio, toggle};
 pub use code_input::{CodeInput, code_input};
 pub use components::{
@@ -85,6 +92,7 @@ pub use sortable::{Sortable, sortable};
 pub use syntax::{CODE_WRAP, syntax_spans};
 pub use tabs::{Tabs, tabs};
 pub use tag_input::{TagInput, tag_input};
+pub use toast::{Toast, Toasts, toast};
 pub use tree::{TreeRow, indent, tree_row};
 pub use typography::UiStyles;
 pub use window_chrome::window_chrome;
