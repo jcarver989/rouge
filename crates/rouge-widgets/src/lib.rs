@@ -1,6 +1,7 @@
 mod choice;
 mod code_input;
 mod components;
+mod data_table;
 mod effects;
 mod field;
 mod fonts;
@@ -25,6 +26,7 @@ mod scroll_view;
 mod sheet;
 mod skeleton;
 mod slider;
+mod sortable;
 #[cfg(feature = "syntax")]
 mod syntax;
 mod tabs;
@@ -44,6 +46,9 @@ pub use components::{
     ListRow, Modal, RowAction, SectionHeader, Segment, SegmentedControl, action_bar, backdrop,
     button, checkbox, disclosure, empty_state, icon_button, list_row, modal, muted_text,
     notification, row_action, section_header, segment, segmented_control,
+};
+pub use data_table::{
+    Column, DataTable, IndexedRows, Sort, TableRows, column, data_table, table_rows,
 };
 pub use effects::BusyExt;
 pub use field::{Field, field};
@@ -75,6 +80,7 @@ pub use scroll_view::{ScrollView, scroll_view, vertical_scrollbar};
 pub use sheet::{Detent, Sheet, sheet};
 pub use skeleton::skeleton;
 pub use slider::{Slider, slider};
+pub use sortable::{Sortable, sortable};
 #[cfg(feature = "syntax")]
 pub use syntax::{CODE_WRAP, syntax_spans};
 pub use tabs::{Tabs, tabs};

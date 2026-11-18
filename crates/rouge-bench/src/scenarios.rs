@@ -2,7 +2,7 @@ use rouge::core::testing::TestUi;
 use rouge::core::{AnyView, KeyEvent, View, Wake};
 use rouge::markdown::{MarkdownDocument, MarkdownStream};
 use rouge::prelude::*;
-use rouge::widgets::{button, markdown};
+use rouge::widgets::{button, column, data_table, markdown, table_rows};
 use std::fmt::Write;
 
 pub(crate) const SIZE: Size = Size::new(800.0, 600.0);
@@ -35,6 +35,7 @@ pub(crate) const SCENARIOS: &[Scenario] = &[
     ("glass_panels", || glass(4)),
     ("scroll_list", scroll_list),
     ("scroll_fling", scroll_fling),
+    ("data_table_scroll", data_table_scroll),
     ("layout_flat", || relayout(false)),
     ("layout_nested", || relayout(true)),
     ("resize", resize),
@@ -191,6 +192,25 @@ fn scroll_list() -> Staged {
         striped(Color::rgb(shade)).child(label)
     };
     let view = virtual_list(|| 100_000, ROW_HEIGHT, row).size_full();
+    scrolled(view, CENTER, 1000)
+}
+
+fn data_table_scroll() -> Staged {
+    let rows = table_rows(|| 100_000, |index| index);
+    let table = view! {
+        <data_table rows=rows
+             column=column("Title", |index: &usize| view! { <text>{format!("Track {index}")}</text> }).flex(1.4)
+             column={column("Artist", |index: &usize| {
+                 view! { <text>{format!("Artist {}", index % 97)}</text> }
+             })}
+             column={column("Plays", |index: &usize| {
+                 view! { <text>{(index * 7919 % 100_000).to_string()}</text> }
+             })}
+             column={column("Length", |index: &usize| {
+                 view! { <text>{format!("{}:{:02}", 2 + index % 5, index % 60)}</text> }
+             })}/>
+    };
+    let view = view! { <div size_full flex col>{table}</div> };
     scrolled(view, CENTER, 1000)
 }
 
