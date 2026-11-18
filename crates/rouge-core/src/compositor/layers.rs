@@ -74,8 +74,18 @@ impl Layers {
         self.model.remove_motion(id);
     }
 
-    pub fn animate_motion(&mut self, id: MotionId, target: f32, timing: Timing, done: Completion) {
-        self.drive(id, done, |motion, at| motion.animate_to(target, timing, at));
+    pub fn animate_motion(
+        &mut self,
+        id: MotionId,
+        target: f32,
+        velocity: Option<f32>,
+        timing: Timing,
+        done: Completion,
+    ) {
+        self.drive(id, done, |motion, at| match (velocity, timing) {
+            (Some(velocity), Timing::Spring(spring)) => motion.fling(velocity, target, spring, at),
+            _ => motion.animate_to(target, timing, at),
+        });
     }
 
     pub fn decay_motion(&mut self, id: MotionId, velocity: f32, decay: Decay, done: Completion) {

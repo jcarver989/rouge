@@ -1,6 +1,7 @@
 use crate::animation::{
     Animated, Decay, Keyframes, LayerProp, LayoutTransition, Pose, Spring, Timing,
 };
+use crate::motion::MotionMap;
 use rouge_render::{Affine, Corners, EffectInstance, Point, Rect, Size, SurfaceId};
 use rustc_hash::FxHashMap;
 use slotmap::{SecondaryMap, SlotMap, new_key_type};
@@ -126,7 +127,7 @@ impl ScrollLinked {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Value {
     Own(Animated),
-    Motion(MotionId),
+    Motion(MotionId, MotionMap),
 }
 
 type Motions = FxHashMap<MotionId, Animated>;
@@ -329,17 +330,19 @@ impl Layer {
         });
         keyed.unwrap_or_else(|| match self.props[prop as usize] {
             Value::Own(animated) => animated.value(at),
-            Value::Motion(id) => motions.get(&id).map_or(prop.initial(), |m| m.value(at)),
+            Value::Motion(id, map) => motions
+                .get(&id)
+                .map_or(prop.initial(), |m| map.apply(m.value(at))),
         })
     }
 
     fn own(&mut self, prop: LayerProp, motions: &Motions, at: f64) -> &mut Animated {
-        if let Value::Motion(_) = self.props[prop as usize] {
+        if let Value::Motion(..) = self.props[prop as usize] {
             self.props[prop as usize] = Value::Own(Animated::new(self.value(prop, motions, at)));
         }
         match &mut self.props[prop as usize] {
             Value::Own(animated) => animated,
-            Value::Motion(_) => unreachable!("the prop was just detached from its motion"),
+            Value::Motion(..) => unreachable!("the prop was just detached from its motion"),
         }
     }
 
@@ -564,7 +567,7 @@ impl Layer {
     fn prop_ends(&self) -> impl Iterator<Item = Option<f64>> + '_ {
         self.props.iter().map(|value| match value {
             Value::Own(animated) => animated.end(),
-            Value::Motion(_) => None,
+            Value::Motion(..) => None,
         })
     }
 
@@ -778,10 +781,9 @@ impl LayerModel {
     pub fn is_layer_moving(&self, id: LayerId) -> bool {
         self.layers.get(id).is_some_and(|layer| {
             layer.animating
-                || layer
-                    .props
-                    .iter()
-                    .any(|value| matches!(value, Value::Motion(motion) if self.is_moving(*motion)))
+                || layer.props.iter().any(
+                    |value| matches!(value, Value::Motion(motion, _) if self.is_moving(*motion)),
+                )
         })
     }
 
@@ -872,8 +874,18 @@ impl LayerModel {
     }
 
     pub fn bind_prop(&mut self, id: LayerId, prop: LayerProp, motion: MotionId) {
+        self.bind_mapped(id, prop, motion, MotionMap::IDENTITY);
+    }
+
+    pub(crate) fn bind_mapped(
+        &mut self,
+        id: LayerId,
+        prop: LayerProp,
+        motion: MotionId,
+        map: MotionMap,
+    ) {
         self.set(id, |layer, _| {
-            layer.props[prop as usize] = Value::Motion(motion);
+            layer.props[prop as usize] = Value::Motion(motion, map);
         });
     }
 

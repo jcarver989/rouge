@@ -48,7 +48,7 @@ pub use focus::{FocusHandle, focus_handle};
 pub use image::{Fit, Image, ImageLoadError, ImageSource, decode_image, image};
 pub use keymap::use_binding;
 pub use length::{Length, auto, pct, px};
-pub use motion::{Animation, Completion, Motion, MotionProp, motion};
+pub use motion::{Animation, Completion, MappedMotion, Motion, MotionProp, motion};
 pub use path::{Path, PathBuilder};
 pub use prop::{AnyEffect, IntoProp, Prop, PropFrom};
 pub use rouge_theme::{Rgba, Role, UiPalette};

@@ -39,6 +39,7 @@ pub(crate) enum MotionOp {
     Set(f32),
     Animate {
         target: f32,
+        velocity: Option<f32>,
         timing: Timing,
         done: Completion,
     },
@@ -107,17 +108,32 @@ impl Motion {
     }
 
     pub fn animate_to(&self, target: f32, timing: impl Into<Timing>) -> Animation {
+        self.animate(target, None, timing.into())
+    }
+
+    pub fn fling_to(&self, target: f32, velocity: f32, timing: impl Into<Timing>) -> Animation {
+        self.animate(target, Some(velocity), timing.into())
+    }
+
+    fn animate(&self, target: f32, velocity: Option<f32>, timing: Timing) -> Animation {
         let (done, animation) = Animation::pending();
-        let timing = timing.into();
         self.command(
             MotionOp::Animate {
                 target,
+                velocity,
                 timing,
                 done,
             },
             None,
         );
         animation
+    }
+
+    pub fn map(self, from: [f32; 2], to: [f32; 2]) -> MappedMotion {
+        MappedMotion {
+            motion: self,
+            map: MotionMap::between(from, to),
+        }
     }
 
     pub fn decay(&self, velocity: f32, decay: Decay) -> Animation {
@@ -195,9 +211,64 @@ impl Future for Animation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MotionMap {
+    scale: f32,
+    offset: f32,
+    low: f32,
+    high: f32,
+}
+
+impl MotionMap {
+    pub(crate) const IDENTITY: MotionMap = MotionMap {
+        scale: 1.0,
+        offset: 0.0,
+        low: f32::NEG_INFINITY,
+        high: f32::INFINITY,
+    };
+
+    fn between([start, end]: [f32; 2], [first, last]: [f32; 2]) -> Self {
+        let span = end - start;
+        let scale = if span == 0.0 {
+            0.0
+        } else {
+            (last - first) / span
+        };
+        MotionMap {
+            scale,
+            offset: first - start * scale,
+            low: first.min(last),
+            high: first.max(last),
+        }
+    }
+
+    pub(crate) fn apply(self, value: f32) -> f32 {
+        (value * self.scale + self.offset).clamp(self.low, self.high)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MappedMotion {
+    motion: Motion,
+    map: MotionMap,
+}
+
+impl MappedMotion {
+    pub(crate) fn binding(&self) -> (MotionId, MotionMap) {
+        (self.motion.id(), self.map)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MotionProp {
     Value(f32),
     Motion(Motion),
+    Mapped(MappedMotion),
+}
+
+impl PropFrom<MappedMotion> for MotionProp {
+    fn prop_from(value: MappedMotion) -> Self {
+        MotionProp::Mapped(value)
+    }
 }
 
 impl PropFrom<f32> for MotionProp {

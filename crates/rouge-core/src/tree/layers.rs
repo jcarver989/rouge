@@ -111,6 +111,10 @@ impl Tree {
         };
         match value {
             MotionProp::Motion(motion) => self.layers.bind_prop(layer, prop, motion.id()),
+            MotionProp::Mapped(mapped) => {
+                let (motion, map) = mapped.binding();
+                self.layers.bind_mapped(layer, prop, motion, map);
+            }
             MotionProp::Value(value) => self.layers.set_prop(layer, prop, value, animate),
         }
         self.mark(Dirty::Composite);
@@ -166,9 +170,10 @@ impl Tree {
             MotionOp::Set(value) => layers.set_motion(id, value),
             MotionOp::Animate {
                 target,
+                velocity,
                 timing,
                 done,
-            } => layers.animate_motion(id, target, timing, done),
+            } => layers.animate_motion(id, target, velocity, timing, done),
             MotionOp::Decay {
                 velocity,
                 decay,

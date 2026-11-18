@@ -103,7 +103,7 @@ const OPS: [(f64, Op); 4] = [
         c.create_motion(MotionId(1), 0.0);
         c.bind_prop(l[2], LayerProp::Opacity, MotionId(1));
         let snappy = Spring::snappy().into();
-        c.animate_motion(MotionId(1), 1.0, snappy, Animation::pending().0);
+        c.animate_motion(MotionId(1), 1.0, None, snappy, Animation::pending().0);
         c.create_motion(MotionId(2), 0.0);
         c.decay_motion(MotionId(2), 300.0, Decay::new(), Animation::pending().0);
     }),
@@ -115,7 +115,7 @@ const OPS: [(f64, Op); 4] = [
             .at(1.0, |p| p.rotate(90.0));
         c.animate(l[1], spin.duration(0.6));
         let tween = Tween::new(0.3).into();
-        c.animate_motion(MotionId(1), 0.2, tween, Animation::pending().0);
+        c.animate_motion(MotionId(1), 0.2, None, tween, Animation::pending().0);
     }),
     (0.31, |c, l| {
         c.set_scroll_extent(l[2], Size::new(100.0, 100.0), Size::new(100.0, 180.0));

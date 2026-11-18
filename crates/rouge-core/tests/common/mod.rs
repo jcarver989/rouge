@@ -211,7 +211,8 @@ impl Stage {
 
     pub(crate) fn animate(&mut self, motion: MotionId, target: f32, timing: Timing) -> Animation {
         let (done, animation) = Animation::pending();
-        self.layers.animate_motion(motion, target, timing, done);
+        self.layers
+            .animate_motion(motion, target, None, timing, done);
         animation
     }
 

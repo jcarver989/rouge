@@ -1,5 +1,6 @@
 use rouge_core::Wake;
 use rouge_core::testing::{LINEAR, RED, TestResult, TestUi, TestUiBuilder, WHITE};
+use rouge_core::view;
 use rouge_core::{
     Animation, Color, Decay, DragPhase, Motion, Point, PointerButton, Spring, Styled, div, motion,
     show,
@@ -85,6 +86,61 @@ fn stop_and_retarget_interrupt_a_running_animation() -> TestResult {
     ui.advance(0.05);
     assert_eq!(poll(pin!(second)), Poll::Ready(false), "so does stopping");
     assert_eq!(x.get(), held, "stop holds the current value");
+    assert_eq!(ui.next_frame(), Wake::Idle);
+    Ok(())
+}
+
+#[test]
+fn a_mapped_motion_drives_a_second_prop_from_the_same_value() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, y) = TestUiBuilder::default()
+        .clear(Color::WHITE)
+        .build_with(move || {
+            let y = motion(0.0);
+            let moving = view! { <div size=20.0 bg=Color::RED translate_x=y/> };
+            let fading = view! {
+                <div absolute left=0.0 top=40.0 size=20.0 bg=Color::RED opacity=y.map([0.0, 100.0], [1.0, 0.0])/>
+            };
+            (view! {
+                <div size_full>
+                    {moving}
+                    {fading}
+                </div>
+            }, y)
+        });
+    assert_eq!(ui.pixel(10, 50)?, RED, "the start of the range");
+    y.set(50.0);
+    ui.advance(0.0);
+    let half = ui.pixel(10, 50)?;
+    assert!(
+        half[1].abs_diff(128) <= 2 && half[0] == 255,
+        "half way through the range is half opacity: {half:?}"
+    );
+    y.set(150.0);
+    ui.advance(0.0);
+    assert_eq!(
+        ui.pixel(10, 50)?,
+        WHITE,
+        "the output is clamped to its range"
+    );
+    assert_eq!(ui.first_x(RED, 10)?, 150, "the unmapped binding is not");
+    Ok(())
+}
+
+#[test]
+fn fling_to_starts_a_spring_from_the_release_velocity() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, x) = moving_box(50.0);
+    let _settled = x.fling_to(50.0, 400.0, Spring::smooth());
+    ui.advance(0.0);
+    ui.advance(0.05);
+    assert!(
+        x.get() > 55.0,
+        "the value leaves its target in the direction of the velocity: {}",
+        x.get()
+    );
+    ui.run(3.0);
+    assert_eq!(x.get(), 50.0, "and settles back on it");
     assert_eq!(ui.next_frame(), Wake::Idle);
     Ok(())
 }
