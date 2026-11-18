@@ -1,6 +1,6 @@
 use crate::fonts::{CODE_FONT, UI_FONT};
 use crate::syntax::{CODE_WRAP, syntax_spans};
-use crate::tokens::Radius;
+use crate::tokens::{Radius, Space};
 use crate::typography::{CODE, READING, TITLE, preset};
 use crate::{IconName, UiStyles, icon_button};
 use rouge_core::Role;
@@ -56,14 +56,14 @@ impl MarkdownPaint {
     }
 
     #[must_use]
-    pub fn palette<U>(mut self, palette: impl IntoProp<MarkdownPalette, U>) -> Self {
+    pub fn palette<T>(mut self, palette: impl IntoProp<MarkdownPalette, T>) -> Self {
         let palette = palette.into_prop();
         self.palette = memo(move || palette.get());
         self
     }
 
     #[must_use]
-    pub fn syntax<U>(mut self, syntax: impl IntoProp<SyntaxTheme, U>) -> Self {
+    pub fn syntax<T>(mut self, syntax: impl IntoProp<SyntaxTheme, T>) -> Self {
         let syntax = syntax.into_prop();
         self.syntax = memo(move || syntax.get());
         self
@@ -139,12 +139,12 @@ impl Markdown {
         self
     }
 
-    pub fn palette<U>(mut self, palette: impl IntoProp<MarkdownPalette, U>) -> Self {
+    pub fn palette<T>(mut self, palette: impl IntoProp<MarkdownPalette, T>) -> Self {
         self.paint = self.paint.palette(palette);
         self
     }
 
-    pub fn syntax<U>(mut self, syntax: impl IntoProp<SyntaxTheme, U>) -> Self {
+    pub fn syntax<T>(mut self, syntax: impl IntoProp<SyntaxTheme, T>) -> Self {
         self.paint = self.paint.syntax(syntax);
         self
     }
@@ -440,7 +440,7 @@ impl MarkdownRow {
                 .py(0.0)
                 .flex()
                 .row()
-                .gap(8.0)
+                .gap(Space::X2)
                 .child(view! {
                     <div min_w=16.0 flex_none muted>
                         {fragments.next()}
@@ -452,8 +452,8 @@ impl MarkdownRow {
                     </div>
                 }),
             Kind::Quote { rows } => view! {
-                <div px=8.0>
-                    <div pl=8.0 border_l=2.0 border_color=paint.markdown(|m| m.quote)
+                <div px=Space::X2>
+                    <div pl=Space::X2 border_l=2.0 border_color=paint.markdown(|m| m.quote)
                          secondary flex col>
                         {..rows.iter().map(|row| view! {
                             <div pt=row.gap pl=row.indent() flex col>{row.block(paint)}</div>
@@ -482,7 +482,7 @@ impl MarkdownRow {
                 if *header { row.bg(Role::Surface) } else { row }
             }
             Kind::Rule => view! {
-                <div py=12.0><div w_full border_t=1.0 border_color=Role::Border/></div>
+                <div py=Space::X3><div w_full border_t=1.0 border_color=Role::Border/></div>
             },
             Kind::Html { .. } => paint
                 .prose()
@@ -592,12 +592,7 @@ enum Kind {
 
 #[component]
 fn prose() -> Div {
-    div()
-        .px(8.0)
-        .py(BLOCK_PADDING_Y)
-        .rounded(Radius::Inner)
-        .min_w(0.0)
-        .reading()
+    view! { <div px=Space::X2 py=BLOCK_PADDING_Y rounded=Radius::Inner min_w=0.0 reading/> }
 }
 
 fn corners(top: bool, bottom: bool) -> Corners {
@@ -626,7 +621,7 @@ fn code_header(code: &Arc<MarkdownCodeBlock>) -> Div {
     let empty = code.lines().is_empty();
     let (code, window) = (Arc::clone(code), window_handle());
     let header = view! {
-        <div h=CODE_HEADER_HEIGHT pl=16.0 pr=4.0 flex row items_center justify_between border_t=1.0
+        <div h=CODE_HEADER_HEIGHT pl=Space::X4 pr=Space::X1 flex row items_center justify_between border_t=1.0
              border_l=1.0 border_r=1.0 border_color=Role::Border rounded=corners(true, empty)
              unselectable>
             <text caption muted>{code.language().unwrap_or("code").to_owned()}</text>
@@ -649,13 +644,13 @@ fn code_header(code: &Arc<MarkdownCodeBlock>) -> Div {
 
 fn code_line(source: Option<Text>, last: bool) -> Div {
     let line = view! {
-        <div px=16.0 min_h=line_height(CODE) overflow_hidden border_l=1.0 border_r=1.0
+        <div px=Space::X4 min_h=line_height(CODE) overflow_hidden border_l=1.0 border_r=1.0
              border_color=Role::Border rounded=corners(false, last)>
             {source}
         </div>
     };
     if last {
-        line.pb(8.0).border_b(1.0)
+        line.pb(Space::X2).border_b(1.0)
     } else {
         line
     }
@@ -675,7 +670,7 @@ fn table_row(
             _ => TextAlign::Start,
         };
         let cell = view! {
-            <div flex_1 min_w=0.0 px=12.0 py=TABLE_CELL_PADDING_Y>
+            <div flex_1 min_w=0.0 px=Space::X3 py=TABLE_CELL_PADDING_Y>
                 {cell.align(align)}
             </div>
         };

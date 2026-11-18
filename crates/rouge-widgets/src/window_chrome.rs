@@ -1,8 +1,9 @@
+use crate::tokens::Space;
 use rouge_core::Role;
-use rouge_core::component;
+use rouge_core::view;
 use rouge_core::{
-    Div, IntoProp, PointerButton, PointerEvent, ResizeEdge, Styled, View, WindowHandle, div, text,
-    window_handle,
+    Div, IntoProp, PointerButton, PointerEvent, ResizeEdge, Styled, View, WindowHandle, component,
+    div, text, window_handle,
 };
 
 #[component]
@@ -11,45 +12,36 @@ where
     T: View,
 {
     let window = window_handle();
-    let button = move |id, label, click: fn(WindowHandle)| {
-        div()
-            .test_id(id)
-            .w(40.0)
-            .h_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .hover(|style| style.bg(Role::SurfaceHover))
-            .on_pointer_down(PointerEvent::stop_propagation)
-            .on_click(move |_| click(window))
-            .child(text(label))
+    let button = move |id: &str, label: &str, click: fn(WindowHandle)| {
+        view! {
+            <div test_id=id w=40.0 h_full flex items_center justify_center hover:bg=Role::SurfaceHover
+                 on_pointer_down=PointerEvent::stop_propagation on_click={move |_| click(window)}>
+                <text>{label}</text>
+            </div>
+        }
     };
-    let bar = div()
-        .preserve_focus()
-        .test_id("window-titlebar")
-        .h(36.0)
-        .flex_none()
-        .flex()
-        .items_center()
-        .bg(Role::Elevated)
-        .text_color(Role::Text)
-        .on_pointer_down(move |event| match (event.button, event.click_count) {
-            (PointerButton::Primary, 2) => window.zoom(),
-            (PointerButton::Primary, _) => window.start_drag(),
-            _ => {}
-        })
-        .child(div().flex_1().px(12.0).child(text(title)))
-        .child(button("window-minimize", "−", WindowHandle::minimize))
-        .child(button("window-zoom", "□", WindowHandle::zoom))
-        .child(button("window-close", "×", WindowHandle::close));
-    let mut chrome = div().relative().flex().col().size_full().child(bar).child(
-        div()
-            .test_id("window-content")
-            .root_host()
-            .flex_1()
-            .min_h(0.0)
-            .child(children),
-    );
+    let bar = view! {
+        <div preserve_focus test_id="window-titlebar" h=36.0 flex_none flex items_center
+             bg=Role::Elevated text_color=Role::Text
+             on_pointer_down={move |event| match (event.button, event.click_count) {
+                 (PointerButton::Primary, 2) => window.zoom(),
+                 (PointerButton::Primary, _) => window.start_drag(),
+                 _ => {}
+             }}>
+            <div flex_1 px=Space::X3>
+                <text>{title}</text>
+            </div>
+            {button("window-minimize", "−", WindowHandle::minimize)}
+            {button("window-zoom", "□", WindowHandle::zoom)}
+            {button("window-close", "×", WindowHandle::close)}
+        </div>
+    };
+    let mut chrome = view! {
+        <div relative flex col size_full>
+            {bar}
+            <div test_id="window-content" root_host flex_1 min_h=0.0>{children}</div>
+        </div>
+    };
     for (edge, x, y) in [
         (ResizeEdge::North, 0, -1),
         (ResizeEdge::South, 0, 1),
@@ -60,13 +52,12 @@ where
         (ResizeEdge::SouthWest, -1, 1),
         (ResizeEdge::SouthEast, 1, 1),
     ] {
-        let zone = div()
-            .test_id(format!("window-resize-{edge:?}"))
-            .absolute()
-            .on_pointer_down(move |event| {
+        let zone = view! {
+            <div absolute test_id={format!("window-resize-{edge:?}")} on_pointer_down={move |event| {
                 event.stop_propagation();
                 window.start_resize(edge);
-            });
+            }}/>
+        };
         let zone = match x {
             -1 => zone.left(0.0).w(4.0),
             1 => zone.right(0.0).w(4.0),

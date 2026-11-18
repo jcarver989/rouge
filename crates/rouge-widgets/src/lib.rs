@@ -1,6 +1,7 @@
 mod choice;
 mod components;
 mod fonts;
+mod grid;
 mod icon;
 mod inline_edit;
 mod input;
@@ -36,6 +37,7 @@ pub use components::{
     section_header, segment, segmented_control,
 };
 pub use fonts::{CODE_FONT, UI_FONT, bundled_fonts};
+pub use grid::{column_grid, grid_cell, grid_overlay};
 pub use icon::{Icon, IconName};
 pub use inline_edit::{InlineEdit, inline_edit};
 pub use input::{TextInput, text_input};
