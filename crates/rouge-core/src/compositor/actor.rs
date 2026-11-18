@@ -32,7 +32,7 @@ pub enum Message {
     Configure(WindowId, WindowConfig),
     Commit(WindowId, Commit),
     Close(WindowId),
-    Detach(WindowId, Sender<Target>),
+    Detach(WindowId, Sender<()>),
     Attach(WindowId, Target),
     Wake,
     Shutdown,
@@ -196,10 +196,9 @@ impl CompositorActor {
                 let Some(window) = find(&mut self.windows, id) else {
                     return;
                 };
-                if let Some(target) = window.target.take() {
-                    let _ = reply.send(target);
-                }
+                drop(window.target.take());
                 self.events.extend(window.acknowledge());
+                let _ = reply.send(());
             }
             Message::Attach(id, target) => {
                 let Some(window) = find(&mut self.windows, id) else {

@@ -12,7 +12,7 @@ use std::sync::mpsc::Sender;
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 use web_time::Instant;
-use wgpu::{Instance, PresentMode, Surface, SurfaceConfiguration, SurfaceTarget};
+use wgpu::{Instance, PresentMode, Surface, SurfaceConfiguration, SurfaceTarget, TextureFormat};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum TextInput {
@@ -104,6 +104,8 @@ pub(crate) struct Driver {
     text_input: Option<TextInput>,
     #[cfg(not(target_arch = "wasm32"))]
     present_mode: Option<PresentMode>,
+    #[cfg(not(target_arch = "wasm32"))]
+    format: TextureFormat,
 }
 
 impl Driver {
@@ -134,7 +136,7 @@ impl Driver {
         ui.set_clipboard(clipboard);
         ui.bind_menus(menus);
         let present_mode = profile.present_mode;
-        let config = swapchain(gpu, &surface, (width, height), present_mode)?;
+        let config = swapchain(gpu, &surface, (width, height), present_mode, None)?;
         let environment = || {
             format!(
                 "{:?}\n{:?} {}x{} at scale {}",
@@ -171,12 +173,14 @@ impl Driver {
             text_input: None,
             #[cfg(not(target_arch = "wasm32"))]
             present_mode,
+            #[cfg(not(target_arch = "wasm32"))]
+            format: config.format,
         };
         Ok((driver, Target::swapchain(gpu, surface, config)))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn detach(&self) -> Receiver<Target> {
+    pub(crate) fn detach(&self) -> Receiver<()> {
         let (reply, detached) = channel();
         self.send(Message::Detach(self.window, reply));
         detached
@@ -185,7 +189,7 @@ impl Driver {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn target(&self, gpu: &Gpu, surface: Surface<'static>) -> Result<Target, AppError> {
         let pixels = (self.config.width, self.config.height);
-        let config = swapchain(gpu, &surface, pixels, self.present_mode)?;
+        let config = swapchain(gpu, &surface, pixels, self.present_mode, Some(self.format))?;
         Ok(Target::swapchain(gpu, surface, config))
     }
 
@@ -350,19 +354,18 @@ fn swapchain(
     surface: &Surface<'static>,
     (width, height): (u32, u32),
     present_mode: Option<PresentMode>,
+    format: Option<TextureFormat>,
 ) -> Result<SurfaceConfiguration, AppError> {
     let capabilities = surface.get_capabilities(&gpu.adapter);
     let mut config = surface
         .get_default_config(&gpu.adapter, width.max(1), height.max(1))
         .ok_or(AppError::UnsupportedSurface)?;
-    if let Some(linear) = capabilities
-        .formats
-        .iter()
-        .copied()
-        .find(|format| !format.is_srgb())
-    {
-        config.format = linear;
-    }
+    let mut formats = capabilities.formats.iter().copied();
+    config.format = match format {
+        Some(format) if formats.any(|supported| supported == format) => format,
+        Some(_) => return Err(AppError::UnsupportedSurface),
+        None => (formats.find(|format| !format.is_srgb())).unwrap_or(config.format),
+    };
     config.present_mode = PresentMode::AutoVsync;
     if let Some(mode) = present_mode {
         if capabilities.present_modes.contains(&mode)

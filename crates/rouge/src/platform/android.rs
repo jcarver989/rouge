@@ -5,6 +5,8 @@ use super::native::{WinitPlatform, run};
 use crate::app::{App, AppError};
 use jni::errors::Error as JniError;
 use jni::objects::{JObject, JString, JValue};
+use jni::refs::Global;
+use jni::sys::jobject;
 use jni::{Env, JavaVM, jni_sig, jni_str};
 use rouge_core::{Appearance, Clipboard, Menu, PasteRequest, Ui};
 use rouge_render::Edges;
@@ -30,6 +32,8 @@ static APP: OnceLock<AndroidApp> = OnceLock::new();
 pub enum Error {
     #[error("no Android activity: pass the AndroidApp from android_main to App::android")]
     NoActivity,
+    #[error("Android shows one window per activity, but the app opens {0}")]
+    MultipleWindows(usize),
 }
 
 impl App {
@@ -48,6 +52,9 @@ impl Platform for Android {
     const MENU_BAR: bool = false;
 
     fn run(app: App, options: Self::Options) -> Result<(), AppError> {
+        if app.windows.len() > 1 {
+            return Err(Error::MultipleWindows(app.windows.len()).into());
+        }
         run(app, options)
     }
 
@@ -141,9 +148,8 @@ impl WinitPlatform for Android {
         }
     }
 
-    fn sync(window: &Window, ui: &mut Ui) {
+    fn sync(_window: &Window, ui: &mut Ui) {
         ui.set_appearance(appearance());
-        ui.set_safe_area(Self::safe_area(window));
     }
 
     fn exit() {
@@ -301,9 +307,9 @@ fn clipboard_manager<'a>(env: &mut Env<'a>, activity: &JObject<'_>) -> JniResult
 #[allow(unsafe_code)]
 fn java<T>(call: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> JniResult<T>) -> JniResult<T> {
     let app = APP.get().ok_or(JniError::UninitializedJavaVM)?;
-    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
-    vm.attach_current_thread(|env| {
-        let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+    let raw: jobject = app.activity_as_ptr().cast();
+    JavaVM::singleton()?.attach_current_thread(|env| {
+        let activity = unsafe { env.as_cast_raw::<Global<JObject<'_>>>(&raw)? };
         call(env, &activity)
     })
 }

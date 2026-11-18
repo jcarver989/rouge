@@ -213,12 +213,16 @@ fn closing_a_window_reports_it() -> TestResult {
 }
 
 #[test]
-fn a_detached_window_hands_its_target_back_and_acknowledges_changes_at_once() -> TestResult {
+fn a_detached_window_drops_its_target_and_acknowledges_changes_at_once() -> TestResult {
     let mut stage = StageBuilder::default().child(square()).build()?;
     stage.frame(0.0);
     stage.presented();
-    assert!(stage.detach().is_some(), "the target comes back");
-    assert!(stage.detach().is_none(), "and only once");
+    assert!(stage.detach(), "the release is confirmed");
+    assert!(stage.actor.image(WINDOW).is_none(), "the target is gone");
+    assert!(
+        stage.detach(),
+        "and confirmed again with nothing left to drop"
+    );
     stage.set(stage.child, LayerProp::TranslateX, 5.0);
     stage.sync();
     assert_eq!(
@@ -234,10 +238,10 @@ fn a_detached_window_hands_its_target_back_and_acknowledges_changes_at_once() ->
 fn an_attached_target_shows_what_was_committed_while_detached() -> TestResult {
     let mut stage = StageBuilder::default().child(square()).build()?;
     stage.frame(0.0);
-    let target = stage.detach().ok_or("the stage has no target")?;
+    assert!(stage.detach(), "the release is confirmed");
     stage.set(stage.child, LayerProp::TranslateX, 50.0);
     stage.sync();
-    stage.attach(target);
+    stage.attach();
     assert!(
         stage.actor.next_wake(0.1).is_some(),
         "the new target is still to be drawn"

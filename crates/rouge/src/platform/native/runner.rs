@@ -37,8 +37,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, SmolStr};
 use winit::window::{Window, WindowId};
 
-const DETACH_TIMEOUT: Duration = Duration::from_secs(1);
-
 pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
     let bar = !app.menus.is_empty();
     let event_loop = Current::event_loop(options)?;
@@ -174,7 +172,7 @@ impl Runner {
             modifiers: Modifiers::NONE,
         });
         if let Some(state) = self.windows.last_mut() {
-            state.sync_safe_area();
+            state.sync_environment();
         }
         Ok(())
     }
@@ -281,12 +279,15 @@ impl ApplicationHandler for Runner {
             state.driver.ui().set_visible(false);
             let detached = state.driver.detach();
             compositor.turn();
-            drop(detached.recv_timeout(DETACH_TIMEOUT));
+            let _ = detached.recv();
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.windows.retain(|state| !state.driver.finished());
+        for state in &mut self.windows {
+            state.sync_environment();
+        }
         let mut deadline = self.compositor.as_mut().and_then(Compositing::turn);
         self.pump();
         let now = Instant::now();
@@ -460,7 +461,6 @@ impl WindowState {
     }
 
     fn sync_platform(&mut self) {
-        Current::sync(&self.window, self.driver.ui());
         let changes = self.driver.changes();
         if let Some(cursor) = changes.cursor {
             self.window.set_cursor(cursor_icon(cursor));
@@ -489,14 +489,14 @@ impl WindowState {
         if resized.is_some() && !self.occluded {
             self.driver.step();
         }
-        self.sync_safe_area();
         self.window.request_redraw();
     }
 
-    fn sync_safe_area(&mut self) {
+    fn sync_environment(&mut self) {
+        let ui = self.driver.ui();
+        Current::sync(&self.window, ui);
         if Current::MOBILE {
-            let insets = Current::safe_area(&self.window);
-            self.driver.ui().set_safe_area(insets);
+            ui.set_safe_area(Current::safe_area(&self.window));
         }
     }
 

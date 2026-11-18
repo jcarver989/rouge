@@ -250,14 +250,15 @@ impl Stage {
         self.collect();
     }
 
-    pub(crate) fn detach(&mut self) -> Option<Target> {
+    pub(crate) fn detach(&mut self) -> bool {
         let (reply, detached) = channel();
         self.actor.handle(Message::Detach(WINDOW, reply));
         self.collect();
-        detached.try_recv().ok()
+        detached.try_recv().is_ok()
     }
 
-    pub(crate) fn attach(&mut self, target: Target) {
+    pub(crate) fn attach(&mut self) {
+        let target = Target::offscreen(self.actor.gpu(), CONFIG.width, CONFIG.height);
         self.actor.handle(Message::Attach(WINDOW, target));
         self.collect();
     }
