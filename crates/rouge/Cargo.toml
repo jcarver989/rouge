@@ -37,14 +37,20 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["r
 web-time.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-open = { version = "5", optional = true }
 winit.workspace = true
 pollster.workspace = true
 tracing-chrome = "0.7"
 
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+open = { version = "5", optional = true }
+
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))'.dependencies]
 arboard.workspace = true
 image.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
+winit = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6.3"
@@ -81,6 +87,10 @@ rouge = { path = ".", features = ["persist"] }
 gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = ["ClipboardEventInit", "DataTransfer", "MouseEventInit", "PointerEventInit"] }
+
+[[example]]
+name = "android_todomvc"
+crate-type = ["cdylib"]
 
 [[test]]
 name = "platform_web_test"

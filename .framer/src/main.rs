@@ -20,7 +20,11 @@ fn main() -> ExitCode {
     let mut project = Project::new();
     project.apply(
         RustMonorepo::new()
-            .rust(Rust::new("1.100").targets(["aarch64-apple-ios", "aarch64-apple-ios-sim"]))
+            .rust(Rust::new("1.100").targets([
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+                "aarch64-linux-android",
+            ]))
             .workspace(Workspace::new().license("MIT"))
             .ci(Ci::new().setup(install_fontconfig()).setup(
                 Step::run("sudo apt-get install -y libvulkan1 mesa-vulkan-drivers")

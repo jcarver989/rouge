@@ -2984,6 +2984,7 @@ dependencies = [
  "arboard",
  "gloo-timers",
  "image",
+ "jni",
  "js-sys",
  "muda",
  "objc2 0.6.5",
