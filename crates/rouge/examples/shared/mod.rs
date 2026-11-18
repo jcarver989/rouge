@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod camera;
 pub(crate) mod counter_view;
 pub(crate) mod diff;
 pub(crate) mod effects_view;

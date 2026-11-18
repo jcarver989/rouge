@@ -2,10 +2,10 @@
 mod shared;
 
 use rouge::AppError;
-use rouge::core::testing::{TestError, TestUi, TestUiBuilder};
+use rouge::core::testing::{TestError, TestUiBuilder};
 use rouge::prelude::*;
 use rouge::render::GpuError;
-use rouge::render::headless::EncodeError;
+use shared::camera::{Camera, CameraError};
 use shared::counter_view::counter;
 use shared::diff::{Patch, SAMPLE, diff_view};
 use shared::effects_view::effects_demo;
@@ -13,7 +13,7 @@ use shared::glass_view::glass;
 use shared::motion_view::motion_demo;
 use shared::settings_view::settings;
 use std::env::args;
-use std::fs::{read_to_string, write};
+use std::fs::read_to_string;
 use std::io::{Error as IoError, read_to_string as read_all, stdin};
 use thiserror::Error;
 
@@ -29,7 +29,7 @@ enum DemoError {
     #[error(transparent)]
     Gpu(#[from] GpuError),
     #[error(transparent)]
-    Encode(#[from] EncodeError),
+    Camera(#[from] CameraError),
     #[error(transparent)]
     Test(#[from] TestError),
 }
@@ -116,19 +116,7 @@ fn snapshot(dir: &str) -> Result<(), DemoError> {
     Ok(())
 }
 
-struct Camera<'a> {
-    ui: TestUi,
-    dir: &'a str,
-}
-
 impl Camera<'_> {
-    fn save(&mut self, name: &str) -> Result<(), DemoError> {
-        let path = format!("{}/{name}.png", self.dir);
-        write(&path, self.ui.render()?.to_png()?)?;
-        println!("wrote {path} ({:?})", self.ui.stats());
-        Ok(())
-    }
-
     fn click(&mut self, x: f32, y: f32) {
         self.ui.click(Point::new(x, y));
     }
@@ -140,14 +128,14 @@ fn counter_shots(camera: &mut Camera) -> Result<(), DemoError> {
         camera.click(346.0, 266.0);
     }
     camera.ui.run(0.1);
-    camera.save("counter-6")
+    Ok(camera.save("counter-6")?)
 }
 
 fn glass_shots(camera: &mut Camera) -> Result<(), DemoError> {
     camera.save("glass-rest")?;
     camera.click(300.0, 120.0);
     camera.ui.run(0.1);
-    camera.save("glass-springing")
+    Ok(camera.save("glass-springing")?)
 }
 
 fn effects_shots(camera: &mut Camera) -> Result<(), DemoError> {
@@ -163,19 +151,18 @@ fn effects_shots(camera: &mut Camera) -> Result<(), DemoError> {
         camera.ui.advance(0.05);
     }
     camera.ui.pointer_up(PointerButton::Primary);
-    camera.save("effects-on")
+    Ok(camera.save("effects-on")?)
 }
 
 fn motion_shots(camera: &mut Camera) -> Result<(), DemoError> {
-    camera.ui.run(1.0);
-    camera.save("motion-rest")?;
+    camera.shot("motion-rest")?;
     camera.ui.pointer_moved(Point::new(200.0, 300.0));
     camera.ui.scroll(Point::new(0.0, -1_400_000.0));
     camera.click(500.0, 64.0);
     camera.click(600.0, 280.0);
     camera.click(600.0, 180.0);
     camera.ui.run(0.1);
-    camera.save("motion-moving")
+    Ok(camera.save("motion-moving")?)
 }
 
 fn diff_shots(camera: &mut Camera) -> Result<(), DemoError> {
@@ -196,7 +183,7 @@ fn diff_shots(camera: &mut Camera) -> Result<(), DemoError> {
         .ui
         .type_text("Keep the shared key bindings in the public prelude.");
     camera.ui.run(0.1);
-    camera.save("diff-comment")
+    Ok(camera.save("diff-comment")?)
 }
 
 fn settings_shots(camera: &mut Camera) -> Result<(), DemoError> {
