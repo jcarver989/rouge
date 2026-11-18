@@ -21,5 +21,5 @@ if [ ! -f "$keystore" ]; then
     keytool -genkeypair -keystore "$keystore" -storepass android -keypass android -alias androiddebugkey \
         -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 fi
-"$tools/apksigner" sign --ks "$keystore" --ks-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "$out/$example.apk"
+"$tools/apksigner" sign --ks "$keystore" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "$out/$example.apk"
 echo "$out/$example.apk"
