@@ -3,7 +3,7 @@ use crate::control::each;
 use crate::prop::{IntoProp, Prop, PropFrom};
 use crate::style::{DelegateStyle, Styled};
 use crate::tree::RowSource;
-use crate::view::{BuildCx, Div, View, div};
+use crate::view::{AnyView, BuildCx, Div, View, div};
 use rouge_macros::component;
 use rouge_reactive::{Memo, ReadSignal, Signal, effect, memo, on_cleanup, signal, untrack};
 use rouge_render::{Point, Rect, Size};
@@ -201,6 +201,7 @@ pub struct VirtualList<T, U = usize> {
     handle: Option<VirtualListHandle>,
     follow: Option<Signal<bool>>,
     row_text: Option<Rc<dyn Fn(usize) -> String>>,
+    underlay: Option<AnyView>,
 }
 
 #[component]
@@ -222,6 +223,7 @@ pub fn virtual_list<T: View, U>(
         handle: None,
         follow: None,
         row_text: None,
+        underlay: None,
     }
 }
 
@@ -243,6 +245,7 @@ impl<T, U> VirtualList<T, U> {
             handle: self.handle,
             follow: self.follow,
             row_text: self.row_text,
+            underlay: self.underlay,
         }
     }
 
@@ -273,6 +276,11 @@ impl<T, U> VirtualList<T, U> {
 
     pub fn row_text(mut self, text: impl Fn(usize) -> String + 'static) -> Self {
         self.row_text = Some(Rc::new(text));
+        self
+    }
+
+    pub fn underlay(mut self, underlay: impl View) -> Self {
+        self.underlay = Some(underlay.into_any());
         self
     }
 }
@@ -452,6 +460,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
         let mut content = div()
             .relative()
             .h(move || rows.with(|heights| heights.top(heights.count())))
+            .child(self.underlay)
             .child(window);
         if mounted.is_some() {
             content = content.track_size(width);

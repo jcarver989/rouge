@@ -2,6 +2,7 @@ use rouge_core::Wake;
 use rouge_core::testing::{
     BLACK, BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, WHITE, counter,
 };
+use rouge_core::view;
 use rouge_core::{
     Align, Color, Point, RowKey, ScrollEvent, ScrollLinked, ScrollState, Scrollable, Size, Styled,
     View, div, dynamic, scroll, text, virtual_list, virtual_list_handle,
@@ -10,6 +11,28 @@ use rouge_reactive::{Runtime, Signal, batch, effect, on_cleanup, signal};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+
+#[test]
+fn a_virtual_list_underlay_sits_behind_the_rows_and_scrolls_with_them() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUiBuilder::default().size(100.0, 100.0).build(|| {
+        let underlay = view! {
+            <div test_id="underlay" absolute left=0.0 top=40.0 w=100.0 h=20.0 bg=Color::RED/>
+        };
+        view! {
+            <virtual_list count={|| 100} row_height=20.0 let:index underlay=underlay size_full>
+                <div test_id={format!("row-{index}")} h=20.0/>
+            </virtual_list>
+        }
+    });
+    assert_eq!(ui.rect_of("underlay")?, ui.rect_of("row-2")?);
+    assert_eq!(ui.pixel(50, 50)?, RED, "transparent rows show it");
+    ui.scroll_on("row-2", Point::new(0.0, -20.0))?;
+    ui.run(0.5);
+    assert_eq!(ui.rect_of("underlay")?, ui.rect_of("row-2")?);
+    assert_eq!(ui.rect_of("underlay")?.origin.y, 20.0);
+    Ok(())
+}
 
 #[test]
 fn dynamic_rebuild_preserves_virtual_list_and_ordinary_scroll_offsets() -> TestResult {
