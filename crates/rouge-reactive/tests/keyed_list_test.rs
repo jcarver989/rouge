@@ -19,6 +19,8 @@ fn values_keep_their_order_through_pushes_and_removals() {
     assert_eq!(items.with(&2, |_| ()), None);
     let done = items.with_values(|all| all.iter().map(|item| item.done).collect::<Vec<_>>());
     assert_eq!(done, vec![true, false, false, true]);
+    assert!(items.move_to(&9, 0) && !items.move_to(&2, 0));
+    assert_eq!(items.keys().get_untracked(), vec![9, 0, 1, 4]);
 }
 
 #[test]

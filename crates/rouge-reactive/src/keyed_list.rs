@@ -155,6 +155,21 @@ impl<K: Eq + Hash + Clone + 'static, V: 'static> KeyedList<K, V> {
         })
     }
 
+    pub fn move_to(&self, key: &K, index: usize) -> bool {
+        self.edit(|state| {
+            if !state.entries.contains_key(key) {
+                return false;
+            }
+            self.order.update(|keys| {
+                if let Some(from) = keys.iter().position(|other| other == key) {
+                    let moved = keys.remove(from);
+                    keys.insert(index.min(keys.len()), moved);
+                }
+            });
+            true
+        })
+    }
+
     pub fn retain(&self, mut keep: impl FnMut(&V) -> bool) {
         self.edit(|state| {
             let before = state.entries.len();
