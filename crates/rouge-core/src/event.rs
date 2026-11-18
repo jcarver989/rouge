@@ -401,6 +401,21 @@ impl FileDropEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DragAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl DragAxis {
+    pub(crate) fn follows(self, travel: Point) -> bool {
+        match self {
+            DragAxis::Horizontal => travel.x.abs() >= travel.y.abs(),
+            DragAxis::Vertical => travel.y.abs() >= travel.x.abs(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DragPhase {
     Start,
     Move,

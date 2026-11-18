@@ -1,6 +1,7 @@
 use super::layers::Slot;
 use super::{ElementId, Tree};
 use crate::canvas::{PaintOp, TextHit};
+use crate::event::DragAxis;
 use rouge_reactive::batch;
 use rouge_render::{Affine, Point, Rect, Size};
 use std::borrow::Cow;
@@ -118,6 +119,10 @@ impl Tree {
         let transforms = self.transforms(id);
         let inverses = transforms.iter().filter_map(Affine::inverse);
         inverses.fold(point, |point, inverse| inverse.apply(point)) - element.bounds.origin
+    }
+
+    pub(crate) fn drag_axis(&self, id: ElementId) -> Option<DragAxis> {
+        self.elements.get(id)?.flags.drag_axis
     }
 
     pub(crate) fn size_of(&self, id: ElementId) -> Size {

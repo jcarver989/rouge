@@ -4,16 +4,47 @@ use rouge_core::testing::{
     BLACK, BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
     counter, recorder,
 };
+use rouge_core::view;
 use rouge_core::{
     BackdropBlur, BlendMode, Blur, Color, ColorMatrix, Cursor, Div, FocusPolicy, Keyframes,
-    LayoutTransition, Mask, Point, Pose, Rect, SpanStyle, Spring, StyleDelta, Styled, Timing,
-    Underline, View, div, dynamic, rich_text, show, text,
+    LayoutTransition, Mask, Point, PointerButton, Pose, Rect, SpanStyle, Spring, StyleDelta,
+    Styled, Timing, Underline, View, div, dynamic, rich_text, show, text,
 };
 use rouge_reactive::{Runtime, Signal, signal, stored, use_context};
 use rouge_render::headless::Image;
 use std::assert_matches;
 use std::cell::Cell;
 use std::rc::Rc;
+
+#[test]
+fn on_press_reports_the_press_and_its_release_wherever_the_pointer_ends() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (pressed, enabled) = (signal(false), signal(true));
+    let mut ui = TestUiBuilder::default().build(move || {
+        view! {
+            <div p=10.0>
+                <div test_id="key" size=40.0 enabled=enabled on_press={move |down| pressed.set(down)}/>
+            </div>
+        }
+    });
+    let center = ui.center_of("key")?;
+    ui.pointer_moved(center);
+    ui.pointer_down(PointerButton::Primary);
+    assert!(pressed.get());
+    ui.pointer_moved(Point::new(150.0, 150.0));
+    ui.pointer_up(PointerButton::Primary);
+    assert!(!pressed.get(), "a release outside still ends the press");
+    ui.pointer_moved(center);
+    ui.pointer_down(PointerButton::Primary);
+    ui.pointer_cancel();
+    assert!(!pressed.get(), "a cancelled press ends too");
+    enabled.set(false);
+    ui.advance(0.0);
+    ui.pointer_down(PointerButton::Primary);
+    assert!(!pressed.get(), "a disabled element is not pressed");
+    ui.pointer_up(PointerButton::Primary);
+    Ok(())
+}
 
 #[test]
 fn an_activated_control_follows_its_enabled_signal_without_remounting() -> TestResult {

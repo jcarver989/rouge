@@ -1,6 +1,7 @@
 use crate::animation::{Ease, Tween};
 use crate::compositor::{CompositorActor, Message, WindowConfig, WindowId};
-use crate::event::{FileDropPhase, KeyEvent, PointerButton};
+use crate::event::{FileDropPhase, KeyEvent, PointerButton, TouchPhase};
+use crate::presentation::InputKind;
 use crate::theme::{Palette, Theme};
 use crate::ui::Ui;
 use crate::view::View;
@@ -60,6 +61,7 @@ pub struct TestUiBuilder {
     scale: f32,
     clear: Color,
     interval: f64,
+    input: InputKind,
 }
 
 impl Default for TestUiBuilder {
@@ -72,6 +74,7 @@ impl Default for TestUiBuilder {
             scale: 1.0,
             clear: Color::TRANSPARENT,
             interval: STEP,
+            input: InputKind::default(),
         }
     }
 }
@@ -105,6 +108,11 @@ impl TestUiBuilder {
         self
     }
 
+    pub fn input(mut self, input: InputKind) -> Self {
+        self.input = input;
+        self
+    }
+
     pub fn menus(mut self, menus: Vec<Menu>) -> Self {
         self.menus = menus;
         self
@@ -121,8 +129,8 @@ impl TestUiBuilder {
 
     pub fn build_with<T: View, U>(self, root: impl FnOnce() -> (T, U)) -> (TestUi, U) {
         let mut extra = None;
-        let palette = self.palette;
-        let mut ui = Ui::with_fonts(self.size, self.fonts, || {
+        let (palette, input) = (self.palette, self.input);
+        let mut ui = Ui::with_input(self.size, input, self.fonts, || {
             if let Some(palette) = palette {
                 Theme::current().set(palette);
             }
@@ -412,15 +420,39 @@ impl TestUi {
     fn drag_between(&mut self, from: Point, to: Point) {
         self.ui.pointer_moved(from);
         self.ui.pointer_down(PointerButton::Primary);
-        for step in 1..=DRAG_STEPS {
-            let progress = f32::from(step) / f32::from(DRAG_STEPS);
-            self.ui.pointer_moved(Point::new(
-                from.x + (to.x - from.x) * progress,
-                from.y + (to.y - from.y) * progress,
-            ));
+        for point in steps(from, to) {
+            self.ui.pointer_moved(point);
             self.advance(0.0);
         }
         self.ui.pointer_up(PointerButton::Primary);
+        self.advance(0.0);
+    }
+
+    pub fn swipe(&mut self, from: Point, to: Point) {
+        self.swipe_over(from, to, 0.0);
+    }
+
+    pub fn swipe_over(&mut self, from: Point, to: Point, seconds: f64) {
+        self.ui.touch(TouchPhase::Start, from);
+        self.advance(0.0);
+        let pause = seconds / f64::from(DRAG_STEPS);
+        for point in steps(from, to) {
+            self.advance(pause);
+            self.ui.touch(TouchPhase::Move, point);
+        }
+        self.ui.touch(TouchPhase::End, to);
+        self.advance(0.0);
+    }
+
+    pub fn tap_on(&mut self, name: &str) -> Result<(), TestError> {
+        let point = self.center_of(name)?;
+        self.tap(point);
+        Ok(())
+    }
+
+    pub fn tap(&mut self, point: Point) {
+        self.ui.touch(TouchPhase::Start, point);
+        self.ui.touch(TouchPhase::End, point);
         self.advance(0.0);
     }
 
@@ -505,4 +537,14 @@ impl DerefMut for TestUi {
     fn deref_mut(&mut self) -> &mut Ui {
         &mut self.ui
     }
+}
+
+fn steps(from: Point, to: Point) -> impl Iterator<Item = Point> {
+    (1..=DRAG_STEPS).map(move |step| {
+        let progress = f32::from(step) / f32::from(DRAG_STEPS);
+        Point::new(
+            from.x + (to.x - from.x) * progress,
+            from.y + (to.y - from.y) * progress,
+        )
+    })
 }

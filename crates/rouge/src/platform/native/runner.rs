@@ -8,8 +8,8 @@ use crate::platform::{Current, Options, Platform, default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use pollster::block_on;
 use rouge_core::{
-    CompositorEvent, Decorations, Events, FileDropPhase, ImeEvent, Key, KeyEvent, Menu, Message,
-    Modifiers, ThreadError, WindowCommand, WindowId as LinkWindow, mailbox, spawn,
+    CompositorEvent, Decorations, Events, FileDropPhase, ImeEvent, InputKind, Key, KeyEvent, Menu,
+    Message, Modifiers, ThreadError, WindowCommand, WindowId as LinkWindow, mailbox, spawn,
 };
 use rouge_reactive::Runtime;
 #[cfg(feature = "tokio-rt")]
@@ -147,6 +147,11 @@ impl Runner {
             interval: refresh_interval(&window),
             epoch: compositor.epoch,
             appearance: Current::appearance(&window),
+            input: if Current::MOBILE {
+                InputKind::Touch
+            } else {
+                InputKind::Pointer
+            },
             menus: &self.menus,
             fonts: &self.fonts,
             profile: &self.profile,

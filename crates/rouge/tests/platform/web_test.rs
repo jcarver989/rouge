@@ -1,6 +1,7 @@
 #![cfg(target_arch = "wasm32")]
 
-use rouge::core::{Cursor, Key, Point, Rect, Size, Styled, Ui, div, image, text};
+use rouge::core::view;
+use rouge::core::{Cursor, InputKind, Key, Point, Rect, Size, Styled, Ui, div, image, text};
 use rouge::platform::web::{css_cursor, dom_key};
 use rouge::reactive::Runtime;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -43,9 +44,12 @@ fn cursors_map_to_css_cursor_names() {
 fn bundled_font_shapes_on_the_first_ui_frame() {
     let _entered = Runtime::new().enter();
     let font = include_bytes!("../fixtures/inter-subset.ttf");
-    let mut ui = Ui::with_fonts(Size::new(160.0, 40.0), [font.as_slice()], || {
-        text("Rouge").font("Inter")
-    });
+    let mut ui = Ui::with_input(
+        Size::new(160.0, 40.0),
+        InputKind::default(),
+        [font.as_slice()],
+        || view! { <text font="Inter">"Rouge"</text> },
+    );
     assert!(ui.update());
     assert_eq!(ui.text_index_at(Point::new(10.0, 8.0)), Some(1));
 }

@@ -26,6 +26,7 @@ pub(crate) enum On {
     Focus,
     Blur,
     Hover,
+    Press,
     Ime,
     Drag,
     Scroll,
@@ -38,6 +39,7 @@ pub(crate) enum Event<'a> {
     Key(&'a KeyEvent),
     Focus(&'a FocusEvent),
     Hover(bool),
+    Press(bool),
     Ime(&'a ImeEvent),
     Drag(&'a DragEvent),
     Scroll(&'a ScrollEvent),
@@ -84,7 +86,7 @@ impl Tree {
     pub(crate) fn listeners(&self, path: &[ElementId], on: On) -> Listeners {
         let pointer = matches!(
             on,
-            On::Click | On::PointerDown | On::PointerUp | On::PointerMove
+            On::Click | On::PointerDown | On::PointerUp | On::PointerMove | On::Press
         );
         let disabled = |id: &ElementId| self.elements.get(*id).is_some_and(Element::disabled);
         let enabled = path.iter().position(disabled).filter(|_| pointer);
@@ -287,6 +289,8 @@ impl Tree {
         for id in self.press_path.clone() {
             self.set_interaction(id, Interaction::Active, true);
         }
+        let listeners = self.listeners(&self.press_path, On::Press);
+        emit(&listeners, Event::Press(true), |_| {});
     }
 
     pub(crate) fn release(&mut self) -> Vec<ElementId> {
@@ -294,6 +298,11 @@ impl Tree {
         for id in &pressed {
             self.set_interaction(*id, Interaction::Active, false);
         }
+        let listeners: Listeners = pressed
+            .iter()
+            .filter_map(|id| Some((*id, self.elements.get(*id)?.listeners(On::Press))))
+            .collect();
+        emit(&listeners, Event::Press(false), |_| {});
         pressed.retain(|id| self.hover_path.contains(id));
         pressed
     }

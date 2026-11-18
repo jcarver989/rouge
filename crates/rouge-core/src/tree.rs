@@ -2,7 +2,7 @@ use crate::animation::{Pose, Timing};
 use crate::canvas::{CanvasData, HitListener};
 use crate::clipboard::{Clipboard, MemoryClipboard};
 use crate::compositor::{Layers, MotionId, SurfaceOp};
-use crate::event::{Chord, Cursor};
+use crate::event::{Chord, Cursor, DragAxis};
 use crate::image::ImageSpec;
 use crate::keymap::Keymap;
 use crate::scroll::scroll_key;
@@ -174,6 +174,7 @@ pub(crate) struct Flags {
     pub root_host: bool,
     pub focus_scope: bool,
     pub unselectable: bool,
+    pub drag_axis: Option<DragAxis>,
 }
 
 pub(crate) struct ElementSpec {

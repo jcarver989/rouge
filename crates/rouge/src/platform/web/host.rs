@@ -7,8 +7,8 @@ use crate::platform::{LINE_SCROLL, css_cursor, default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use js_sys::{Array, Error as JsError, Function, Reflect};
 use rouge_core::{
-    Appearance, EditAction, Events, ImeEvent, KeyEvent, Menu, Modifiers, Point, PointerButton,
-    TouchPhase, Ui, WindowCommand, WindowId, mailbox,
+    Appearance, EditAction, Events, ImeEvent, InputKind, KeyEvent, Menu, Modifiers, Point,
+    PointerButton, TouchPhase, Ui, WindowCommand, WindowId, mailbox,
 };
 use rouge_reactive::Runtime;
 use rouge_render::Gpu;
@@ -328,6 +328,7 @@ impl Host {
                 interval: Duration::from_secs_f64(1.0 / 60.0),
                 epoch,
                 appearance: appearance(&window),
+                input: input_kind(&window),
                 menus,
                 fonts,
                 profile: settings,
@@ -988,6 +989,15 @@ fn appearance(window: &Window) -> Appearance {
         Appearance::Dark
     } else {
         Appearance::Light
+    }
+}
+
+fn input_kind(window: &Window) -> InputKind {
+    let coarse = window.match_media("(pointer: coarse)").ok().flatten();
+    if coarse.is_some_and(|query| query.matches()) {
+        InputKind::Touch
+    } else {
+        InputKind::Pointer
     }
 }
 

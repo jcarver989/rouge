@@ -2,8 +2,8 @@ use crate::AppError;
 use crate::platform::warn;
 use crate::profile::{Profile, ProfileSettings};
 use rouge_core::{
-    AnyView, Appearance, Clipboard, CompositorActor, CompositorEvent, Cursor, Mailbox, Menu,
-    Message, Ui, Wake, WindowCommand, WindowConfig, WindowId,
+    AnyView, Appearance, Clipboard, CompositorActor, CompositorEvent, Cursor, InputKind, Mailbox,
+    Menu, Message, Ui, Wake, WindowCommand, WindowConfig, WindowId,
 };
 use rouge_render::{Affine, Gpu, Point, Rect, Size, Surfaces, Target};
 use std::borrow::Cow;
@@ -50,6 +50,7 @@ pub(crate) struct Setup<'a> {
     pub(crate) interval: Duration,
     pub(crate) epoch: Instant,
     pub(crate) appearance: Appearance,
+    pub(crate) input: InputKind,
     pub(crate) menus: &'a [Menu],
     pub(crate) fonts: &'a [Cow<'static, [u8]>],
     pub(crate) profile: &'a ProfileSettings,
@@ -124,12 +125,13 @@ impl Driver {
             interval,
             epoch,
             appearance,
+            input,
             menus,
             fonts,
             profile,
         } = setup;
         let logical = Size::new(width as f32 / scale, height as f32 / scale);
-        let mut ui = Ui::with_fonts(logical, fonts.iter().cloned(), root);
+        let mut ui = Ui::with_input(logical, input, fonts.iter().cloned(), root);
         ui.set_epoch(epoch);
         ui.set_device_scale(scale);
         ui.set_appearance(appearance);

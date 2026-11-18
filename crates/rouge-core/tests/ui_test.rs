@@ -3,10 +3,12 @@ use rouge_core::Wake;
 use rouge_core::testing::{
     BLUE, CLEAR, GREEN, RED, TestResult, TestUi, TestUiBuilder, assert_near, counter,
 };
+use rouge_core::view;
 use rouge_core::{
-    Color, DragEvent, DragPhase, Edges, Keyframes, Menu, MenuItem, Modifiers, Point, PointerButton,
-    Rect, ScrollState, Scrollable, Size, Styled, TouchPhase, Ui, UiPalette, canvas, div, dynamic,
-    modifiers, pct, safe_area, scroll, show, text, window_size, zoom,
+    COMPACT_WIDTH, Color, Div, DragAxis, DragEvent, DragPhase, Edges, InputKind, Keyframes, Menu,
+    MenuItem, Modifiers, Point, PointerButton, Presentation, Rect, ScrollState, Scrollable, Size,
+    Styled, TouchPhase, Ui, UiPalette, WidthClass, canvas, div, dynamic, modifiers, pct,
+    presentation, safe_area, scroll, show, text, window_size, zoom,
 };
 use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
 use std::time::{Duration, Instant};
@@ -328,6 +330,77 @@ fn scrolling_content_under_a_still_pointer_updates_hover() -> TestResult {
     );
     assert_eq!(ui.stats().layouts, 1, "scrolling a layer never relayouts");
     Ok(())
+}
+
+#[test]
+fn presentation_reports_the_input_kind_and_the_width_class() {
+    let _rt = Runtime::new().enter();
+    let seen = signal(Presentation::default());
+    let mut ui = TestUiBuilder::default()
+        .input(InputKind::Touch)
+        .build(move || {
+            let presentation = presentation();
+            seen.set(presentation.get_untracked());
+            effect(move || seen.set(presentation.get()));
+            view! { <div/> }
+        });
+    let expect = |input, width| Presentation { input, width };
+    assert_eq!(
+        seen.get_untracked(),
+        expect(InputKind::Touch, WidthClass::Compact),
+        "the builder's input is set before the root is built, and a 200 point window is compact"
+    );
+    assert!(seen.get_untracked().is_handheld(), "touch and compact");
+    ui.set_size(Size::new(COMPACT_WIDTH, 300.0));
+    assert_eq!(
+        seen.get_untracked(),
+        expect(InputKind::Touch, WidthClass::Regular)
+    );
+    assert!(!seen.get_untracked().is_handheld());
+    ui.set_input(InputKind::Pointer);
+    ui.advance(0.0);
+    assert_eq!(
+        seen.get_untracked(),
+        expect(InputKind::Pointer, WidthClass::Regular)
+    );
+}
+
+#[test]
+fn an_axis_locked_drag_leaves_the_other_axis_to_a_touch_pan() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, state, dragged) = swipe_row_in_a_scroller(DragAxis::Horizontal);
+    ui.swipe(Point::new(50.0, 80.0), Point::new(50.0, 30.0));
+    assert_eq!(dragged.get_untracked(), 0.0, "a vertical pan is not a drag");
+    assert!(state.get_untracked().offset.y > 0.0, "it scrolls the list");
+    ui.run(5.0);
+    let rested = state.get_untracked().offset.y;
+    ui.swipe(Point::new(80.0, 50.0), Point::new(30.0, 50.0));
+    assert_eq!(dragged.get_untracked(), -50.0, "a sideways swipe drags");
+    assert_eq!(
+        state.get_untracked().offset.y,
+        rested,
+        "and scrolls nothing"
+    );
+}
+
+#[test]
+fn an_axis_locked_drag_yields_to_a_scroller_that_can_still_move() {
+    let _rt = Runtime::new().enter();
+    let (mut ui, state, dragged) = swipe_row_in_a_scroller(DragAxis::Vertical);
+    ui.swipe(Point::new(50.0, 80.0), Point::new(50.0, 30.0));
+    assert_eq!(dragged.get_untracked(), 0.0);
+    assert!(
+        state.get_untracked().offset.y > 0.0,
+        "the list scrolls first"
+    );
+    state.update(|state| state.scroll_to(Point::ZERO));
+    ui.run(5.0);
+    ui.swipe(Point::new(50.0, 30.0), Point::new(50.0, 80.0));
+    assert_eq!(
+        (dragged.get_untracked(), state.get_untracked().offset.y),
+        (50.0, 0.0),
+        "at its top edge the list cannot move down, so the drag takes the pull"
+    );
 }
 
 #[test]
@@ -949,24 +1022,6 @@ fn clicker() -> (TestUi, Signal<u32>) {
 #[derive(Clone, Copy)]
 struct Refresh;
 
-fn touch_scroller() -> (TestUi, Signal<ScrollState>, Signal<u32>) {
-    let state = signal(ScrollState::default());
-    let clicks = signal(0u32);
-    let ui = TestUi::new(move || {
-        let content = div()
-            .h(1000.0)
-            .on_click(move |_| clicks.update(|c| *c += 1));
-        div().size_full().child(
-            scroll()
-                .w(100.0)
-                .h(100.0)
-                .scroll_state(state)
-                .child(content),
-        )
-    });
-    (ui, state, clicks)
-}
-
 #[test]
 fn the_clear_color_is_the_root_background_or_the_theme_canvas() {
     let _rt = Runtime::new().enter();
@@ -1114,4 +1169,42 @@ fn footer() -> impl rouge_core::View {
         .col()
         .child(div().flex_1().bg(Color::BLUE))
         .child(div().h(10.0).bg(Color::RED))
+}
+
+fn swipe_row_in_a_scroller(axis: DragAxis) -> (TestUi, Signal<ScrollState>, Signal<f32>) {
+    let dragged = signal(0.0);
+    let (ui, state) = scroller(move || {
+        view! {
+            <div h=1000.0 drag_axis=axis
+                 on_drag={move |event: &DragEvent| {
+                     let travel = event.translation;
+                     dragged.set(if travel.x.abs() > travel.y.abs() {
+                         travel.x
+                     } else {
+                         travel.y
+                     });
+                 }}/>
+        }
+    });
+    (ui, state, dragged)
+}
+
+fn touch_scroller() -> (TestUi, Signal<ScrollState>, Signal<u32>) {
+    let clicks = signal(0u32);
+    let (ui, state) = scroller(move || {
+        view! { <div h=1000.0 on_click={move |_| clicks.update(|c| *c += 1)}/> }
+    });
+    (ui, state, clicks)
+}
+
+fn scroller(content: impl FnOnce() -> Div + 'static) -> (TestUi, Signal<ScrollState>) {
+    let state = signal(ScrollState::default());
+    let ui = TestUi::new(move || {
+        view! {
+            <div size_full>
+                <scroll w=100.0 h=100.0 scroll_state=state>{content()}</scroll>
+            </div>
+        }
+    });
+    (ui, state)
 }

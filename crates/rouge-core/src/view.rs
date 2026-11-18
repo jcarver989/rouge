@@ -3,8 +3,8 @@ use crate::canvas::{PaintOp, TextHit};
 use crate::clipboard::{ClipboardTarget, Pasted};
 use crate::compositor::{EffectSlot, MotionId, ScrollLinked, ScrollState};
 use crate::event::{
-    Cursor, DragEvent, FileDropEvent, FocusEvent, ImeEvent, IntoChord, Key, KeyEvent, Modifiers,
-    PointerEvent, ScrollEvent,
+    Cursor, DragAxis, DragEvent, FileDropEvent, FocusEvent, ImeEvent, IntoChord, Key, KeyEvent,
+    Modifiers, PointerEvent, ScrollEvent,
 };
 use crate::focus::FocusHandle;
 use crate::motion::{MotionOp, MotionProp};
@@ -249,6 +249,11 @@ pub fn div() -> Div {
 }
 
 impl Div {
+    pub fn drag_axis(mut self, axis: DragAxis) -> Self {
+        self.spec.flags.drag_axis = Some(axis);
+        self
+    }
+
     pub fn preserve_focus(mut self) -> Self {
         self.spec.flags.preserve_focus = true;
         self
@@ -467,6 +472,15 @@ impl Div {
         self.listen(On::Hover, move |event| {
             if let Event::Hover(event) = *event {
                 f(event);
+            }
+        })
+    }
+
+    #[track_caller]
+    pub fn on_press(self, f: impl Fn(bool) + 'static) -> Self {
+        self.listen(On::Press, move |event| {
+            if let Event::Press(down) = *event {
+                f(down);
             }
         })
     }

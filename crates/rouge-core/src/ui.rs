@@ -1,11 +1,12 @@
 use crate::clipboard::Clipboard;
 use crate::compositor::{Commit, CompositorEvent, LayerId};
 use crate::event::{
-    Chord, Cursor, DragEvent, DragPhase, FileDropEvent, FileDropPhase, ImeEvent, IntoChord, Key,
-    KeyEvent, Modifiers, PointerButton, PointerEvent, ScrollEvent, TouchPhase,
+    Chord, Cursor, DragAxis, DragEvent, DragPhase, FileDropEvent, FileDropPhase, ImeEvent,
+    IntoChord, Key, KeyEvent, Modifiers, PointerButton, PointerEvent, ScrollEvent, TouchPhase,
 };
 use crate::keymap::Keymap;
 use crate::motion::UiContext;
+use crate::presentation::{InputKind, Presentation, Presented, WidthClass};
 use crate::style::Dirty;
 use crate::text::TextSystem;
 use crate::theme::Theme;
@@ -98,6 +99,7 @@ impl Samples {
 
 struct Drag {
     element: ElementId,
+    axis: Option<DragAxis>,
     start: Point,
     last: Point,
     started: bool,
@@ -123,6 +125,7 @@ pub struct Ui {
     viewport: Size,
     safe_area: Signal<Edges>,
     insets: Edges,
+    presentation: Signal<Presentation>,
     device_scale: f32,
     zoom: Signal<f32>,
     zoomed: f32,
@@ -166,11 +169,12 @@ impl Wake {
 
 impl Ui {
     pub fn new<T: View>(size: Size, root: impl FnOnce() -> T) -> Ui {
-        Self::with_fonts(size, empty::<&'static [u8]>(), root)
+        Self::with_input(size, InputKind::default(), empty::<&'static [u8]>(), root)
     }
 
-    pub fn with_fonts<T: View, U: Into<Cow<'static, [u8]>>>(
+    pub fn with_input<T: View, U: Into<Cow<'static, [u8]>>>(
         size: Size,
+        input: InputKind,
         fonts: impl IntoIterator<Item = U>,
         root: impl FnOnce() -> T,
     ) -> Ui {
@@ -182,7 +186,7 @@ impl Ui {
         }
         let scope = Scope::root();
         let viewport = size;
-        let (size, safe_area, zoom, modifiers, window_handle) = scope.run(|| {
+        let (size, safe_area, presentation, zoom, modifiers, window_handle) = scope.run(|| {
             let window_handle = WindowHandle {
                 queue: signal(queue.clone()),
                 title: signal(String::new()),
@@ -195,6 +199,11 @@ impl Ui {
             provide_context(WindowSize(size.read_only()));
             let safe_area = signal(Edges::ZERO);
             provide_context(SafeArea(safe_area.read_only()));
+            let presentation = signal(Presentation {
+                input,
+                width: WidthClass::of(size.get_untracked()),
+            });
+            provide_context(Presented(presentation.read_only()));
             let zoom = signal(1.0);
             provide_context(Zoom(zoom));
             let modifiers = signal(Modifiers::NONE);
@@ -213,7 +222,14 @@ impl Ui {
                 theme: Some((theme, None)),
             };
             root().build(&mut cx);
-            (size, safe_area, zoom, modifiers, window_handle)
+            (
+                size,
+                safe_area,
+                presentation,
+                zoom,
+                modifiers,
+                window_handle,
+            )
         });
         Ui {
             window_handle,
@@ -222,6 +238,7 @@ impl Ui {
             viewport,
             safe_area,
             insets: Edges::ZERO,
+            presentation,
             device_scale: 1.0,
             zoom,
             zoomed: 1.0,
@@ -412,6 +429,13 @@ impl Ui {
         self.rescale();
     }
 
+    pub fn set_input(&mut self, input: InputKind) {
+        self.presentation.set_if_changed(Presentation {
+            input,
+            ..self.presentation.get_untracked()
+        });
+    }
+
     pub fn set_device_scale(&mut self, scale: f32) {
         self.device_scale = scale;
         self.rescale();
@@ -446,6 +470,10 @@ impl Ui {
             self.viewport.height / self.zoomed,
         );
         self.size.set_if_changed(size);
+        self.presentation.set_if_changed(Presentation {
+            width: WidthClass::of(size),
+            ..self.presentation.get_untracked()
+        });
         self.tree.set_size(size);
         self.safe_area.set_if_changed(Edges {
             top: self.insets.top / self.zoomed,
@@ -757,6 +785,7 @@ impl Ui {
             let targets = self.tree.listeners(&path, On::Drag);
             self.drag = targets.first().map(|(element, _)| Drag {
                 element: *element,
+                axis: self.tree.drag_axis(*element),
                 start: position,
                 last: position,
                 started: false,
@@ -831,9 +860,21 @@ impl Ui {
                     return;
                 };
                 let travel = position - touch.start;
+                let distance = travel.x.hypot(travel.y);
+                let yields = self.drag.as_ref().is_some_and(|drag| {
+                    !drag.started
+                        && distance >= DRAG_SLOP
+                        && drag.axis.is_some_and(|axis| {
+                            !axis.follows(travel)
+                                || self.scroll_target(Point::ZERO - travel, false).is_some()
+                        })
+                });
+                if yields {
+                    self.drag = None;
+                }
                 if touch.panning {
                     self.scroll_drag(position - touch.last);
-                } else if self.drag.is_none() && travel.x.hypot(travel.y) >= TOUCH_SLOP {
+                } else if self.drag.is_none() && distance >= TOUCH_SLOP {
                     touch.panning = true;
                     self.release_press();
                     self.scroll_drag(travel);
@@ -961,6 +1002,9 @@ impl Ui {
         let Some(mut drag) = self.drag.take() else {
             return;
         };
+        if !drag.started && drag.axis.is_some_and(|axis| !axis.follows(travel)) {
+            return;
+        }
         if !drag.started {
             drag.started = true;
             let path = self.tree.hover_path().to_vec();

@@ -11,6 +11,7 @@ mod keymap;
 mod length;
 mod motion;
 mod path;
+mod presentation;
 mod prop;
 mod scroll;
 mod selection;
@@ -40,7 +41,7 @@ pub use compositor::{ThreadError, spawn};
 pub use control::{Each, IntoItems, Show, dynamic, each, overlay, show, switch};
 pub use editable::{Editable, editable};
 pub use event::{
-    APPLE, Chord, ChordError, Cursor, DragEvent, DragPhase, FileDropEvent, FileDropPhase,
+    APPLE, Chord, ChordError, Cursor, DragAxis, DragEvent, DragPhase, FileDropEvent, FileDropPhase,
     FocusEvent, ImeEvent, IntoChord, Key, KeyEvent, Modifiers, PointerButton, PointerEvent,
     ScrollEvent, TouchPhase,
 };
@@ -50,6 +51,7 @@ pub use keymap::use_binding;
 pub use length::{Length, auto, pct, px};
 pub use motion::{Animation, Completion, MappedMotion, Motion, MotionProp, motion};
 pub use path::{Path, PathBuilder};
+pub use presentation::{COMPACT_WIDTH, InputKind, Presentation, WidthClass, presentation};
 pub use prop::{AnyEffect, IntoProp, Prop, PropFrom};
 pub use rouge_theme::{Rgba, Role, UiPalette};
 pub use scroll::{
