@@ -32,6 +32,8 @@ pub enum Message {
     Configure(WindowId, WindowConfig),
     Commit(WindowId, Commit),
     Close(WindowId),
+    Detach(WindowId, Sender<Target>),
+    Attach(WindowId, Target),
     Wake,
     Shutdown,
 }
@@ -40,7 +42,7 @@ struct Window {
     id: WindowId,
     compositor: Compositor,
     renderer: Renderer,
-    target: Target,
+    target: Option<Target>,
     config: WindowConfig,
     clear: Color,
     scale: f32,
@@ -57,8 +59,12 @@ impl Window {
         self.change = model.next_change(self.presented.unwrap_or(model.time()));
     }
 
+    fn shown(&self) -> bool {
+        self.config.visible && self.target.is_some()
+    }
+
     fn wake_at(&self, now: f64) -> Option<f64> {
-        if !self.config.visible {
+        if !self.shown() {
             return None;
         }
         let change = if self.owed || self.surfaced || self.unshown {
@@ -109,7 +115,7 @@ impl CompositorActor {
     pub fn into_targets(self) -> Vec<Target> {
         self.windows
             .into_iter()
-            .map(|window| window.target)
+            .filter_map(|window| window.target)
             .collect()
     }
 
@@ -133,7 +139,7 @@ impl CompositorActor {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn image(&self, window: WindowId) -> Option<Result<Image, GpuError>> {
         let open = self.windows.iter().find(|open| open.id == window)?;
-        Some(read_texture(&self.gpu, open.target.texture()?))
+        Some(read_texture(&self.gpu, open.target.as_ref()?.texture()?))
     }
 
     pub fn commands(&mut self, window: WindowId, now: f64) -> Option<Vec<Command>> {
@@ -151,7 +157,7 @@ impl CompositorActor {
                     id,
                     compositor: Compositor::default(),
                     renderer,
-                    target,
+                    target: Some(target),
                     config,
                     clear: Color::TRANSPARENT,
                     scale: 1.0,
@@ -166,8 +172,12 @@ impl CompositorActor {
                 let Some(window) = find(&mut self.windows, id) else {
                     return;
                 };
-                if (config.width, config.height) != window.target.size() {
-                    (window.target).resize(&self.gpu, config.width, config.height);
+                let resized = window.target.as_mut().is_some_and(|target| {
+                    let resized = (config.width, config.height) != target.size();
+                    target.resize(&self.gpu, config.width, config.height);
+                    resized
+                });
+                if resized {
                     window.presented = None;
                     window.follow();
                 }
@@ -181,6 +191,24 @@ impl CompositorActor {
             Message::Close(id) => {
                 self.windows.retain(|open| open.id != id);
                 self.events.push((id, CompositorEvent::Closed));
+            }
+            Message::Detach(id, reply) => {
+                let Some(window) = find(&mut self.windows, id) else {
+                    return;
+                };
+                if let Some(target) = window.target.take() {
+                    let _ = reply.send(target);
+                }
+                self.events.extend(window.acknowledge());
+            }
+            Message::Attach(id, target) => {
+                let Some(window) = find(&mut self.windows, id) else {
+                    return;
+                };
+                window.target = Some(target);
+                window.presented = None;
+                window.unshown = true;
+                window.follow();
             }
             Message::Wake | Message::Shutdown => {}
         }
@@ -209,7 +237,7 @@ impl CompositorActor {
         window.scale = commit.scale.unwrap_or(window.scale);
         window.owed = true;
         window.follow();
-        if !window.config.visible && !held {
+        if !window.shown() && !held {
             self.events.extend(window.acknowledge());
         }
     }
@@ -266,12 +294,16 @@ impl CompositorActor {
         if !window.config.visible {
             return;
         }
+        let Some(target) = window.target.as_mut() else {
+            return;
+        };
         window.presented = Some(now);
-        window.follow();
-        let (width, height) = window.target.size();
+        let model = window.compositor.model();
+        window.change = model.next_change(now);
+        let (width, height) = target.size();
         let viewport = Viewport::new(width, height, window.scale);
         let scene = window.compositor.scene(window.scale, &self.surfaces, now);
-        let (target, gpu, unshown) = (&mut window.target, &self.gpu, &mut window.unshown);
+        let (gpu, unshown) = (&self.gpu, &mut window.unshown);
         let (mut frame, mut retry) = (None, false);
         {
             let _encode = trace_span!("encode").entered();
@@ -294,7 +326,7 @@ impl CompositorActor {
         }
         if let Some(frame) = frame {
             let _present = trace_span!("present").entered();
-            window.target.present(&self.gpu, frame);
+            target.present(&self.gpu, frame);
             window.unshown = false;
         }
         window.surfaced = false;

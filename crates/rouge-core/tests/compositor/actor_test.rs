@@ -4,6 +4,7 @@ mod common;
 use common::{Stage, StageBuilder, WINDOW, square};
 use rouge_core::testing::{LINEAR, TestResult};
 use rouge_core::{CompositorEvent, Keyframes, LayerProp, Message, MotionId};
+use rouge_render::headless::assert_near;
 use std::error::Error;
 
 #[test]
@@ -208,6 +209,46 @@ fn closing_a_window_reports_it() -> TestResult {
     stage.actor.handle(Message::Close(WINDOW));
     let closed = stage.actor.events().last();
     assert_eq!(closed, Some((WINDOW, CompositorEvent::Closed)));
+    Ok(())
+}
+
+#[test]
+fn a_detached_window_hands_its_target_back_and_acknowledges_changes_at_once() -> TestResult {
+    let mut stage = StageBuilder::default().child(square()).build()?;
+    stage.frame(0.0);
+    stage.presented();
+    assert!(stage.detach().is_some(), "the target comes back");
+    assert!(stage.detach().is_none(), "and only once");
+    stage.set(stage.child, LayerProp::TranslateX, 5.0);
+    stage.sync();
+    assert_eq!(
+        stage.presented(),
+        1,
+        "nothing will be presented, so it is acknowledged now"
+    );
+    assert_eq!(stage.actor.next_wake(0.1), None, "nothing to draw into");
+    Ok(())
+}
+
+#[test]
+fn an_attached_target_shows_what_was_committed_while_detached() -> TestResult {
+    let mut stage = StageBuilder::default().child(square()).build()?;
+    stage.frame(0.0);
+    let target = stage.detach().ok_or("the stage has no target")?;
+    stage.set(stage.child, LayerProp::TranslateX, 50.0);
+    stage.sync();
+    stage.attach(target);
+    assert!(
+        stage.actor.next_wake(0.1).is_some(),
+        "the new target is still to be drawn"
+    );
+    stage.frame(0.1);
+    assert_near(
+        stage.image()?.pixel(60, 10),
+        [255, 0, 0, 255],
+        "moved square",
+    );
+    assert_eq!(stage.actor.next_wake(0.2), None, "and then it idles");
     Ok(())
 }
 

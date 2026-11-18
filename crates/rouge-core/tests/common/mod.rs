@@ -14,6 +14,7 @@ use std::error::Error;
 use std::future::Future;
 use std::mem::take;
 use std::pin::Pin;
+use std::sync::mpsc::channel;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
@@ -246,6 +247,18 @@ impl Stage {
     pub(crate) fn show(&mut self, visible: bool) {
         let config = WindowConfig { visible, ..CONFIG };
         self.actor.handle(Message::Configure(WINDOW, config));
+        self.collect();
+    }
+
+    pub(crate) fn detach(&mut self) -> Option<Target> {
+        let (reply, detached) = channel();
+        self.actor.handle(Message::Detach(WINDOW, reply));
+        self.collect();
+        detached.try_recv().ok()
+    }
+
+    pub(crate) fn attach(&mut self, target: Target) {
+        self.actor.handle(Message::Attach(WINDOW, target));
         self.collect();
     }
 
