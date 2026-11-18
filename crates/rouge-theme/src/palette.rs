@@ -136,24 +136,18 @@ impl<T> SemanticStyle<T> {
 impl<T: Copy> UiPalette<T> {
     #[must_use]
     pub fn control_style(self, variant: ButtonVariant, state: ControlState) -> SemanticStyle<T> {
-        if matches!(state.interaction, InteractionState::Disabled) {
-            return SemanticStyle {
-                foreground: self.text_muted,
-                background: Some(self.surface_selected),
-                emphasized: false,
-            };
-        }
         let (foreground, background) = match (variant, state.interaction, state.selected) {
             (ButtonVariant::Primary, _, _) => (self.accent_foreground, Some(self.accent)),
-            (ButtonVariant::Destructive, _, _) => {
-                (self.destructive_foreground, Some(self.destructive))
+            (ButtonVariant::Destructive, InteractionState::Hovered, _) => {
+                (self.destructive, Some(self.surface_hover))
             }
+            (ButtonVariant::Destructive, _, _) => (self.destructive, None),
             (ButtonVariant::Ghost, _, true) => (self.accent, Some(self.surface_selected)),
             (ButtonVariant::Secondary | ButtonVariant::Ghost, InteractionState::Hovered, _) => {
                 (self.text, Some(self.surface_hover))
             }
-            (ButtonVariant::Secondary, _, _) => (self.text, Some(self.surface)),
-            (ButtonVariant::Ghost, _, false) => (self.text_muted, None),
+            (ButtonVariant::Secondary, _, _) => (self.text, Some(self.elevated)),
+            (ButtonVariant::Ghost, _, false) => (self.text_secondary, None),
         };
         SemanticStyle {
             foreground,
@@ -205,6 +199,11 @@ impl<T: Copy> UiPalette<T> {
 
 impl UiPalette {
     #[must_use]
+    pub const fn for_dark(dark: bool) -> Self {
+        if dark { Self::dark() } else { Self::light() }
+    }
+
+    #[must_use]
     pub const fn light() -> Self {
         Self {
             canvas: Rgba::rgb(0xf5f5f7),
@@ -219,7 +218,7 @@ impl UiPalette {
             text_muted: Rgba::rgb(0x6e6e73),
             border: Rgba::rgb(0xd2d2d7),
             border_subtle: Rgba::rgb(0xe5e5ea),
-            accent: Rgba::rgb(0x0a6cff),
+            accent: Rgba::rgb(0x007653),
             accent_foreground: Rgba::rgb(0xffffff),
             info: Rgba::rgb(0x0a6cff),
             positive: Rgba::rgb(0x248a3d),
@@ -245,7 +244,7 @@ impl UiPalette {
             text_muted: Rgba::rgb(0x98989d),
             border: Rgba::rgb(0x48484a),
             border_subtle: Rgba::rgb(0x38383a),
-            accent: Rgba::rgb(0x0a84ff),
+            accent: Rgba::rgb(0x158561),
             accent_foreground: Rgba::rgb(0xffffff),
             info: Rgba::rgb(0x0a84ff),
             positive: Rgba::rgb(0x30d158),

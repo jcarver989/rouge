@@ -66,11 +66,7 @@ fn theme_switch() -> Staged {
         (0..2000).map(|index| view! { <button test_id={format!("b{index}")} label="Save"/> });
     let view = div().size_full().flex().flex_wrap().children(buttons);
     staged(view, move |_, frame| {
-        if frame.is_multiple_of(2) {
-            theme.set(UiPalette::dark());
-        } else {
-            theme.set(UiPalette::light());
-        }
+        theme.set(UiPalette::for_dark(frame.is_multiple_of(2)));
         phase(frame, 20)
     })
 }

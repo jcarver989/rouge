@@ -78,14 +78,9 @@ fn appearance(dark: Signal<bool>) -> impl View {
     let swatches = [0x0a6cff, 0xd6336c, 0x2f9e44, 0xf08c00];
     let theme = Theme::current();
     effect(move || {
-        let base = if dark.get() {
-            UiPalette::dark()
-        } else {
-            UiPalette::light()
-        };
         theme.set(UiPalette {
             accent: Rgba::rgb(swatches[accent.get()]),
-            ..base
+            ..UiPalette::for_dark(dark.get())
         });
     });
     let gap = move || match density.get() {

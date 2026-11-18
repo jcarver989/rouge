@@ -46,4 +46,22 @@ impl Rgba {
     pub const fn mix(self, background: Self, amount: u8) -> Self {
         Self::new(self.r, self.g, self.b, amount).over(background)
     }
+
+    #[must_use]
+    pub fn contrast(self, other: Self) -> f32 {
+        let (a, b) = (self.luminance(), other.luminance());
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    fn luminance(self) -> f32 {
+        let linear = |channel: u8| {
+            let channel = f32::from(channel) / 255.0;
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(self.r) + 0.7152 * linear(self.g) + 0.0722 * linear(self.b)
+    }
 }
