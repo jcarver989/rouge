@@ -487,7 +487,7 @@ impl MarkdownRow {
             Kind::Html { .. } => paint
                 .prose()
                 .muted()
-                .child(fragments.next().map(|text| text.code())),
+                .child(fragments.next().map(UiStyles::code)),
         }
     }
 }
