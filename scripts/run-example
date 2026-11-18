@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Columns: public ID, desktop/web/iOS/Android Cargo examples, optional desktop argument.
+catalog() {
+    cat <<'CATALOG'
+todomvc  todomvc            todomvc            todomvc            android_todomvc
+gallery  component_gallery  component_gallery  component_gallery  -
+counter  demo               -                  -                  -                counter
+glass    demo               -                  -                  -                glass
+effects  demo               -                  -                  -                effects
+motion   demo               -                  -                  -                motion
+diff     demo               -                  -                  -                diff
+settings demo               -                  -                  -                settings
+surface  surface            -                  -                  -
+CATALOG
+}
+
+show_examples() {
+    printf '%-10s %s\n' 'Example' 'Platforms'
+    while read -r id desktop web ios android demo; do
+        printf '%-10s %s\n' "$id" "$(platforms "$desktop" "$web" "$ios" "$android")"
+    done < <(catalog)
+}
+
+platforms() {
+    local name result=''
+    for name in desktop web ios android; do
+        if [[ $1 != - ]]; then
+            result="${result:+$result, }$name"
+        fi
+        shift
+    done
+    printf '%s\n' "$result"
+}
+
+fail() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
+require() {
+    local platform=$1 tool
+    shift
+    for tool in "$@"; do
+        command -v "$tool" >/dev/null || fail "The $platform launcher requires $tool on PATH. See README.md for setup."
+    done
+}
+
+run_example() {
+    local example=$1 platform=$2 id desktop web ios android demo target
+    case "$platform" in
+        desktop|web|ios|android) ;;
+        *) fail "Unknown platform '$platform'. Choose desktop, web, ios, or android." ;;
+    esac
+
+    while read -r id desktop web ios android demo; do
+        [[ $id == "$example" ]] || continue
+        target=${!platform}
+        [[ $target != - ]] || fail "'$example' doesn't run on $platform. Supported platforms: $(platforms "$desktop" "$web" "$ios" "$android")."
+
+        case "$platform" in
+            desktop)
+                require "$platform" cargo
+                exec cargo run -p rouge --example "$target" ${demo:+-- "$demo"}
+                ;;
+            web) require "$platform" cargo wasm-bindgen python3 ;;
+            ios)
+                [[ $(uname -s) == Darwin ]] || fail 'The ios launcher requires macOS with Xcode.'
+                require "$platform" cargo xcrun
+                xcrun --find simctl >/dev/null 2>&1 || fail 'The ios launcher requires full Xcode selected with xcode-select.'
+                ;;
+            android)
+                require "$platform" cargo cargo-ndk adb
+                [[ -n ${ANDROID_HOME:-} ]] || fail 'Set ANDROID_HOME to the Android SDK. See README.md for setup.'
+                ;;
+        esac
+        exec "${ROUGE_JUST:-just}" "platform::$platform::run" "$target"
+    done < <(catalog)
+
+    fail "Unknown example '$example'. Run 'just examples' to see the available examples."
+}
+
+case "${1-}" in
+    list) show_examples ;;
+    run) run_example "$2" "$3" ;;
+    *) fail 'Use just examples or just run <example> [platform].' ;;
+esac

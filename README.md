@@ -152,36 +152,41 @@ fn the_button_adds_one() -> TestResult {
 
 ## Run the examples
 
-Clone this repository, and then run these commands from its root.
+Clone this repository and install [`just`](https://github.com/casey/just). Use `just run <example> [platform]` from the checkout. Omit the platform to run on your macOS or Linux desktop.
 
-| Command | What it shows |
-|---|---|
-| `cargo run -p rouge --example todomvc` | A full TodoMVC app with routes and saved data |
-| `cargo run -p rouge --example component_gallery` | All of the widgets |
-| `cargo run -p rouge --example demo counter` | The counter |
-| `cargo run -p rouge --example demo glass` | Liquid glass |
-| `cargo run -p rouge --example demo effects` | Blur, masks, blend modes and a custom WGSL effect |
-| `cargo run -p rouge --example demo motion` | Springs, tweens and keyframes |
-| `cargo run -p rouge --example surface` | GPU content from a different thread, shown with no copy |
+```sh
+just examples             # list examples and supported platforms
+just run todomvc          # desktop
+just run todomvc web      # browser
+just run todomvc ios      # iOS simulator
+just run todomvc android  # connected arm64 Android device or emulator
+```
+
+| Example | What it shows | Platforms |
+|---|---|---|
+| `todomvc` | A full TodoMVC app with routes and saved data | Desktop, web, iOS, Android |
+| `gallery` | All of the widgets | Desktop, web, iOS |
+| `counter` | The counter | Desktop |
+| `glass` | Liquid glass | Desktop |
+| `effects` | Blur, masks, blend modes and a custom WGSL effect | Desktop |
+| `motion` | Springs, tweens and keyframes | Desktop |
+| `diff` | A sample diff with syntax highlighting | Desktop |
+| `settings` | A settings screen | Desktop |
+| `surface` | GPU content from a different thread, shown with no copy | Desktop |
+
+Use `just --list` for workspace tasks, `just --list platform web` (or `ios` or `android` in place of `web`) for platform build and check tasks, and `just --list perf` for benchmarks and profiling. The platform-specific `build` recipes take Cargo example names (such as `android_todomvc`); `just run` takes the IDs in the table above.
 
 ### In the browser
 
-You must have [`just`](https://github.com/casey/just) and `wasm-bindgen-cli` installed. The `wasm-bindgen-cli` version must be the same as the `wasm-bindgen` version in `Cargo.lock`.
+Install Python 3, the `wasm32-unknown-unknown` Rust target, and `wasm-bindgen-cli` at the same version as `wasm-bindgen` in `Cargo.lock`. After `just run todomvc web` starts the server, open <http://localhost:8000> in a browser that supports WebGPU.
 
-```sh
-just web                  # the component gallery
-just web todomvc rouge    # TodoMVC
-```
+### In the iOS simulator
 
-Then open <http://localhost:8000> in a browser that supports WebGPU.
+On an Apple Silicon Mac, select the full Xcode installation with `xcode-select`, install an iOS simulator runtime and the `aarch64-apple-ios-sim` Rust target, then run `just run todomvc ios`. This builds, installs, and launches the app and streams its console output. The default simulator is `iPhone 17 Pro`; set `ROUGE_IOS_DEVICE` to a name or UDID from `xcrun simctl list devices available` to use another one.
 
 ### On Android
 
-Android support is experimental. You must have the Android SDK (`ANDROID_HOME` with build-tools and a platform), a Java runtime, the Android NDK (`ANDROID_NDK_HOME`), [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk) and the `aarch64-linux-android` Rust target installed.
-
-```sh
-just android              # TodoMVC on the connected device or emulator
-```
+Android support is experimental. Install the Android SDK (`ANDROID_HOME`, including build-tools, platform-tools and a platform), a JDK (`keytool` and `java` on `PATH`), the Android NDK (`ANDROID_NDK_HOME`), [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk), and the `aarch64-linux-android` Rust target. Put `adb` on `PATH`, then run `just run todomvc android` with an arm64 device or emulator connected. If more than one is connected, set `ANDROID_SERIAL` to the serial shown by `adb devices`.
 
 An Android app is a `cdylib` that exports `android_main` and gives the activity to Rouge:
 
