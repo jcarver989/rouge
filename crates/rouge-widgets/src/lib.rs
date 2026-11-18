@@ -1,6 +1,8 @@
 mod choice;
+mod code_input;
 mod components;
 mod effects;
+mod field;
 mod fonts;
 mod grid;
 mod icon;
@@ -13,6 +15,7 @@ mod markdown;
 mod material;
 mod menu;
 mod menu_bar;
+mod number_field;
 mod picker;
 mod popover;
 mod progress;
@@ -25,6 +28,7 @@ mod slider;
 #[cfg(feature = "syntax")]
 mod syntax;
 mod tabs;
+mod tag_input;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod testing;
 pub mod tokens;
@@ -34,6 +38,7 @@ mod util;
 mod window_chrome;
 
 pub use choice::{Radio, Toggle, radio, toggle};
+pub use code_input::{CodeInput, code_input};
 pub use components::{
     Backdrop, Button, CheckModel, CheckState, Checkbox, ControlSize, Disclosure, IconButton,
     ListRow, Modal, RowAction, SectionHeader, Segment, SegmentedControl, action_bar, backdrop,
@@ -41,6 +46,7 @@ pub use components::{
     notification, row_action, section_header, segment, segmented_control,
 };
 pub use effects::BusyExt;
+pub use field::{Field, field};
 pub use fonts::{CODE_FONT, UI_FONT, bundled_fonts};
 pub use grid::{column_grid, grid_cell, grid_overlay};
 pub use icon::{Icon, IconName};
@@ -53,6 +59,7 @@ pub use markdown::{Markdown, MarkdownPaint, MarkdownRow, MarkdownRows, MarkdownS
 pub use material::{Material, MaterialExt};
 pub use menu::{ContextMenu, MenuFocus, MenuItem, context_menu, select};
 pub use menu_bar::menu_bar;
+pub use number_field::{NumberField, number_field};
 pub use picker::{
     PickerItem, PickerList, PickerMarker, Preview, SearchPicker, SearchPickerEvent,
     SearchPickerHandle, picker_list, search_picker,
@@ -71,6 +78,7 @@ pub use slider::{Slider, slider};
 #[cfg(feature = "syntax")]
 pub use syntax::{CODE_WRAP, syntax_spans};
 pub use tabs::{Tabs, tabs};
+pub use tag_input::{TagInput, tag_input};
 pub use tree::{TreeRow, indent, tree_row};
 pub use typography::UiStyles;
 pub use window_chrome::window_chrome;

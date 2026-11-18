@@ -1,9 +1,9 @@
-use crate::tokens::{GROUP_HEIGHT, Radius};
-use crate::typography::UiStyles;
+use crate::tokens::{GROUP_HEIGHT, HAIRLINE, Space};
+use crate::util::{chrome, entry, entry_frame};
 use rouge_core::Role;
 use rouge_core::{
-    Apply, BuildCx, Cursor, DelegateStyle, Editable, StyleDelta, Styled, Theme, View, component,
-    div, editable, focus_handle, view,
+    Apply, BuildCx, DelegateStyle, Editable, StyleDelta, Styled, View, component, div,
+    focus_handle, view,
 };
 use rouge_reactive::{Callback, Signal};
 use std::ops::Range;
@@ -17,6 +17,7 @@ pub struct TextInput {
     multiline: bool,
     submit_on_enter: bool,
     on_submit: Callback<(String,)>,
+    test_id: Option<String>,
     style: StyleDelta,
 }
 
@@ -31,6 +32,7 @@ pub fn text_input(value: Signal<String>) -> TextInput {
         multiline: false,
         submit_on_enter: false,
         on_submit: Callback::default(),
+        test_id: None,
         style: StyleDelta::default(),
     }
 }
@@ -72,15 +74,10 @@ impl TextInput {
     }
 }
 
-impl DelegateStyle for TextInput {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(TextInput);
 
 impl View for TextInput {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let theme = Theme::current();
         let focus = focus_handle();
         let TextInput {
             value,
@@ -91,14 +88,10 @@ impl View for TextInput {
             multiline,
             submit_on_enter,
             on_submit,
+            test_id,
             style,
         } = self;
-        let field = editable(value)
-            .w_full()
-            .body()
-            .color(Role::Text)
-            .caret_color(theme.get_untracked().accent)
-            .track_focus(focus)
+        let field = entry(value, focus)
             .submit_on_enter(submit_on_enter)
             .on_submit(move |text| on_submit.call(text.to_owned()))
             .when(multiline, Editable::multiline)
@@ -110,14 +103,12 @@ impl View for TextInput {
             .when_some(max_rows, Editable::max_rows);
         let fixed = min_rows.is_some() || max_rows.is_some();
         let root = view! {
-            <div flex px=8.0 py=4.0 border=1.0 rounded=Radius::Control bg=Role::Elevated overflow_hidden
-                 cursor=Cursor::Text when:items_start=multiline when:items_center={!multiline}
-                 when:min_h=(multiline && !fixed, 72.0) when:min_h=(!multiline, GROUP_HEIGHT)
-                 border_color={move || if focus.is_focused() { theme.get().accent } else { theme.get().border }}
-                 on_pointer_down={move |_| focus.focus()}>
+            <div test_id?=test_id flex px=Space::X2 py={Space::X1.px() - HAIRLINE} overflow_hidden
+                 when:items_start=multiline when:items_center={!multiline}
+                 when:min_h=(multiline && !fixed, 72.0) when:min_h=(!multiline, GROUP_HEIGHT)>
                 {div().flex_1().min_w(0.0).child(field)}
             </div>
         };
-        style.apply(root).build(cx);
+        style.apply(entry_frame(root, focus)).build(cx);
     }
 }

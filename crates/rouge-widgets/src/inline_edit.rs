@@ -1,4 +1,8 @@
-use crate::{tokens::Radius, typography::UiStyles};
+use crate::{
+    tokens::{Radius, Space},
+    typography::UiStyles,
+    util::chrome,
+};
 use rouge_core::Role;
 use rouge_core::{
     Apply, BuildCx, DelegateStyle, Div, Key, Prop, StyleDelta, Styled, Theme, View, component, div,
@@ -24,7 +28,7 @@ pub fn inline_edit(#[prop(reactive)] value: Prop<String>) -> InlineEdit {
         on_cancel: Callback::default(),
         style: StyleDelta::default(),
         editing: StyleDelta::default()
-            .px(4.0)
+            .px(Space::X1)
             .rounded(Radius::Inner)
             .border(1.0)
             .border_color(Role::Accent)
@@ -35,11 +39,6 @@ pub fn inline_edit(#[prop(reactive)] value: Prop<String>) -> InlineEdit {
 }
 
 impl InlineEdit {
-    pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.test_id = Some(id.into());
-        self
-    }
-
     pub fn on_commit(mut self, on_commit: impl Into<Callback<(String,)>>) -> Self {
         self.on_commit = on_commit.into();
         self
@@ -56,11 +55,7 @@ impl InlineEdit {
     }
 }
 
-impl DelegateStyle for InlineEdit {
-    fn style_target(&mut self) -> &mut (impl Styled + Default) {
-        &mut self.style
-    }
-}
+chrome!(InlineEdit);
 
 impl View for InlineEdit {
     fn build(self, cx: &mut BuildCx<'_>) {
