@@ -1,83 +1,29 @@
-use rouge::core::{Role, Styled, Theme, UiPalette, View, component, div, text, view};
-use rouge::reactive::{Signal, signal};
-use rouge::widgets::{
-    ButtonVariant, IconName, InterfaceSize, Material, MaterialExt, MenuItem, NoticeTone,
-    SelectionState, Side, UiStyles, action_bar, button, context_menu, empty_state, inline_edit,
-    notification, resizable_panel, section_header, segment, segmented_control, tree_row,
-};
+#[path = "shared/gallery/mod.rs"]
+mod gallery;
+
 use rouge::{App, AppError, WindowOptions};
+#[cfg(not(target_arch = "wasm32"))]
+use std::env::args;
+use thiserror::Error;
 
-fn main() -> Result<(), AppError> {
-    App::new()
-        .window(
-            WindowOptions::default()
-                .title("Rouge kit component gallery")
-                .size(920.0, 680.0),
-            gallery,
-        )
-        .run()
+#[derive(Debug, Error)]
+enum GalleryError {
+    #[error(transparent)]
+    App(#[from] AppError),
+    #[cfg(not(target_arch = "wasm32"))]
+    #[error(transparent)]
+    Snapshot(#[from] gallery::CameraError),
 }
 
-fn gallery() -> impl View {
-    let theme = Theme::current();
-    theme.set(UiPalette::default());
-    let size = InterfaceSize::install(16.0);
-    let status = signal(String::from("Choose a control"));
-    let edit = signal(String::from("Editable text"));
-    let width = signal(16.0);
-    let count = view! { <text caption muted>"2"</text> };
-    size.bind(view! {
-        <div size_full flex col p=16.0 gap=12.0 bg=Role::Canvas>
-            <text heading primary>"Shared Rouge components"</text>
-            <controls size status/>
-            <div flex gap=8.0 flex_1>
-                <resizable_panel edge=Side::Left size=width test_id="sidebar" min_size=10.0 max_size=28.0>
-                    <div flex col size_full material=Material::Surface>
-                        <section_header test_id="files" title="Files" expanded=true badge=count.into_any()/>
-                        <tree_row test_id="src" label="src" expanded=true icon=IconName::FolderOpen/>
-                        <tree_row test_id="lib" label="lib.rs" depth=1 icon=IconName::File selection=SelectionState::Selected
-                                  on_click={move || status.set("Selected lib.rs".into())}/>
-                    </div>
-                </resizable_panel>
-                <div flex col p=12.0 flex_1 min_w=0.0 gap=12.0 material=Material::Glass>
-                    <segmented_control test_id="view">
-                        <segment test_id="unified" label="Unified" selected=true/>
-                        <segment test_id="split" label="Split" icon=IconName::Columns2/>
-                        <segment test_id="disabled-segment" label="Disabled" disabled=true/>
-                    </segmented_control>
-                    <notification message="Theme tokens and bundled typefaces" tone=NoticeTone::Info/>
-                    <inline_edit value=edit on_commit={move |value: String| {
-                        edit.set(value.clone());
-                        status.set(value);
-                    }}/>
-                    <empty_state icon=IconName::FileDiff title="No changes" detail="The working tree is clean"/>
-                    <action_bar>
-                        <text caption primary>{move || status.get()}</text>
-                    </action_bar>
-                </div>
-            </div>
-        </div>
-    })
-}
-
-#[component]
-fn controls(size: InterfaceSize, status: Signal<String>) -> impl View {
-    let items = [
-        MenuItem::callback("Larger", move || size.set(size.get() + 1.0)).icon(IconName::Plus),
-        MenuItem::callback("Smaller", move || size.set(size.get() - 1.0)).icon(IconName::Minus),
-        MenuItem::Separator,
-        MenuItem::callback("Reset", move || size.set(16.0)),
-    ];
-    view! {
-        <div flex gap=8.0>
-            <button test_id="primary" label="Primary" variant=ButtonVariant::Primary
-                    on_click={move || status.set("Primary selected".into())}/>
-            <button test_id="secondary" label="Secondary" variant=ButtonVariant::Secondary
-                    on_click={move || status.set("Secondary selected".into())}/>
-            <button test_id="destructive" label="Destructive" variant=ButtonVariant::Destructive
-                    on_click={move || status.set("Destructive selected".into())}/>
-            <button test_id="disabled" label="Disabled" disabled=true/>
-            <context_menu items dropdown><button test_id="menu" label="Interface size"/></context_menu>
-        </div>
+fn main() -> Result<(), GalleryError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if args().nth(1).as_deref() == Some("--snapshot") {
+        return Ok(gallery::snapshot(
+            &args().nth(2).unwrap_or_else(|| ".".into()),
+        )?);
     }
+    let options = WindowOptions::default()
+        .title("Rouge component gallery")
+        .size(1296.0, 800.0);
+    Ok(App::new().window(options, gallery::gallery).run()?)
 }
