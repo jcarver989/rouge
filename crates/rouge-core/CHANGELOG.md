@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/jcarver989/rouge/compare/rouge-core-v0.1.2...rouge-core-v0.2.0) - 2026-11-19
+
+### Added
+
+- *(widgets)* add reactive grid placement and centered reading cells
+- *(web)* fall back to WebGL2 when WebGPU is unavailable
+- *(widgets)* [**breaking**] add responsive sheets and richer control interactions
+- *(core)* support scrolling underlays in virtual lists
+- *(core)* add grid column spans and named bounds inspection
+- *(core)* [**breaking**] expose window presentation and improve touch gestures
+- *(core)* map motion bindings and spring from release velocity
+- *(core)* detach and reattach a window's render target
+
+### Fixed
+
+- *(rouge)* tighten the Android surface, JNI and packaging contracts
+
+### Other
+
+- describe adaptive widgets and the updated design system
+- unify example launch commands and namespace Just recipes
+- describe Android support and the platform traits
+
 ## [0.1.2](https://github.com/jcarver989/rouge/compare/rouge-core-v0.1.1...rouge-core-v0.1.2) - 2026-11-18
 
 ### Other
