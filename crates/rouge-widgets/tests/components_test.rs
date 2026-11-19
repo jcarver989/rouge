@@ -5,7 +5,7 @@ use rouge_core::{
 };
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_widgets::testing::component_test;
-use rouge_widgets::tokens::{Hold, UNIT};
+use rouge_widgets::tokens::{Hold, ICON_BUTTON_SIZE, UNIT};
 use rouge_widgets::*;
 
 #[test]
@@ -411,6 +411,64 @@ fn row_actions_appear_on_hover_and_on_keyboard_focus_with_a_pointer() -> TestRes
         ["archive", "row", "delete"],
         "tab reaches each action"
     );
+    Ok(())
+}
+
+#[test]
+fn an_icon_only_row_action_is_a_square_chip_named_by_its_tooltip_but_a_labelled_block_on_touch()
+-> TestResult {
+    for (input, labelled) in [(InputKind::Pointer, false), (InputKind::Touch, true)] {
+        let _entered = Runtime::new().enter();
+        let (mut ui, log) = component_test()
+            .size(300.0, 120.0)
+            .input(input)
+            .build_with(icon_only_row);
+        ui.run(1.0);
+        let archive = ui.rect_of("archive")?;
+        assert_eq!(ui.text_bounds("Archive").is_some(), labelled, "{input:?}");
+        if !labelled {
+            assert_eq!(
+                (archive.size.width, archive.size.height),
+                (ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+            );
+            ui.hover_on("row")?;
+            ui.click_on("archive")?;
+            assert_eq!(log.get(), ["archive"]);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_trailing_label_keeps_the_row_edge_and_gives_way_to_the_actions_on_hover() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, log) = component_test().size(300.0, 120.0).build_with(aged_row);
+    ui.run(1.0);
+    let row = ui.rect_of("row")?;
+    let age = ui.rect_of("age")?;
+    let (archive, delete) = (ui.rect_of("archive")?, ui.rect_of("delete")?);
+    assert_eq!(age.max().x, delete.max().x, "both end at the trailing edge");
+    assert!(age.max().x <= row.max().x, "{age:?} in {row:?}");
+    assert!(
+        archive.origin.x < age.origin.x,
+        "the actions lie over the row instead of reserving room beside the label"
+    );
+    let page = ui.pixel(2, 2)?;
+    let inked = |ui: &mut TestUi, rect: Rect| -> Result<bool, TestError> {
+        let y = rect.center().y as u32;
+        for x in rect.origin.x as u32..rect.max().x as u32 {
+            if ui.pixel(x, y)? != page {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    assert!(inked(&mut ui, age)?, "the label shows at rest");
+    assert!(!inked(&mut ui, archive)?, "the actions are hidden at rest");
+    ui.hover_on("row")?;
+    ui.run(1.0);
+    ui.click_on("archive")?;
+    assert_eq!(log.get(), ["archive"]);
     Ok(())
 }
 
@@ -898,6 +956,30 @@ fn action_row() -> (Div, Signal<Vec<&'static str>>) {
              action={row_action("Delete", note("delete"))
                  .destructive()
                  .test_id("delete")}>
+            <text>"Harmattan"</text>
+        </list_row>
+    };
+    (view! { <div size_full p=8.0>{row}</div> }, log)
+}
+
+fn aged_row() -> (Div, Signal<Vec<&'static str>>) {
+    let log = signal(Vec::new());
+    let note = move |name: &'static str| move || log.update(|log| log.push(name));
+    let row = view! {
+        <list_row test_id="row" trailing={view! { <div test_id="age"><text>"2h"</text></div> }}
+             action=row_action("Archive", note("archive")).test_id("archive")
+             action=row_action("Delete", note("delete")).test_id("delete")>
+            <text>"Harmattan"</text>
+        </list_row>
+    };
+    (view! { <div size_full p=8.0>{row}</div> }, log)
+}
+
+fn icon_only_row() -> (Div, Signal<Vec<&'static str>>) {
+    let log = signal(Vec::new());
+    let archive = move || log.update(|log| log.push("archive"));
+    let row = view! {
+        <list_row test_id="row" action={row_action("Archive", archive).icon(IconName::Archive).icon_only().test_id("archive")}>
             <text>"Harmattan"</text>
         </list_row>
     };

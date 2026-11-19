@@ -1043,6 +1043,7 @@ impl View for SectionHeader {
 pub struct RowAction {
     label: String,
     icon: Option<IconName>,
+    icon_only: bool,
     destructive: bool,
     on_select: Callback,
     test_id: Option<String>,
@@ -1052,6 +1053,7 @@ pub fn row_action(label: impl Into<String>, on_select: impl Into<Callback>) -> R
     RowAction {
         label: label.into(),
         icon: None,
+        icon_only: false,
         destructive: false,
         on_select: on_select.into(),
         test_id: None,
@@ -1069,6 +1071,11 @@ impl RowAction {
         self
     }
 
+    pub fn icon_only(mut self) -> Self {
+        self.icon_only = true;
+        self
+    }
+
     pub fn test_id(mut self, id: impl Into<String>) -> Self {
         self.test_id = Some(id.into());
         self
@@ -1077,17 +1084,19 @@ impl RowAction {
     fn cell(
         self,
         ink: Role,
+        labelled: bool,
         chosen: impl Fn() + 'static,
         focused: impl Fn(bool) + Clone + 'static,
     ) -> Div {
         let (on_select, blurred) = (self.on_select, focused.clone());
         let icon = self.icon.map(|icon| Icon::new(icon, ink));
+        let label = labelled.then(|| view! { <text label no_wrap>{self.label.clone()}</text> });
         let cell = view! {
-            <div flex flex_none items_center justify_center gap=Space::X1 px=Space::X2 border=1.0
+            <div flex flex_none items_center justify_center gap=Space::X1 border=1.0
                  border_color=Color::TRANSPARENT text_color=ink test_id?=self.test_id
                  on_focus={move |_| focused(true)} on_blur={move |_| blurred(false)}>
                 {icon}
-                <text label no_wrap>{self.label}</text>
+                {label}
             </div>
         };
         focus_ring(cell).on_activate(move || {
@@ -1096,16 +1105,24 @@ impl RowAction {
         })
     }
 
-    fn chip(self, focused: impl Fn(bool) + Clone + 'static) -> Div {
+    fn chip(self, focused: impl Fn(bool) + Clone + 'static) -> AnyView {
         let ink = if self.destructive {
             Role::Destructive
         } else {
             Role::Text
         };
-        self.cell(ink, || {}, focused)
+        let square = self.icon_only && self.icon.is_some();
+        let label = self.label.clone();
+        let chip = self
+            .cell(ink, !square, || {}, focused)
             .h(tokens::ICON_BUTTON_SIZE)
             .rounded(tokens::Radius::Inner)
-            .hover(|style| style.bg(Role::SurfaceHover))
+            .hover(|style| style.bg(Role::SurfaceHover));
+        if square {
+            chip.w(tokens::ICON_BUTTON_SIZE).tooltip(label).into_any()
+        } else {
+            chip.px(Space::X2).into_any()
+        }
     }
 
     fn block(self, chosen: impl Fn() + 'static, focused: impl Fn(bool) + Clone + 'static) -> Div {
@@ -1114,7 +1131,7 @@ impl RowAction {
         } else {
             (Role::Accent, Role::AccentForeground)
         };
-        self.cell(ink, chosen, focused).px(Space::X4).bg(fill)
+        self.cell(ink, true, chosen, focused).px(Space::X4).bg(fill)
     }
 }
 
@@ -1123,6 +1140,7 @@ pub struct ListRow {
     selection: Prop<SelectionState>,
     on_click: Callback,
     actions: Vec<RowAction>,
+    trailing: Option<AnyView>,
     test_id: Option<String>,
     style: StyleDelta,
     children: Vec<AnyView>,
@@ -1135,6 +1153,7 @@ pub fn list_row() -> ListRow {
         selection: Prop::Static(SelectionState::None),
         on_click: Callback::default(),
         actions: Vec::new(),
+        trailing: None,
         test_id: None,
         style: StyleDelta::default(),
         children: Vec::new(),
@@ -1144,6 +1163,12 @@ pub fn list_row() -> ListRow {
 impl ListRow {
     pub fn action(mut self, action: RowAction) -> Self {
         self.actions.push(action);
+        self
+    }
+
+    /// Shown at the row's trailing edge, and gives way to the actions while they show.
+    pub fn trailing(mut self, trailing: impl View) -> Self {
+        self.trailing = Some(trailing.into_any());
         self
     }
 
@@ -1203,43 +1228,70 @@ impl View for ListRow {
             </div>
         }
         .hover(|style| style.bg(Role::SurfaceHover))
-        .selected(|style| style.bg(background))
-        .is_selected(shown)
+        .selected(|style| style.bg(background.clone()))
+        .is_selected(shown.clone())
         .enabled(move || selection.get() != SelectionState::Disabled)
         .when_some(self.test_id, Div::test_id);
+        let resting = |trailing: AnyView| view! { <div flex flex_none items_center ml=auto()>{trailing}</div> };
         let root = if self.actions.is_empty() {
-            activate(root, self.on_click, FocusPolicy::Tab)
+            activate(
+                root.children(self.trailing.map(resting)),
+                self.on_click,
+                FocusPolicy::Tab,
+            )
         } else if presentation().get_untracked().is_touch() {
-            swiped(root, self.actions, self.on_click)
+            swiped(
+                root.children(self.trailing.map(resting)),
+                self.actions,
+                self.on_click,
+            )
         } else {
-            hovered(root, self.actions, self.on_click)
+            let fill = move || {
+                if shown() {
+                    background()
+                } else {
+                    Fill::Role(Role::SurfaceHover)
+                }
+            };
+            hovered(root, self.trailing, fill, self.actions, self.on_click)
         };
         self.style.apply(root).build(cx);
     }
 }
 
-fn hovered(root: Div, actions: Vec<RowAction>, on_click: Callback) -> Div {
+fn hovered(
+    root: Div,
+    trailing: Option<AnyView>,
+    fill: impl Fn() -> Fill + 'static,
+    actions: Vec<RowAction>,
+    on_click: Callback,
+) -> Div {
     let (over, within) = (signal(false), signal(0u32));
     let focused = move |on: bool| {
         within.update(|count| *count = count.saturating_add_signed(if on { 1 } else { -1 }));
     };
+    let revealed = move || over.get() || within.get() > 0;
     let chips = actions.into_iter().map(|action| action.chip(focused));
     let tray = view! {
-        <div flex flex_none items_center gap=Space::X1
-             opacity={move || {
-                 if over.get() || within.get() > 0 {
-                     1.0
-                 } else {
-                     0.0
-                 }
-             }}
+        <div flex flex_none items_center gap=Space::X1 opacity={move || if revealed() { 1.0 } else { 0.0 }}
              transition=Pace::Move>
             {..chips}
         </div>
     };
+    let edge = match trailing {
+        Some(trailing) => view! {
+            <div relative flex flex_none items_center justify_end ml=auto()>
+                <div flex items_center opacity={move || if revealed() { 0.0 } else { 1.0 }} transition=Pace::Move>
+                    {trailing}
+                </div>
+                {tray.absolute().right(0.0).top(0.0).bottom(0.0).pl(Space::X1).bg(fill)}
+            </div>
+        },
+        None => tray.ml(auto()),
+    };
     activate(root, on_click, FocusPolicy::Tab)
         .on_hover(move |inside| over.set(inside))
-        .child(tray.ml(auto()))
+        .child(edge)
 }
 
 fn swiped(root: Div, actions: Vec<RowAction>, on_click: Callback) -> Div {
