@@ -355,6 +355,7 @@ pub struct IconButton {
     shortcut: Option<Chord>,
     disabled: Prop<bool>,
     selected: Prop<bool>,
+    confirm: Option<Hold>,
     focus: FocusPolicy,
     on_click: Callback,
     test_id: Option<String>,
@@ -371,6 +372,7 @@ pub fn icon_button(icon: IconName, #[prop(into)] label: String) -> IconButton {
         shortcut: None,
         disabled: Prop::Static(false),
         selected: Prop::Static(false),
+        confirm: None,
         focus: FocusPolicy::Tab,
         on_click: Callback::default(),
         test_id: None,
@@ -379,6 +381,11 @@ pub fn icon_button(icon: IconName, #[prop(into)] label: String) -> IconButton {
 }
 
 impl IconButton {
+    pub fn confirm(mut self, hold: Hold) -> Self {
+        self.confirm = Some(hold);
+        self
+    }
+
     pub fn icon_size(mut self, size: f32) -> Self {
         self.icon_size = size;
         self
@@ -449,7 +456,10 @@ impl View for IconButton {
         let root = fade_when_disabled(focus_ring(root), &disabled)
             .enabled(move || !disabled.get())
             .transition(Pace::Press);
-        let root = activate(root, self.on_click, self.focus);
+        let root = match self.confirm {
+            Some(hold) => confirming(root, hold, self.on_click, self.focus),
+            None => activate(root, self.on_click, self.focus),
+        };
         self.style
             .apply(root.when_some(self.test_id, Div::test_id))
             .tooltip(self.label)

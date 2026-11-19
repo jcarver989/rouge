@@ -662,6 +662,36 @@ fn a_confirm_button_fires_only_after_being_held_and_springs_back_when_released_e
 }
 
 #[test]
+fn a_confirm_icon_button_fires_only_after_being_held_by_pointer_or_key() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (clicks, click) = counter();
+    let mut ui = component_test().size(120.0, 80.0).build(move || {
+        view! {
+            <div p=20.0 flex>
+                <icon_button test_id="archive" icon=IconName::Archive label="Archive" confirm=Hold::seconds(1.0)
+                             on_click=click/>
+            </div>
+        }
+    });
+    ui.click_on("archive")?;
+    ui.run(1.5);
+    assert_eq!(clicks.get(), 0, "a click is not enough");
+    let at = ui.center_of("archive")?;
+    ui.pointer_moved(at);
+    ui.pointer_down(PointerButton::Primary);
+    ui.run(1.2);
+    assert_eq!(clicks.get(), 1, "holding to the end fires once");
+    ui.pointer_up(PointerButton::Primary);
+    ui.run(0.5);
+    assert_eq!(ui.compositor_frames(1.0)?, 0, "nothing animates at rest");
+    ui.key_down(KeyEvent::new(Key::Enter));
+    ui.run(1.2);
+    ui.key_up(KeyEvent::new(Key::Enter));
+    assert_eq!(clicks.get(), 2, "holding a key confirms");
+    Ok(())
+}
+
+#[test]
 fn a_button_takes_the_touch_size_from_the_presentation_unless_sized_explicitly() -> TestResult {
     let _entered = Runtime::new().enter();
     let mut ui = component_test().build(|| {
