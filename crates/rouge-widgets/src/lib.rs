@@ -79,7 +79,7 @@ pub use picker::{
     SearchPickerHandle, picker_list, search_picker,
 };
 pub use popover::{Hint, HoverCard, Placement, Popover, Tooltip, hover_card, popover, tooltip};
-pub use progress::{Separator, progress, separator, spinner};
+pub use progress::{Separator, progress, progress_ring, separator, spinner};
 pub use resizable_panel::{ResizablePanel, Side, panel_toggle, resizable_panel};
 pub use rouge_theme::{
     ButtonVariant, ControlState, InteractionState, ModalSize, NoticeTone, SelectionState,

@@ -1,10 +1,11 @@
 mod common;
 
 use common::{builder, line_widths};
+use rouge_core::Role;
 use rouge_core::testing::{TestResult, assert_near};
 use rouge_core::{Color, Rect, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
-use rouge_widgets::{progress, separator, spinner};
+use rouge_widgets::{progress, progress_ring, separator, spinner};
 
 #[test]
 fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
@@ -43,6 +44,38 @@ fn progress_fills_in_proportion_and_separators_draw_a_line() -> TestResult {
         ui.render()?.pixel(200, 12),
         palette.accent.to_rgba8(),
         "values are clamped to full",
+    );
+    Ok(())
+}
+
+#[test]
+fn a_progress_ring_fills_clockwise_from_the_top_in_the_colour_it_is_given() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let done = signal(0.25f32);
+    let mut ui = builder().build(move || {
+        div()
+            .size_full()
+            .p(10.0)
+            .child(progress_ring(done, Role::Warning).size(40.0))
+    });
+    let palette = UiPalette::light().map(Color::from);
+    let img = ui.render()?;
+    assert_near(
+        img.pixel(42, 17),
+        palette.warning.to_rgba8(),
+        "the first quarter is filled",
+    );
+    assert_near(
+        img.pixel(30, 47),
+        palette.border.to_rgba8(),
+        "the rest is track",
+    );
+    done.set(0.75);
+    ui.advance(0.0);
+    assert_near(
+        ui.render()?.pixel(30, 47),
+        palette.warning.to_rgba8(),
+        "the fill follows the value",
     );
     Ok(())
 }

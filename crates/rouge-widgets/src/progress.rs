@@ -1,10 +1,11 @@
 use crate::icon::{Icon, IconName};
-use crate::tokens::Radius;
+use crate::tokens::{ICON_SIZE, Radius};
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, DelegateStyle, Div, Ease, Fill, IntoProp, Keyframes, StyleDelta, Styled, View, auto,
-    component, div, pct, view,
+    BuildCx, DelegateStyle, Div, Ease, Fill, IntoProp, Keyframes, Path, Point, StyleDelta, Styled,
+    Theme, View, auto, canvas, component, div, pct, view,
 };
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 pub struct Separator {
     vertical: bool,
@@ -53,6 +54,56 @@ pub fn progress<T>(value: impl IntoProp<f32, T>) -> Div {
         </div>
     }
 }
+
+/// A ring that fills clockwise from the top; it is as large as the box it is given, an icon by default.
+#[component]
+pub fn progress_ring<T, U>(value: impl IntoProp<f32, T>, color: impl IntoProp<Fill, U>) -> Div {
+    let (value, color, theme) = (value.into_prop(), color.into_prop(), Theme::current());
+    let ring = canvas(move |painter| {
+        let size = painter.size();
+        let stroke = size.width.min(size.height) * RING_STROKE;
+        let center = Point::new(size.width / 2.0, size.height / 2.0);
+        let radius = (size.width.min(size.height) - stroke) / 2.0;
+        let share = value.get().clamp(0.0, 1.0);
+        painter.stroke(
+            &arc(center, radius, 1.0),
+            stroke,
+            theme.resolve(Fill::Role(Role::Border)),
+        );
+        if share > 0.0 {
+            painter.stroke(
+                &arc(center, radius, share),
+                stroke,
+                theme.resolve(color.get()),
+            );
+        }
+    })
+    .size_full();
+    view! { <div flex_none size=ICON_SIZE>{ring}</div> }
+}
+
+fn arc(center: Point, radius: f32, share: f32) -> Path {
+    let steps = (share * ARC_STEPS).ceil().max(1.0);
+    let point = |step: f32| {
+        let angle = TAU * share * step / steps - FRAC_PI_2;
+        (
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        )
+    };
+    let (x, y) = point(0.0);
+    let mut path = Path::builder().move_to(x, y);
+    let mut step = 1.0;
+    while step <= steps {
+        let (x, y) = point(step);
+        path = path.line_to(x, y);
+        step += 1.0;
+    }
+    path.build()
+}
+
+const RING_STROKE: f32 = 0.125;
+const ARC_STEPS: f32 = 64.0;
 
 #[component]
 pub fn spinner() -> Div {
