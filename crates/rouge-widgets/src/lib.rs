@@ -67,7 +67,7 @@ pub use icon::{Icon, IconName};
 pub use inline_edit::{InlineEdit, inline_edit};
 pub use input::{TextInput, text_input};
 pub use interface_size::{DEFAULT_INTERFACE_SIZE, InterfaceSize, SizeAction};
-pub use kbd::kbd;
+pub use kbd::{kbd, key_hints};
 #[cfg(feature = "markdown")]
 pub use markdown::{Markdown, MarkdownPaint, MarkdownRow, MarkdownRows, MarkdownSource, markdown};
 pub use material::{Material, MaterialExt};

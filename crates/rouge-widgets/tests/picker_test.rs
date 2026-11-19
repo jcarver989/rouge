@@ -285,6 +285,37 @@ fn a_long_list_beside_a_preview_scrolls_inside_the_picker() -> TestResult {
 }
 
 #[test]
+fn a_footer_of_key_hints_sets_each_key_in_a_kbd_beside_its_action_on_the_unit() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test().size(600.0, 400.0).build(|| {
+        let handle = SearchPickerHandle::new(vec![PickerItem::new("only", "Only")], |_| {});
+        let hints = key_hints([("↑↓", "Move"), ("↵", "Open"), ("Esc", "Close")]).test_id("hints");
+        view! { <search_picker handle test_id="picker" footer=hints/> }
+    });
+    let hints = ui.rect_of("hints")?;
+    let picker = ui.rect_of("picker")?;
+    assert!(
+        hints.max().y <= picker.max().y,
+        "the hints sit inside the picker: {hints:?} {picker:?}"
+    );
+    assert_eq!(hints.size.height % tokens::UNIT, 0.0, "{hints:?}");
+    let (keys, action) = (
+        ui.text_bounds("Esc").ok_or("Esc")?,
+        ui.text_bounds("Close").ok_or("Close")?,
+    );
+    let (move_keys, open) = (
+        ui.text_bounds("↑↓").ok_or("↑↓")?,
+        ui.text_bounds("Open").ok_or("Open")?,
+    );
+    assert!(
+        move_keys.max().x < open.origin.x
+            && open.max().x < keys.origin.x
+            && keys.max().x < action.origin.x
+    );
+    Ok(())
+}
+
+#[test]
 fn one_highlight_layer_slides_between_rows_and_scrolls_with_them() -> TestResult {
     let _entered = Runtime::new().enter();
     let (mut ui, handle) = component_test().size(600.0, 460.0).build_with(|| {

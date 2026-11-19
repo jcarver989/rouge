@@ -487,7 +487,7 @@ pub struct SearchPicker {
     handle: SearchPickerHandle,
     searchable: Option<String>,
     title: Option<String>,
-    footer: Option<String>,
+    footer: Option<AnyView>,
     empty: Option<String>,
     max_list_height: Option<Length>,
     preview: Option<Preview>,
@@ -525,8 +525,8 @@ impl SearchPicker {
         self
     }
 
-    pub fn footer(mut self, footer: impl Into<String>) -> Self {
-        self.footer = Some(footer.into());
+    pub fn footer(mut self, footer: impl View) -> Self {
+        self.footer = Some(footer.into_any());
         self
     }
 
@@ -583,7 +583,7 @@ fn search_root(
     handle: SearchPickerHandle,
     searchable: Option<String>,
     title: Option<String>,
-    footer: Option<String>,
+    footer: Option<AnyView>,
     empty: Option<String>,
     max_list_height: Option<Length>,
     preview: Option<Preview>,
@@ -634,7 +634,7 @@ fn search_root(
             <show when={move || status.with(Option::is_some)}>
                 <text caption color=Role::Warning>{move || status.get().unwrap_or_default()}</text>
             </show>
-            {footer.map(|footer| view! { <muted_text>{footer}</muted_text> })}
+            {footer}
         </div>
     }
 }
