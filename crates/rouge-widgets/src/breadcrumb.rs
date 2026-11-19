@@ -68,7 +68,10 @@ impl View for Breadcrumb {
                 parts.push(arrow().into_any());
             }
             let here = crumb()
+                .min_w(0.0)
+                .overflow_hidden()
                 .text_color(Role::Text)
+                .when_some(test_id.part("current"), Div::test_id)
                 .child(view! { <text body weight=500.0 no_wrap>{current}</text> });
             parts.push(here.into_any());
         }

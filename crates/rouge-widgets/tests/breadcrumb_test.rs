@@ -45,3 +45,20 @@ fn links_activate_by_pointer_and_keyboard_and_the_current_item_does_not() -> Tes
     );
     Ok(())
 }
+
+#[test]
+fn a_long_current_item_is_clipped_to_the_room_the_breadcrumb_has() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test().size(320.0, 60.0).build(|| {
+        view! {
+            <div w=160.0 flex>
+                <breadcrumb test_id="path" min_w=0.0 link=("Library", || {})
+                     current="A playlist with a name far too long to fit"/>
+            </div>
+        }
+    });
+    let (path, here) = (ui.rect_of("path")?, ui.rect_of("path-current")?);
+    assert!(path.max().x <= 160.0, "{path:?}");
+    assert!(here.max().x <= path.max().x, "{here:?} in {path:?}");
+    Ok(())
+}
