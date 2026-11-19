@@ -40,6 +40,24 @@ fn double_click_selects_the_value_and_enter_reports_the_replacement() -> TestRes
 }
 
 #[test]
+fn an_edit_begun_by_its_owner_takes_typing_at_once_and_reports_the_replacement() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, submitted) = component_test().build_with(|| {
+        let value = signal("original".to_owned());
+        let submitted = signal(String::new());
+        (
+            view! { <inline_edit value test_id="title" begin_editing on_commit={move |text: String| submitted.set(text)}/> },
+            submitted,
+        )
+    });
+    ui.type_text("replacement");
+    ui.press("enter");
+    assert_eq!(submitted.get(), "replacement");
+    assert_eq!(ui.text_of("title").as_deref(), Some("original"));
+    Ok(())
+}
+
+#[test]
 fn shows_the_bound_value_once_the_commit_writes_it() -> TestResult {
     let _entered = Runtime::new().enter();
     let mut ui = component_test().build(|| {

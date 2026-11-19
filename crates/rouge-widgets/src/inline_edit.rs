@@ -12,6 +12,7 @@ use rouge_reactive::{Callback, memo, signal};
 
 pub struct InlineEdit {
     value: Prop<String>,
+    begun: bool,
     test_id: Option<String>,
     on_commit: Callback<(String,)>,
     on_cancel: Callback,
@@ -23,6 +24,7 @@ pub struct InlineEdit {
 pub fn inline_edit(#[prop(reactive)] value: Prop<String>) -> InlineEdit {
     InlineEdit {
         value,
+        begun: false,
         test_id: None,
         on_commit: Callback::default(),
         on_cancel: Callback::default(),
@@ -44,6 +46,11 @@ impl InlineEdit {
         self
     }
 
+    pub fn begin_editing(mut self) -> Self {
+        self.begun = true;
+        self
+    }
+
     pub fn on_cancel(mut self, on_cancel: impl Into<Callback>) -> Self {
         self.on_cancel = on_cancel.into();
         self
@@ -61,6 +68,7 @@ impl View for InlineEdit {
     fn build(self, cx: &mut BuildCx<'_>) {
         let InlineEdit {
             value,
+            begun,
             test_id,
             on_commit,
             on_cancel,
@@ -69,7 +77,7 @@ impl View for InlineEdit {
         } = self;
         let accent = Theme::current().get_untracked().accent;
         let value = memo(move || value.get());
-        let editing = signal(false);
+        let editing = signal(begun);
         let finish = move |committed: Option<String>| {
             if !editing.get_untracked() {
                 return;
