@@ -425,6 +425,24 @@ fn invisible_elements_keep_their_space_but_paint_and_hit_nothing_until_revealed(
 }
 
 #[test]
+fn a_grid_child_starts_on_the_column_it_names_until_the_start_is_cleared() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let start = signal(3u16);
+    let mut ui = TestUiBuilder::default().size(240.0, 100.0).build(move || {
+        view! {
+            <div grid grid_cols=12 w=240.0>
+                <div test_id="centred" col_start={move || start.get()} col_span=8 h=10.0/>
+            </div>
+        }
+    });
+    assert_eq!(ui.rect_of("centred")?, Rect::new(40.0, 0.0, 160.0, 10.0));
+    start.set(0);
+    ui.advance(0.0);
+    assert_eq!(ui.rect_of("centred")?, Rect::new(0.0, 0.0, 160.0, 10.0));
+    Ok(())
+}
+
+#[test]
 fn grid_columns_share_the_width_and_children_span_them() -> TestResult {
     let _rt = Runtime::new().enter();
     let mut ui = TestUiBuilder::default().size(240.0, 100.0).build(|| {

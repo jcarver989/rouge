@@ -7,10 +7,10 @@ use rouge_render::{Color, Corners, Point};
 use std::borrow::Cow;
 use std::mem::{replace, take};
 use std::rc::Rc;
-use taffy::style_helpers::{evenly_sized_tracks, span};
+use taffy::style_helpers::{evenly_sized_tracks, line, span};
 use taffy::{
-    AlignItems, AlignSelf, Display, FlexDirection, FlexWrap, JustifyContent, Overflow,
-    Point as Axes, Position, Style as Layout,
+    AlignItems, AlignSelf, Display, FlexDirection, FlexWrap, GridPlacement, JustifyContent, Line,
+    Overflow, Point as Axes, Position, Style as Layout,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -142,6 +142,7 @@ pub enum Declaration {
     AspectRatio(f32),
     GridColumns(u16),
     ColumnSpan(u16),
+    ColumnStart(u16),
     Length(&'static [Slot], Length),
     TextColor(Fill),
     TextSize(f32),
@@ -199,7 +200,24 @@ impl Declaration {
                 &mut layout.grid_template_columns,
                 evenly_sized_tracks(count),
             ),
-            Declaration::ColumnSpan(count) => set(&mut layout.grid_column, span(count)),
+            Declaration::ColumnSpan(count) => {
+                let placed = Line {
+                    start: layout.grid_column.start.clone(),
+                    end: span(count),
+                };
+                set(&mut layout.grid_column, placed)
+            }
+            Declaration::ColumnStart(column) => {
+                let start = i16::try_from(column)
+                    .ok()
+                    .filter(|column| *column > 0)
+                    .map_or(GridPlacement::Auto, line);
+                let placed = Line {
+                    start,
+                    end: layout.grid_column.end.clone(),
+                };
+                set(&mut layout.grid_column, placed)
+            }
             Declaration::Length(slots, length) => slots.iter().fold(false, |changed, slot| {
                 set_length(layout, *slot, length) | changed
             }),
@@ -464,6 +482,7 @@ pub trait Styled: Sized {
         aspect_ratio(f32) => Declaration::AspectRatio;
         grid_cols(u16) => Declaration::GridColumns;
         col_span(u16) => Declaration::ColumnSpan;
+        col_start(u16) => Declaration::ColumnStart;
         flex_grow(f32) => Declaration::FlexGrow;
         flex_shrink(f32) => Declaration::FlexShrink;
         border_color(Fill) => Declaration::BorderColor;

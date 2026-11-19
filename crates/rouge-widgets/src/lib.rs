@@ -62,7 +62,7 @@ pub use data_table::{
 pub use effects::BusyExt;
 pub use field::{Field, field};
 pub use fonts::{CODE_FONT, UI_FONT, bundled_fonts};
-pub use grid::{column_grid, grid_cell, grid_overlay};
+pub use grid::{column_grid, grid_cell, grid_overlay, reading_cell, reading_span};
 pub use icon::{Icon, IconName};
 pub use inline_edit::{InlineEdit, inline_edit};
 pub use input::{TextInput, text_input};
