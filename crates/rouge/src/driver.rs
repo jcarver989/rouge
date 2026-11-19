@@ -28,18 +28,22 @@ pub(crate) struct Changes {
 
 pub(crate) async fn connect(
     shared: &mut Option<(Instance, Gpu)>,
-    instance: impl FnOnce() -> Instance,
+    instance: impl Future<Output = Instance>,
     target: impl Into<SurfaceTarget<'static>>,
 ) -> Result<(Gpu, Surface<'static>), AppError> {
-    let instance = shared
-        .as_ref()
-        .map_or_else(instance, |(instance, _)| instance.clone());
+    let instance = match shared.as_ref() {
+        Some((instance, _)) => instance.clone(),
+        None => instance.await,
+    };
     let surface = instance.create_surface(target)?;
-    let gpu = if let Some((_, gpu)) = shared {
-        gpu.clone()
-    } else {
-        let gpu = Gpu::new(instance.clone(), Some(&surface)).await?;
-        shared.insert((instance, gpu)).1.clone()
+    let gpu = match shared.as_ref() {
+        Some((_, gpu)) if gpu.adapter.is_surface_supported(&surface) => gpu.clone(),
+        Some(_) if cfg!(not(target_arch = "wasm32")) => return Err(AppError::UnsupportedSurface),
+        _ => {
+            let gpu = Gpu::new(instance.clone(), Some(&surface)).await?;
+            shared.get_or_insert((instance, gpu.clone()));
+            gpu
+        }
     };
     Ok((gpu, surface))
 }

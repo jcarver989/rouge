@@ -58,6 +58,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "UIImage", "UIPasteboard"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgl"] }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
@@ -86,7 +87,7 @@ winit.workspace = true
 rouge = { path = ".", features = ["persist"] }
 gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen-test = "0.3"
-web-sys = { version = "0.3", features = ["ClipboardEventInit", "DataTransfer", "MouseEventInit", "PointerEventInit"] }
+web-sys = { version = "0.3", features = ["CanvasRenderingContext2d", "ClipboardEventInit", "DataTransfer", "History", "ImageData", "MouseEventInit", "PointerEventInit"] }
 
 [[example]]
 name = "android_todomvc"
@@ -99,3 +100,7 @@ path = "tests/platform/web_test.rs"
 [[test]]
 name = "platform_web_host_test"
 path = "tests/platform/web/host_test.rs"
+
+[[test]]
+name = "platform_web_host_webgl_test"
+path = "tests/platform/web/host_webgl_test.rs"

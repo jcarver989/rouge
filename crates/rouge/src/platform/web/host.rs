@@ -27,7 +27,8 @@ use web_sys::{
     ResizeObserverOptions, ResizeObserverSize, UrlSearchParams, WheelEvent, Window, console,
 };
 use web_time::Instant;
-use wgpu::{Instance, SurfaceTarget};
+use wgpu::util::new_instance_with_webgpu_detection;
+use wgpu::{Backends, Instance, InstanceDescriptor, SurfaceTarget};
 
 const CANVAS_STYLE: &str = "display:block;touch-action:none;outline:none;\
     -webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;";
@@ -154,10 +155,16 @@ async fn mount_windows(app: App) -> Result<Vec<Rc<Host>>, (Option<String>, AppEr
     if settings.trace.is_some() {
         subscribe(PerformanceLayer);
     }
+    let backends = params
+        .as_ref()
+        .and_then(|params| params.get("rouge_backend"))
+        .map(|names| Backends::from_comma_list(&names))
+        .filter(|backends| !backends.is_empty())
+        .unwrap_or_default();
     let mut hosts = Vec::with_capacity(app.windows.len());
     for (options, root) in app.windows {
         let canvas = options.canvas.clone();
-        let host = Host::mount(options, root, &menus, bar, &app.fonts, &settings).await;
+        let host = Host::mount(options, root, &menus, bar, backends, &app.fonts, &settings).await;
         hosts.push(host.map_err(|error| (canvas, error))?);
     }
     Ok(hosts)
@@ -294,6 +301,7 @@ impl Host {
         root: RootFn,
         menus: &[Menu],
         bar: bool,
+        backends: Backends,
         fonts: &[Cow<'static, [u8]>],
         settings: &ProfileSettings,
     ) -> Result<Rc<Host>, AppError> {
@@ -302,7 +310,12 @@ impl Host {
         let canvas = canvas(&document, options.canvas.as_deref())?;
         let target = SurfaceTarget::Canvas(canvas.clone());
         let mut shared = GPU.take();
-        let connected = connect(&mut shared, Instance::default, target).await;
+        let instance = async {
+            let mut descriptor = InstanceDescriptor::new_without_display_handle();
+            descriptor.backends = backends;
+            new_instance_with_webgpu_detection(descriptor).await
+        };
+        let connected = connect(&mut shared, instance, target).await;
         GPU.set(shared);
         let (gpu, surface) = connected?;
         let input = textarea(&document)?;

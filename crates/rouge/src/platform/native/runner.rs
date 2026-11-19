@@ -121,7 +121,7 @@ impl Runner {
             }
         }
         let window = Arc::new(event_loop.create_window(attributes)?);
-        let instance = || {
+        let instance = async {
             let display = Box::new(event_loop.owned_display_handle());
             Instance::new(InstanceDescriptor::new_with_display_handle_from_env(
                 display,

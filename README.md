@@ -12,7 +12,7 @@ Rouge is heavily inspired by [Leptos](https://leptos.dev/) and [GPUI](https://gp
 - **No work when idle.** When nothing changes, Rouge draws no frames.
 - **Smooth animation.** Springs, tweens and keyframes run in the compositor. They do not cause layout or paint. Rouge has a target of 120 Hz.
 - **Effects are built in.** You can use blur, backdrop blur, liquid glass, shadows, masks and blend modes. You can also write your own effects in WGSL.
-- **One codebase for three platforms.** The same code runs on macOS, on Linux and in the browser (WebAssembly and WebGPU).
+- **One codebase for three platforms.** The same code runs on macOS, on Linux and in the browser (WebAssembly with WebGPU, or WebGL2 where WebGPU is missing).
 - **Two ways to write views.** Use Rust builder chains, or use JSX-style markup with `view!`. Both make the same calls, so you can use them together.
 - **A full set of widgets.** Rouge has buttons, text inputs, menus, popovers, tabs, modals, sheets, sliders and more. On a phone-sized touch window the same popovers, menus and modals present as bottom sheets, and tabs become a floating tab bar. Markdown and syntax highlighting are optional features.
 - **Easy to test.** `TestUi` runs your UI without a window. A test can click, type and press keys, and then examine the result.
@@ -178,7 +178,7 @@ Use `just --list` for workspace tasks, `just --list platform web` (or `ios` or `
 
 ### In the browser
 
-Install Python 3, the `wasm32-unknown-unknown` Rust target, and `wasm-bindgen-cli` at the same version as `wasm-bindgen` in `Cargo.lock`. After `just run todomvc web` starts the server, open <http://localhost:8000> in a browser that supports WebGPU.
+Install Python 3, the `wasm32-unknown-unknown` Rust target, and `wasm-bindgen-cli` at the same version as `wasm-bindgen` in `Cargo.lock`. After `just run todomvc web` starts the server, open <http://localhost:8000> in a browser that supports WebGPU or WebGL2. Add `?rouge_backend=gl` to the URL to use WebGL2 where WebGPU is available.
 
 ### In the iOS simulator
 
@@ -230,7 +230,6 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 - On Android, text comes from key events only. Input methods that compose text, autocorrect and swipe typing do not work yet.
 - Rouge draws all widgets itself. The widgets do not look like the native widgets of the platform.
 - Accessibility is not available yet.
-- In the browser, Rouge needs WebGPU. Full WebGL2 support is not available yet.
 - Color emoji are not available yet.
 
 For the full design and the list of planned work, read [design.md](design.md).
