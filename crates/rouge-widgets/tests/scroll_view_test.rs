@@ -8,6 +8,7 @@ use rouge_core::{
 };
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
+use rouge_widgets::tokens::UNIT;
 use rouge_widgets::{scroll_view, vertical_scrollbar};
 
 #[test]
@@ -59,6 +60,26 @@ fn a_thumb_scrolled_to_the_end_meets_the_bottom_of_its_track() -> TestResult {
     let track = ui.rect_of("scroll-track-vertical")?;
     let thumb = ui.rect_of("scroll-thumb-vertical")?;
     assert_eq!(thumb.max().y, track.max().y);
+    Ok(())
+}
+
+#[test]
+fn a_thumb_is_a_whole_number_of_units_long_whatever_the_content() -> TestResult {
+    for content in [321.0, 410.0, 450.0, 999.0] {
+        let _entered = Runtime::new().enter();
+        let mut ui = builder().build(move || {
+            scroll_view(scroll().child(div().h(content)))
+                .w(100.0)
+                .h(150.0)
+        });
+        ui.advance(0.0);
+        let thumb = ui.rect_of("scroll-thumb-vertical")?;
+        assert_eq!(
+            thumb.size.height % UNIT,
+            0.0,
+            "{content} of content gives {thumb:?}"
+        );
+    }
     Ok(())
 }
 

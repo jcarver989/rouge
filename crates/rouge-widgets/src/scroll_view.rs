@@ -3,7 +3,7 @@ use crate::material::{Material, MaterialExt};
 use crate::popover::POPPED;
 use crate::progress::spinning;
 use crate::tokens::{
-    GROUP_HEIGHT, ICON_SIZE, Pace, Radius, SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH,
+    GROUP_HEIGHT, ICON_SIZE, Pace, Radius, SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH, UNIT,
 };
 use rouge_core::component;
 use rouge_core::view;
@@ -173,9 +173,9 @@ fn scrollbar(state: Signal<ScrollState>, axis: Axis) -> Div {
     let length = memo(move || {
         let state = state.get();
         let viewport = axis.viewport(state);
-        (viewport * viewport / axis.content(state).max(1.0))
+        let proportional = viewport * viewport / axis.content(state).max(1.0);
+        ((proportional / UNIT).round() * UNIT)
             .clamp(viewport.min(SCROLLBAR_MIN_THUMB_HEIGHT), viewport)
-            .round()
     });
     let extent = memo(move || {
         let state = state.get();

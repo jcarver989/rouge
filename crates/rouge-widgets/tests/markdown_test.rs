@@ -6,6 +6,7 @@ use rouge_markdown::{MarkdownDocument, MarkdownStream};
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_theme::{MarkdownPalette, Rgba};
 use rouge_widgets::testing::component_test;
+use rouge_widgets::tokens::UNIT;
 use rouge_widgets::{MarkdownRows, markdown};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -155,6 +156,32 @@ fn dragging_to_a_markdown_link_selects_without_opening_it() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn every_kind_of_block_and_the_gap_before_it_is_a_whole_number_of_units_tall() -> TestResult {
+    let mut astray = Vec::new();
+    for (name, source) in BLOCKS {
+        for (following, after) in BLOCKS {
+            for compact in [false, true] {
+                let _entered = Runtime::new().enter();
+                let document = MarkdownDocument::parse(format!("{source}\n\n{after}"));
+                let ui = component_test().size(600.0, 2000.0).build(move || {
+                    let view = markdown(document).palette(palette());
+                    let view = if compact { view.compact() } else { view };
+                    div().test_id("document").flex().col().child(view)
+                });
+                let height = ui.bounds_of("document").ok_or("document")?.size.height;
+                if height % UNIT != 0.0 {
+                    astray.push(format!(
+                        "{name} then {following} (compact {compact}): {height}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(astray.is_empty(), "off the unit: {astray:#?}");
+    Ok(())
+}
+
 fn rendered(source: &str) -> (TestUi, Rc<RefCell<Vec<String>>>) {
     let (links, link) = recorder();
     let document = MarkdownDocument::parse(source);
@@ -206,3 +233,20 @@ impl Streamed {
         self.ui.stats() - before
     }
 }
+
+const BLOCKS: [(&str, &str); 11] = [
+    (
+        "a paragraph",
+        "A paragraph that is long enough to wrap onto a second line when the column is six hundred wide.",
+    ),
+    ("a first heading", "# Heading"),
+    ("a second heading", "## Heading"),
+    ("a third heading", "### Heading"),
+    ("a fourth heading", "#### Heading"),
+    ("a list", "- one\n- two\n  - nested\n    with a second line"),
+    ("a quote", "> quoted\n>\n> - and listed"),
+    ("a code block", "```rust\nfn main() {}\nlet x = 1;\n```"),
+    ("an empty code block", "```\n```"),
+    ("a table", "| a | b |\n|---|:-:|\n| 1 | 2 |\n| 3 | 4 |"),
+    ("a rule", "---"),
+];

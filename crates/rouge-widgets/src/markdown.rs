@@ -1,6 +1,6 @@
 use crate::fonts::{CODE_FONT, UI_FONT};
 use crate::syntax::{CODE_WRAP, syntax_spans};
-use crate::tokens::{Radius, Space};
+use crate::tokens::{HAIRLINE, Radius, Space};
 use crate::typography::{CODE, READING, TITLE, preset};
 use crate::{IconName, UiStyles, icon_button};
 use rouge_core::Role;
@@ -482,7 +482,9 @@ impl MarkdownRow {
                 if *header { row.bg(Role::Surface) } else { row }
             }
             Kind::Rule => view! {
-                <div py=Space::X3><div w_full border_t=1.0 border_color=Role::Border/></div>
+                <div pt=Space::X3 pb={Space::X3.px() - HAIRLINE}>
+                    <div w_full border_t=HAIRLINE border_color=Role::Border/>
+                </div>
             },
             Kind::Html { .. } => paint
                 .prose()
@@ -535,18 +537,18 @@ impl Fragment<'_> {
     }
 }
 
-const LIST_INDENT: f32 = 22.0;
-const BLOCK_PADDING_Y: f32 = 4.0;
+const LIST_INDENT: f32 = Space::X6.px();
+const BLOCK_PADDING_Y: f32 = Space::X1.px();
 
-const TABLE_CELL_PADDING_Y: f32 = 8.0;
-const CODE_HEADER_HEIGHT: f32 = 32.0;
+const TABLE_CELL_PADDING_Y: f32 = Space::X2.px();
+const CODE_HEADER_HEIGHT: f32 = Space::X8.px();
 const TABLE: Typography = preset(UI_FONT, 14.0, 20.0, 400.0);
 
 const fn heading(level: u8) -> Typography {
     match level {
-        1 => preset(UI_FONT, 26.0, 34.0, 600.0),
-        2 => preset(UI_FONT, 21.0, 30.0, 600.0),
-        3 => preset(UI_FONT, 17.0, 26.0, 600.0),
+        1 => preset(UI_FONT, 26.0, 32.0, 600.0),
+        2 => preset(UI_FONT, 21.0, 28.0, 600.0),
+        3 => preset(UI_FONT, 17.0, 24.0, 600.0),
         _ => preset(UI_FONT, 15.0, 24.0, 600.0),
     }
 }
@@ -650,7 +652,7 @@ fn code_line(source: Option<Text>, last: bool) -> Div {
         </div>
     };
     if last {
-        line.pb(Space::X2).border_b(1.0)
+        line.pb(Space::X2.px() - HAIRLINE).border_b(HAIRLINE)
     } else {
         line
     }
@@ -663,6 +665,7 @@ fn table_row(
     first: bool,
     last: bool,
 ) -> Div {
+    let top = TABLE_CELL_PADDING_Y - if first { HAIRLINE } else { 0.0 };
     let cells = cells.enumerate().map(|(column, cell)| {
         let align = match alignments.get(column) {
             Some(MarkdownTableAlignment::Center) => TextAlign::Center,
@@ -670,7 +673,7 @@ fn table_row(
             _ => TextAlign::Start,
         };
         let cell = view! {
-            <div flex_1 min_w=0.0 px=Space::X3 py=TABLE_CELL_PADDING_Y>
+            <div flex_1 min_w=0.0 px=Space::X3 pt=top pb={TABLE_CELL_PADDING_Y - HAIRLINE}>
                 {cell.align(align)}
             </div>
         };
@@ -878,17 +881,15 @@ fn spacing(previous: &Kind, row: &MarkdownRow) -> (f32, TextBreak) {
         TextBreak::Paragraph
     };
     let gap = match (&row.kind, previous) {
-        (Kind::CodeLine { .. } | Kind::TableRow { first: false, .. }, _) => 0.0,
-        (Kind::Heading { level: 1, .. }, _) => 36.0,
-        (Kind::Heading { level: 2, .. }, _) => 32.0,
-        (Kind::Heading { .. }, _) => 24.0,
-        (_, Kind::Heading { .. }) => 8.0,
-        (Kind::ListItem { .. }, Kind::ListItem { .. }) => 4.0,
-        (_, _) if row.depth > 0 => 6.0,
-        (Kind::Rule, _) => 20.0,
-        _ => 14.0,
+        (Kind::CodeLine { .. } | Kind::TableRow { first: false, .. }, _) => return (0.0, lead),
+        (Kind::Heading { level: 1 | 2, .. }, _) => Space::X8,
+        (Kind::Heading { .. } | Kind::Rule, _) => Space::X6,
+        (_, Kind::Heading { .. }) => Space::X2,
+        (_, _) if row.depth > 0 => Space::X2,
+        (Kind::ListItem { .. }, Kind::ListItem { .. }) => Space::X1,
+        _ => Space::X4,
     };
-    (gap, lead)
+    (gap.px(), lead)
 }
 
 const fn bullet(depth: u16) -> &'static str {
