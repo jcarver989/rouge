@@ -687,6 +687,8 @@ pub struct Segment {
     label: String,
     icon: Option<IconName>,
     detail: Option<String>,
+    labelled: bool,
+    badge: Option<AnyView>,
     selected: Prop<bool>,
     disabled: Prop<bool>,
     on_click: Callback,
@@ -700,6 +702,8 @@ pub fn segment(#[prop(into)] label: String) -> Segment {
         label,
         icon: None,
         detail: None,
+        labelled: false,
+        badge: None,
         selected: Prop::Static(false),
         disabled: Prop::Static(false),
         on_click: Callback::default(),
@@ -716,6 +720,16 @@ impl Segment {
 
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn labelled(mut self) -> Self {
+        self.labelled = true;
+        self
+    }
+
+    pub fn badge(mut self, badge: impl View) -> Self {
+        self.badge = Some(badge.into_any());
         self
     }
 
@@ -743,13 +757,15 @@ impl View for Segment {
             label,
             icon,
             detail,
+            labelled,
+            badge,
             selected,
             disabled,
             on_click,
             test_id,
             style,
         } = self;
-        let padding = if icon.is_some() {
+        let padding = if icon.is_some() && !labelled {
             tokens::CONTROL_PADDING_X_SMALL
         } else {
             tokens::CONTROL_PADDING_X_MEDIUM
@@ -758,17 +774,25 @@ impl View for Segment {
             let detail_id = test_id.part("detail");
             view! { <div test_id?=detail_id><text small>{detail}</text></div> }
         });
-        let (caption, hint) = if icon.is_some() {
+        let (caption, hint) = if icon.is_some() && !labelled {
             (None, Some(label))
         } else {
             (Some(label), None)
         };
+        let icon = icon.map(|icon| {
+            let icon_id = test_id.part("icon");
+            view! { <div flex flex_none test_id?=icon_id>{Icon::new(icon, Role::TextSecondary)}</div> }
+        });
+        let badge = badge.map(|badge| {
+            view! { <div absolute top=0.0 right=0.0 flex pass_through>{badge}</div> }
+        });
         let root = view! {
-            <div h=24.0 flex items_center justify_center gap=Space::X1 px=padding rounded=tokens::Radius::Inner
+            <div relative h=24.0 flex items_center justify_center gap=Space::X1 px=padding rounded=tokens::Radius::Inner
                  text_color=Role::TextSecondary>
-                {icon.map(|icon| Icon::new(icon, Role::TextSecondary))}
-                {detail}
+                {icon}
                 {caption.map(|caption| view! { <text small>{caption}</text> })}
+                {detail}
+                {badge}
             </div>
         }
         .hover(|style| style.text_color(Role::Text))

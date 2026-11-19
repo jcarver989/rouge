@@ -5,7 +5,7 @@ use rouge_core::{
 };
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_widgets::testing::component_test;
-use rouge_widgets::tokens::Hold;
+use rouge_widgets::tokens::{Hold, UNIT};
 use rouge_widgets::*;
 
 #[test]
@@ -127,6 +127,35 @@ fn the_segment_indicator_is_an_elevated_fill_on_the_chrome_track() -> TestResult
         light.chrome.to_rgba8(),
         "the other segments show the track",
     );
+    Ok(())
+}
+
+#[test]
+fn a_labelled_segment_shows_its_label_beside_its_icon_and_holds_a_badge_in_its_corner() -> TestResult
+{
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test().size(320.0, 120.0).build(|| {
+        let dot = view! { <div test_id="dot" size=8.0 bg=Color::RED/> };
+        view! {
+            <segmented_control test_id="segments">
+                <segment test_id="files" label="Files" icon=IconName::Folder detail="3" labelled badge=dot selected=true/>
+            </segmented_control>
+        }
+    });
+    ui.run(0.5);
+    let (files, icon, dot) = (
+        ui.rect_of("files")?,
+        ui.rect_of("files-icon")?,
+        ui.rect_of("dot")?,
+    );
+    let label = ui.text_bounds("Files").ok_or("the label is shown")?;
+    let detail = ui.rect_of("files-detail")?;
+    assert!(
+        icon.max().x <= label.origin.x && label.max().x <= detail.origin.x,
+        "{icon:?} {label:?} {detail:?}"
+    );
+    assert_eq!((dot.origin.y, dot.max().x), (files.origin.y, files.max().x));
+    assert_eq!(files.size.height % UNIT, 0.0);
     Ok(())
 }
 
