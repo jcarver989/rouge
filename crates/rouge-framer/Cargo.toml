@@ -1,0 +1,31 @@
+[package]
+name = "rouge-framer"
+description = "Framer preset for packaging and publishing Rouge apps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+keywords = ["rouge", "framer", "release", "publishing"]
+categories = ["development-tools::build-utils"]
+
+[dependencies]
+base64 = "0.22"
+cargo_metadata = "0.23"
+clap = { version = "4", features = ["derive", "env"] }
+framer = "0.1.3"
+plist = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+xshell = "0.2"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[test]]
+name = "pages_test"
+path = "tests/platform/web/pages_test.rs"

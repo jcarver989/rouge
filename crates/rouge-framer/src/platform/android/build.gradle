@@ -1,0 +1,21 @@
+android {
+    namespace System.getenv('APP_ID')
+    compileSdk System.getenv('ROUGE_TARGET_SDK').toInteger()
+    defaultConfig {
+        applicationId System.getenv('APP_ID')
+        minSdk System.getenv('ROUGE_MIN_SDK').toInteger()
+        targetSdk System.getenv('ROUGE_TARGET_SDK').toInteger()
+        versionCode System.getenv('ROUGE_BUILD_NUMBER').toInteger()
+        versionName System.getenv('APP_VERSION')
+        manifestPlaceholders = [appName: System.getenv('APP_NAME'), rustLibrary: System.getenv('APP_TARGET').replace('-', '_')]
+    }
+    signingConfigs {
+        upload {
+            storeFile file(System.getenv('ROUGE_KEYSTORE'))
+            storePassword System.getenv('ANDROID_UPLOAD_STORE_PASSWORD')
+            keyAlias System.getenv('ANDROID_UPLOAD_KEY_ALIAS')
+            keyPassword System.getenv('ANDROID_UPLOAD_KEY_PASSWORD')
+        }
+    }
+    buildTypes { release { signingConfig signingConfigs.upload } }
+}

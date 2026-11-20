@@ -206,6 +206,12 @@ extern "Rust" fn android_main(android: AndroidApp) {
 }
 ```
 
+## Publish an app
+
+Add the [`rouge-framer`](crates/rouge-framer) preset to your app's `.framer/` project and run `cargo framer`. It generates the GitHub Actions publishing workflow, a `cargo rouge` packaging command and a setup checklist for the destinations you enable: GitHub Pages, Linux and macOS downloads, TestFlight/App Store and Google Play. Start with the workflow's `check` channel to build without publishing or providing store credentials.
+
+See the [`rouge-framer` setup examples](crates/rouge-framer/README.md) for configuring a downstream app.
+
 ## Crates
 
 For most apps, use only the `rouge` crate. It exports all of the other crates.
@@ -221,6 +227,7 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 | `rouge-theme` | Colors and palettes. |
 | `rouge-markdown` | Markdown documents that you can parse in parts. |
 | `rouge-syntax` | Tree-sitter syntax highlighting. |
+| `rouge-framer` | An opt-in Framer preset for packaging and publishing Rouge apps. |
 
 `rouge-reactive`, `rouge-theme`, `rouge-markdown` and `rouge-syntax` do not need a GPU or a window. You can use them in other apps, for example in a terminal UI.
 

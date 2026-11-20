@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>@@NAME@@</title>@@ICON@@
+  <style>html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }</style>
+</head>
+<body>
+  <script type="module">
+    import init from './app.js';
+    init().catch(error => {
+      console.error(error);
+      document.body.textContent = 'Could not start the app. Try a browser with WebGPU or WebGL2.';
+    });
+  </script>
+</body>
+</html>
