@@ -1,6 +1,6 @@
 use super::camera::{Camera, CameraError};
 use super::gallery;
-use super::touch::library;
+use super::touch::{inbox, library};
 use rouge::core::view;
 use rouge::core::{InputKind, Point, Role, Styled, UiPalette, div};
 use rouge::reactive::{Runtime, signal};
@@ -87,7 +87,19 @@ fn phone(dir: &str, name: &str, palette: UiPalette) -> Result<(), CameraError> {
     );
     camera.shot(&format!("phone-{name}-swipe"))?;
     camera.ui.tap_on("open-sheet")?;
-    camera.shot(&format!("phone-{name}-sheet"))
+    camera.shot(&format!("phone-{name}-sheet"))?;
+    let ui = component_test()
+        .size(PHONE.0, PHONE.1)
+        .scale(SCALE)
+        .input(InputKind::Touch)
+        .palette(palette)
+        .build(|| {
+            view! { <div size_full bg=Role::Canvas>{inbox(signal(String::new()))}</div> }
+        });
+    let mut camera = Camera { ui, dir };
+    camera.shot(&format!("phone-{name}-inbox"))?;
+    camera.ui.tap_on("open-settings")?;
+    camera.shot(&format!("phone-{name}-settings"))
 }
 
 const PHONE: (f32, f32) = (390.0, 760.0);
