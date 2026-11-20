@@ -40,10 +40,24 @@ pub fn window_size() -> ReadSignal<Size> {
 }
 
 #[derive(Clone, Copy)]
+struct WindowScope(Scope);
+
+pub fn window_scope() -> Scope {
+    expect_context::<WindowScope>().0
+}
+
+#[derive(Clone, Copy)]
 struct SafeArea(ReadSignal<Edges>);
 
 pub fn safe_area() -> ReadSignal<Edges> {
     expect_context::<SafeArea>().0
+}
+
+#[derive(Clone, Copy)]
+struct KeyboardInset(ReadSignal<f32>);
+
+pub fn keyboard_inset() -> ReadSignal<f32> {
+    expect_context::<KeyboardInset>().0
 }
 
 #[derive(Clone, Copy)]
@@ -125,6 +139,8 @@ pub struct Ui {
     viewport: Size,
     safe_area: Signal<Edges>,
     insets: Edges,
+    keyboard_inset: Signal<f32>,
+    keyboard: f32,
     presentation: Signal<Presentation>,
     device_scale: f32,
     zoom: Signal<f32>,
@@ -186,51 +202,56 @@ impl Ui {
         }
         let scope = Scope::root();
         let viewport = size;
-        let (size, safe_area, presentation, zoom, modifiers, window_handle) = scope.run(|| {
-            let window_handle = WindowHandle {
-                queue: signal(queue.clone()),
-                title: signal(String::new()),
-                route: signal(String::new()),
-                appearance: signal(Appearance::Light),
-                focused: signal(true),
-            };
-            provide_context(window_handle);
-            let size = signal(size);
-            provide_context(WindowSize(size.read_only()));
-            let safe_area = signal(Edges::ZERO);
-            provide_context(SafeArea(safe_area.read_only()));
-            let presentation = signal(Presentation {
-                input,
-                width: WidthClass::of(size.get_untracked()),
+        let (size, safe_area, keyboard_inset, presentation, zoom, modifiers, window_handle) = scope
+            .run(|| {
+                let window_handle = WindowHandle {
+                    queue: signal(queue.clone()),
+                    title: signal(String::new()),
+                    route: signal(String::new()),
+                    appearance: signal(Appearance::Light),
+                    focused: signal(true),
+                };
+                provide_context(window_handle);
+                provide_context(WindowScope(scope));
+                let size = signal(size);
+                provide_context(WindowSize(size.read_only()));
+                let safe_area = signal(Edges::ZERO);
+                provide_context(SafeArea(safe_area.read_only()));
+                let keyboard_inset = signal(0.0);
+                provide_context(KeyboardInset(keyboard_inset.read_only()));
+                let presentation = signal(Presentation {
+                    input,
+                    width: WidthClass::of(size.get_untracked()),
+                });
+                provide_context(Presented(presentation.read_only()));
+                let zoom = signal(1.0);
+                provide_context(Zoom(zoom));
+                let modifiers = signal(Modifiers::NONE);
+                provide_context(HeldModifiers(modifiers.read_only()));
+                provide_context(UiContext::new(queue.clone()));
+                let keymap = Keymap(signal(Vec::new()));
+                provide_context(keymap);
+                tree.observe_keymap(keymap);
+                let theme = Theme::provide(UiPalette::light());
+                tree.set_theme(theme);
+                let mut cx = BuildCx {
+                    parent: tree.content(),
+                    tree: &mut tree,
+                    queue: &queue,
+                    text: &mut text_system,
+                    theme: Some((theme, None)),
+                };
+                root().build(&mut cx);
+                (
+                    size,
+                    safe_area,
+                    keyboard_inset,
+                    presentation,
+                    zoom,
+                    modifiers,
+                    window_handle,
+                )
             });
-            provide_context(Presented(presentation.read_only()));
-            let zoom = signal(1.0);
-            provide_context(Zoom(zoom));
-            let modifiers = signal(Modifiers::NONE);
-            provide_context(HeldModifiers(modifiers.read_only()));
-            provide_context(UiContext::new(queue.clone()));
-            let keymap = Keymap(signal(Vec::new()));
-            provide_context(keymap);
-            tree.observe_keymap(keymap);
-            let theme = Theme::provide(UiPalette::light());
-            tree.set_theme(theme);
-            let mut cx = BuildCx {
-                parent: tree.content(),
-                tree: &mut tree,
-                queue: &queue,
-                text: &mut text_system,
-                theme: Some((theme, None)),
-            };
-            root().build(&mut cx);
-            (
-                size,
-                safe_area,
-                presentation,
-                zoom,
-                modifiers,
-                window_handle,
-            )
-        });
         Ui {
             window_handle,
             tree,
@@ -238,6 +259,8 @@ impl Ui {
             viewport,
             safe_area,
             insets: Edges::ZERO,
+            keyboard_inset,
+            keyboard: 0.0,
             presentation,
             device_scale: 1.0,
             zoom,
@@ -429,6 +452,11 @@ impl Ui {
         self.rescale();
     }
 
+    pub fn set_keyboard_inset(&mut self, inset: f32) {
+        self.keyboard = inset.max(0.0);
+        self.rescale();
+    }
+
     pub fn set_input(&mut self, input: InputKind) {
         self.presentation.set_if_changed(Presentation {
             input,
@@ -481,6 +509,8 @@ impl Ui {
             bottom: self.insets.bottom / self.zoomed,
             left: self.insets.left / self.zoomed,
         });
+        self.keyboard_inset
+            .set_if_changed(self.keyboard / self.zoomed);
     }
 
     pub fn clear_color(&self) -> Color {

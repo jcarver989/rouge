@@ -30,9 +30,9 @@ pub mod prelude {
         Styled, Surface, SurfaceError, SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle,
         Theme, Tween, Typography, UiPalette, Underline, View, VirtualListHandle, WindowHandle,
         appearance, auto, canvas, component, div, dynamic, each, editable, focus_handle, icon,
-        image, motion, overlay, pct, px, rich_text, route, safe_area, scroll, show, surface,
-        switch, text, use_binding, view, virtual_list, virtual_list_handle, window_focused,
-        window_handle, window_size, zoom,
+        image, keyboard_inset, motion, overlay, pct, px, rich_text, route, safe_area, scroll, show,
+        surface, switch, text, use_binding, view, virtual_list, virtual_list_handle,
+        window_focused, window_handle, window_size, zoom,
     };
     #[cfg(not(target_arch = "wasm32"))]
     pub use rouge_reactive::spawn_blocking;

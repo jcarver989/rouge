@@ -65,7 +65,7 @@ pub use style::{
 pub use surface::{Surface, surface};
 pub use theme::{Fill, Palette, Theme};
 pub use tree::{FrameStats, Interaction, PaintRegion};
-pub use ui::{Ui, Wake, modifiers, safe_area, window_size, zoom};
+pub use ui::{Ui, Wake, keyboard_inset, modifiers, safe_area, window_scope, window_size, zoom};
 pub use view::{AnyView, Apply, BuildCx, Div, FocusPolicy, Text, View, div, rich_text, text};
 
 #[doc(hidden)]

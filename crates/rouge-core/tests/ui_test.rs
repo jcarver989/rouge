@@ -7,10 +7,13 @@ use rouge_core::view;
 use rouge_core::{
     COMPACT_WIDTH, Color, Div, DragAxis, DragEvent, DragPhase, Edges, InputKind, Keyframes, Menu,
     MenuItem, Modifiers, Point, PointerButton, Presentation, Rect, ScrollState, Scrollable, Size,
-    Styled, TouchPhase, Ui, UiPalette, WidthClass, canvas, div, dynamic, modifiers, pct,
-    presentation, safe_area, scroll, show, text, window_size, zoom,
+    Styled, TouchPhase, Ui, UiPalette, WidthClass, canvas, div, dynamic, keyboard_inset, modifiers,
+    pct, presentation, safe_area, scroll, show, text, window_scope, window_size, zoom,
 };
-use rouge_reactive::{Runtime, Signal, effect, resource, signal, sleep, spawn, spawn_blocking};
+use rouge_reactive::{
+    Runtime, Signal, effect, provide_context, resource, signal, sleep, spawn, spawn_blocking,
+    use_context,
+};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -446,6 +449,49 @@ fn safe_area_starts_empty_and_tracks_the_insets_in_zoomed_points() {
             left: 0.0,
         }
     );
+}
+
+#[test]
+fn keyboard_inset_starts_at_zero_and_tracks_the_keyboard_in_zoomed_points() {
+    let _rt = Runtime::new().enter();
+    let seen = signal(-1.0);
+    let (mut ui, zoom) = TestUiBuilder::default().build_with(move || {
+        let inset = keyboard_inset();
+        effect(move || seen.set(inset.get()));
+        (div(), zoom())
+    });
+    assert_eq!(seen.get_untracked(), 0.0);
+    ui.set_keyboard_inset(300.0);
+    assert_eq!(seen.get_untracked(), 300.0);
+    zoom.set(2.0);
+    ui.advance(0.0);
+    assert_eq!(seen.get_untracked(), 150.0);
+    ui.set_keyboard_inset(-4.0);
+    assert_eq!(
+        seen.get_untracked(),
+        0.0,
+        "a keyboard never has a negative height"
+    );
+}
+
+#[test]
+fn the_window_scope_shares_context_between_views_that_have_no_common_provider() {
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    struct Shared(u32);
+    let _rt = Runtime::new().enter();
+    let seen = signal(None::<Shared>);
+    let _ui = TestUi::new(move || {
+        let first = div().provide(()).child(dynamic(move || {
+            window_scope().run(|| provide_context(Shared(7)));
+            div()
+        }));
+        let second = dynamic(move || {
+            seen.set(use_context::<Shared>());
+            div()
+        });
+        div().child(first).child(second)
+    });
+    assert_eq!(seen.get_untracked(), Some(Shared(7)));
 }
 
 #[test]

@@ -53,6 +53,10 @@ pub(crate) trait WinitPlatform: Platform + Sized {
         Edges::ZERO
     }
 
+    fn keyboard_inset(_window: &Window) -> f32 {
+        0.0
+    }
+
     fn appearance(window: &Window) -> Appearance {
         appearance(window.theme())
     }

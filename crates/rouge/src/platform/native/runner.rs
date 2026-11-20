@@ -502,6 +502,7 @@ impl WindowState {
         Current::sync(&self.window, ui);
         if Current::MOBILE {
             ui.set_safe_area(Current::safe_area(&self.window));
+            ui.set_keyboard_inset(Current::keyboard_inset(&self.window));
         }
     }
 
