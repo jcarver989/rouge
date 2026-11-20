@@ -3,7 +3,7 @@ use crate::{
     icon::{Icon, IconName},
     material::{Material, MaterialExt},
     popover::{Hint, POPPED, Placement, Tooltip, dismiss_layer},
-    progress::spinning,
+    progress::spinning_ring,
     sheet::{Detent, Presenter},
     tokens::{self, Hold, MotionScale, Pace, Space},
     tree::indent,
@@ -194,10 +194,15 @@ impl View for Button {
             move || loading.get()
         };
         let spinner_id = self.test_id.part("spinner");
+        let ring_arc = move || match variant {
+            ButtonVariant::Primary => Fill::Role(Role::AccentForeground),
+            ButtonVariant::Destructive => Fill::Role(Role::Destructive),
+            ButtonVariant::Secondary | ButtonVariant::Ghost => Fill::Role(Role::Accent),
+        };
         let spinner = view! {
-            <show when=busy.clone()>
+            <show when=busy.clone() enter=(POPPED, Pace::Enter) exit=(POPPED, Pace::Exit)>
                 <div test_id?={spinner_id.clone()} absolute inset=0.0 flex items_center justify_center pass_through>
-                    {spinning(tokens::ICON_SIZE, ink(InteractionState::Rest, false))}
+                    {spinning_ring(tokens::ICON_SIZE, ink(InteractionState::Rest, false), ring_arc)}
                 </div>
             </show>
         };
@@ -220,7 +225,8 @@ impl View for Button {
                  on_hover={move |inside| hovered.set(inside)}
                  on_press={move |down| pressed.set(down)}
                  scale={move || if pressed.get() { tokens::PRESS_SCALE } else { 1.0 }}>
-                <div flex items_center gap=Space::X2 opacity={move || if busy() { 0.0 } else { 1.0 }}>
+                <div flex items_center gap=Space::X2 opacity={move || if busy() { 0.0 } else { 1.0 }}
+                     transition=Pace::Move>
                     {icon}
                     <text label no_wrap>{self.label}</text>
                 </div>

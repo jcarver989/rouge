@@ -14,7 +14,7 @@ const REPLY: &str = "Try **Soft Machinery** by Ines Okafor.\n\n\
 pub(crate) fn streaming(status: Signal<String>) -> Div {
     section(
         "Streaming",
-        "A transcript on virtual_list that follows its end, markdown that re-parses only the open block, and a composer with a busy rim.",
+        "A transcript on virtual_list that follows its end, markdown that re-parses only the open block, and a composer whose Send button morphs into Stop while streaming.",
         [band([chat(status)])],
     )
 }
@@ -27,15 +27,23 @@ fn chat(status: Signal<String>) -> Cell {
         stream.finish();
     });
     thread.push((0, Message::assistant(opening)));
-    let (draft, busy) = (signal(String::new()), signal(false));
+    let (draft, busy, generation) = (signal(String::new()), signal(false), signal(0usize));
     let send = move |said: String| {
         let reply = signal(MarkdownStream::new());
         thread.push((thread.len(), Message::user(said)));
         thread.push((thread.len(), Message::assistant(reply)));
+        let turn = generation.get_untracked() + 1;
+        generation.set(turn);
         busy.set(true);
         spawn(async move {
             for word in REPLY.split_inclusive(' ') {
                 sleep(Duration::from_millis(40)).await;
+                if generation.get_untracked() != turn {
+                    reply.update(|stream| {
+                        stream.finish();
+                    });
+                    return;
+                }
                 reply.update(|stream| {
                     stream.push(word);
                 });
@@ -43,21 +51,28 @@ fn chat(status: Signal<String>) -> Cell {
             reply.update(|stream| {
                 stream.finish();
             });
-            busy.set(false);
-            status.set("Reply finished".into());
+            if generation.get_untracked() == turn {
+                busy.set(false);
+                status.set("Reply finished".into());
+            }
         });
+    };
+    let stop = move || {
+        generation.update(|turn| *turn += 1);
+        busy.set(false);
+        status.set("Reply stopped".into());
     };
     let content = view! {
         <div flex col gap=12.0 h=320.0>
             <transcript messages=thread message={|(_, message)| message.clone()} test_id="thread" flex_1/>
             <composer draft=draft test_id="composer" placeholder="Ask for something to play" busy=busy
-                 on_send=send/>
+                 on_send=send on_stop=stop/>
         </div>
     };
     cell(
         "transcript · composer",
         1.0,
-        "While a reply streams the composer holds its draft and a light travels round its edge.",
+        "While a reply streams the composer holds its draft and Send morphs into a circular Stop control.",
         content,
     )
 }

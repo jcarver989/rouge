@@ -1,18 +1,17 @@
-use crate::components::{ControlSize, button};
-use crate::effects::BusyExt;
 use crate::input::text_input;
 use crate::markdown::markdown;
 use crate::material::{Material, MaterialExt};
-use crate::tokens::{ROW_HEIGHT, Radius, Space};
+use crate::progress::spinning_ring;
+use crate::tokens::{DISABLED_OPACITY, PRESS_SCALE, Pace, ROW_HEIGHT, Radius, Space};
 use crate::typography::UiStyles;
-use crate::util::{TestId, chrome};
+use crate::util::{TestId, chrome, focus_ring};
 use rouge_core::{
-    BuildCx, Color, DelegateStyle, IntoProp, Prop, RowKey, StyleDelta, Styled, View, component,
-    div, pct, text, view, virtual_list,
+    BuildCx, Color, Cursor, DelegateStyle, FocusPolicy, IntoProp, LayoutTransition, Pose, Prop,
+    Role, RowKey, StyleDelta, Styled, Theme, View, component, div, pct, show, text, view,
+    virtual_list,
 };
 use rouge_markdown::MarkdownStream;
 use rouge_reactive::{Callback, KeyedList, ReadSignal, Signal, signal};
-use rouge_theme::ButtonVariant;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -108,6 +107,7 @@ pub struct Composer {
     placeholder: Option<String>,
     busy: Prop<bool>,
     on_send: Callback<(String,)>,
+    on_stop: Callback,
     test_id: Option<String>,
     style: StyleDelta,
 }
@@ -119,6 +119,7 @@ pub fn composer(draft: Signal<String>) -> Composer {
         placeholder: None,
         busy: Prop::Static(false),
         on_send: Callback::default(),
+        on_stop: Callback::default(),
         test_id: None,
         style: StyleDelta::default(),
     }
@@ -139,14 +140,20 @@ impl Composer {
         self.on_send = on_send.into();
         self
     }
+
+    pub fn on_stop(mut self, on_stop: impl Into<Callback>) -> Self {
+        self.on_stop = on_stop.into();
+        self
+    }
 }
 
 chrome!(Composer);
 
 impl View for Composer {
     fn build(self, cx: &mut BuildCx<'_>) {
-        let (draft, on_send, id) = (self.draft, self.on_send, self.test_id);
+        let (draft, on_send, on_stop, id) = (self.draft, self.on_send, self.on_stop, self.test_id);
         let busy = Rc::new(self.busy.memo());
+        let theme = Theme::current();
         let part = |name: &str| id.part(format_args!("{name}"));
         let working = {
             let busy = busy.clone();
@@ -171,23 +178,136 @@ impl View for Composer {
                  flex_1 min_w=0.0 bg=Color::TRANSPARENT border_color=Color::TRANSPARENT
                  placeholder?=self.placeholder test_id?=part("input")/>
         };
-        let idle = {
+        let pressed = signal(false);
+        let can_stop = on_stop.is_set();
+        let interactive = {
             let working = working.clone();
-            move || working() || draft.with(|draft| draft.trim().is_empty())
+            move || {
+                if working() {
+                    can_stop
+                } else {
+                    !draft.with(|draft| draft.trim().is_empty())
+                }
+            }
         };
-        let action = view! {
-            <button label="Send" variant=ButtonVariant::Primary control_size=ControlSize::Small
-                 disabled=idle on_click=send test_id?=part("send")/>
+        let action_bg = {
+            let working = working.clone();
+            move || {
+                let palette = theme.get();
+                if working() {
+                    palette.surface_selected
+                } else {
+                    palette.accent
+                }
+            }
         };
+        let action_width = {
+            let working = working.clone();
+            move || if working() { STOP_DIAMETER } else { SEND_WIDTH }
+        };
+        let action_radius = {
+            let working = working.clone();
+            move || {
+                if working() {
+                    Radius::Full
+                } else {
+                    Radius::Control
+                }
+            }
+        };
+        let action_opacity = {
+            let working = working.clone();
+            let interactive = interactive.clone();
+            move || {
+                if !working() && !interactive() {
+                    DISABLED_OPACITY
+                } else {
+                    1.0
+                }
+            }
+        };
+        let activate = {
+            let working = working.clone();
+            move || {
+                if working() {
+                    if can_stop {
+                        on_stop.call();
+                    }
+                } else {
+                    send();
+                }
+            }
+        };
+        let stop_id = part("stop");
+        let stop = view! {
+            <show when=working.clone() enter=(MORPH_HIDDEN, Pace::Enter) exit=(MORPH_HIDDEN, Pace::Exit)>
+                <div test_id?={stop_id.clone()} absolute inset=0.0 flex items_center justify_center pass_through>
+                    {spinning_ring(STOP_DIAMETER, Role::Text, Role::Accent)}
+                    <div absolute size=STOP_GLYPH rounded=Radius::Inner bg=Role::Text/>
+                </div>
+            </show>
+        };
+        let label = view! {
+            <div flex items_center justify_center
+                 opacity={
+                     let working = working.clone();
+                     move || if working() { 0.0 } else { 1.0 }
+                 }
+                 scale={
+                     let working = working.clone();
+                     move || if working() { MORPH_SCALE } else { 1.0 }
+                 }
+                 transition=Pace::Move>
+                <text label no_wrap text_color=Role::AccentForeground>"Send"</text>
+            </div>
+        };
+        let action = focus_ring(view! {
+            <div relative flex items_center justify_center flex_none overflow_hidden
+                 h=STOP_DIAMETER w=action_width rounded=action_radius
+                 border=1.0 border_color=Color::TRANSPARENT
+                 bg=action_bg opacity=action_opacity
+                 cursor={
+                     let interactive = interactive.clone();
+                     move || if interactive() { Cursor::Pointer } else { Cursor::Default }
+                 }
+                 on_press={move |down| pressed.set(down)}
+                 scale={move || if pressed.get() { PRESS_SCALE } else { 1.0 }}
+                 transition=Pace::Move
+                 layout_transition={LayoutTransition::new(Pace::Move).size()}
+                 test_id?=part("send")>
+                {label}
+                {stop}
+            </div>
+        })
+        .enabled(interactive)
+        .on_activate(activate)
+        .focus_policy(FocusPolicy::Tab);
         let root = view! {
-            <div flex items_end gap=Space::X2 p=Space::X2 material=Material::Glass test_id?=id>
+            <div flex items_end gap=Space::X2 p=Space::X2 material=Material::Glass
+                 relative test_id?=id>
                 {field}
                 {action}
+                <div absolute inset=0.0 pass_through rounded=Radius::Floating
+                     border=1.0 border_color={
+                         let working = working.clone();
+                         move || {
+                             if working() {
+                                 theme.get().accent.with_alpha(BUSY_BORDER_ALPHA)
+                             } else {
+                                 Color::TRANSPARENT
+                             }
+                         }
+                     }/>
             </div>
-        }
-        .busy(working, Radius::Floating);
+        };
         self.style.apply(root).build(cx);
     }
 }
 
 const MAX_ROWS: usize = 6;
+const SEND_WIDTH: f32 = 56.0;
+const STOP_DIAMETER: f32 = 28.0;
+const STOP_GLYPH: f32 = 8.0;
+const MORPH_SCALE: f32 = 0.7;
+const BUSY_BORDER_ALPHA: f32 = 0.34;
+const MORPH_HIDDEN: Pose = Pose::new().opacity(0.0).scale(MORPH_SCALE);

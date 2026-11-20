@@ -1,6 +1,6 @@
 #![cfg(feature = "markdown")]
 
-use rouge_core::testing::{TestResult, assert_near};
+use rouge_core::testing::{TestResult, assert_near, counter};
 use rouge_core::view;
 use rouge_core::{Color, Styled, UiPalette, div};
 use rouge_markdown::MarkdownStream;
@@ -70,17 +70,20 @@ fn a_transcript_draws_bubbles_and_follows_a_growing_reply_to_the_end() -> TestRe
 }
 
 #[test]
-fn a_composer_sends_on_enter_or_its_button_and_holds_while_busy() -> TestResult {
+fn a_composer_sends_on_enter_or_its_button_and_morphs_into_stop_while_busy() -> TestResult {
     let _entered = Runtime::new().enter();
     let (draft, busy, sent) = (signal(String::new()), signal(false), signal(Vec::new()));
+    let (stops, stop) = counter();
     let mut ui = component_test().size(400.0, 200.0).build(move || {
         view! {
             <div p=10.0>
                 <composer draft=draft test_id="composer" placeholder="Ask for something to play" busy=busy
-                     on_send={move |said: String| sent.update(|sent| sent.push(said))} w=360.0/>
+                     on_send={move |said: String| sent.update(|sent| sent.push(said))}
+                     on_stop=stop w=360.0/>
             </div>
         }
     });
+    let idle_action = ui.rect_of("composer-send")?;
     ui.click_on("composer-send")?;
     assert!(sent.get().is_empty(), "an empty draft is not sent");
     ui.click_on("composer-input")?;
@@ -99,17 +102,29 @@ fn a_composer_sends_on_enter_or_its_button_and_holds_while_busy() -> TestResult 
     busy.set(true);
     ui.run(0.3);
     assert!(
-        ui.bounds_of("busy-rim").is_some(),
-        "a busy composer shows the rim"
+        ui.bounds_of("composer-stop").is_some(),
+        "a busy composer morphs Send into Stop"
     );
+    let busy_action = ui.rect_of("composer-send")?;
+    assert!(
+        busy_action.size.width < idle_action.size.width
+            && (busy_action.size.width - busy_action.size.height).abs() < 0.5,
+        "the action morphs into a circle: idle={idle_action:?}, busy={busy_action:?}"
+    );
+    assert!(ui.is_animating(), "the stop ring turns while busy");
     ui.click_on("composer-input")?;
     ui.type_text("again");
     ui.press("enter");
     assert_eq!(sent.get().len(), 2, "nothing is sent while busy");
     assert_eq!(draft.get(), "again", "and the draft is kept");
+    ui.click_on("composer-send")?;
+    assert_eq!(stops.get(), 1, "clicking Stop fires on_stop");
     busy.set(false);
-    ui.run(0.3);
-    assert!(ui.bounds_of("busy-rim").is_none());
+    ui.run(0.5);
+    assert!(ui.bounds_of("composer-stop").is_none());
+    assert_eq!(ui.rect_of("composer-send")?.size, idle_action.size);
+    assert_eq!(ui.compositor_frames(1.0)?, 0, "idle again");
+    ui.click_on("composer-input")?;
     ui.press("enter");
     assert_eq!(sent.get().len(), 3);
     Ok(())
