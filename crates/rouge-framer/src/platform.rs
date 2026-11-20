@@ -56,6 +56,10 @@ pub(crate) trait Platform {
 
     fn build(&self, build: &Build) -> Result<()>;
 
+    fn stage(&self, _build: &Build) -> Result<()> {
+        invalid("only Pages deployments need a staging step")
+    }
+
     fn publish(&self, build: &Build) -> Result<()>;
 
     fn link(&self, _build: &Build) -> Result<()> {

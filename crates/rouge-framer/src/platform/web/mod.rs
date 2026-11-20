@@ -59,7 +59,7 @@ impl Platform for Web {
             )
             .step(workflow::rouge("Build web package", "build", target))
             .step(workflow::inspect(target, "*"))
-            .step(workflow::rouge("Update Pages channel", "publish", target).condition(PUBLISHING))
+            .step(workflow::rouge("Stage Pages channel", "stage", target).condition(PUBLISHING))
             .step(
                 Step::uses(PAGES_ARTIFACT)
                     .name("Stage Pages deployment")
@@ -70,6 +70,10 @@ impl Platform for Web {
                 Step::uses(PAGES_DEPLOY)
                     .name("Deploy Pages")
                     .id("deployment")
+                    .condition(PUBLISHING),
+            )
+            .step(
+                workflow::rouge("Record deployed Pages channel", "publish", target)
                     .condition(PUBLISHING),
             )
             .step(
@@ -112,6 +116,10 @@ impl Platform for Web {
         let wasm = compile_wasm(build)?;
         generate_bindings(build, &bindgen, &wasm)?;
         write_site(build)
+    }
+
+    fn stage(&self, build: &Build) -> Result<()> {
+        pages::stage(build)
     }
 
     fn publish(&self, build: &Build) -> Result<()> {

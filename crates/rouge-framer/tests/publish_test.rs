@@ -22,7 +22,16 @@ fn only_generates_enabled_targets() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!workflow.contains("secrets."));
     assert!(checklist.contains("/preview/"));
     assert!(!checklist.contains("TestFlight"));
-    assert!(workflow.contains("run: cargo rouge publish web"));
+    let steps = [
+        "run: cargo rouge stage web",
+        "actions/upload-pages-artifact@",
+        "actions/deploy-pages@",
+        "run: cargo rouge publish web",
+    ];
+    let mut remaining = workflow;
+    for step in steps {
+        (_, remaining) = remaining.split_once(step).ok_or_else(|| missing(step))?;
+    }
     assert!(!workflow.contains("cargo rouge build ios"));
     assert!(fs.paths().all(|path| !path.starts_with(".rouge")));
     Ok(())

@@ -10,8 +10,20 @@ const EMAIL: &str = "user.email=41898282+github-actions[bot]@users.noreply.githu
 const PREVIEW_INDEX: &str =
     "<!doctype html><meta charset=\"utf-8\"><a href=\"./preview/\">Open preview</a>\n";
 
+fn candidate(build: &Build) -> String {
+    format!("refs/rouge/pages-staged-{}", build.channel)
+}
+
 pub(crate) fn publish(build: &Build) -> Result<()> {
+    let (sh, staged) = (&build.sh, candidate(build));
+    cmd!(sh, "git push --quiet origin {staged}:{STATE}").run()?;
+    Ok(cmd!(sh, "git update-ref -d {staged}").run()?)
+}
+
+pub(crate) fn stage(build: &Build) -> Result<()> {
     let sh = &build.sh;
+    let staged = candidate(build);
+    cmd!(sh, "git update-ref -d {staged}").run()?;
     let scratch = sh.create_temp_dir()?;
     let site = scratch.path().join("site");
     let tracked = !cmd!(sh, "git ls-remote --refs origin {STATE}")
@@ -23,14 +35,14 @@ pub(crate) fn publish(build: &Build) -> Result<()> {
     } else {
         cmd!(sh, "git init --quiet {site}").run()?;
     }
-    let pushed = update(build, &site, tracked);
+    let result = update(build, &site, tracked, &staged);
     if tracked {
         cmd!(sh, "git worktree remove --force {site}").run()?;
     }
-    pushed
+    result
 }
 
-fn update(build: &Build, site: &Path, tracked: bool) -> Result<()> {
+fn update(build: &Build, site: &Path, tracked: bool, candidate: &str) -> Result<()> {
     let (sh, web) = (&build.sh, &build.out);
     let staged = build.root.join(".rouge/out/pages");
     if build.channel == Channel::Preview {
@@ -65,7 +77,7 @@ fn update(build: &Build, site: &Path, tracked: bool) -> Result<()> {
         cmd!(sh, "git fetch --quiet --no-tags {site} HEAD").run()?;
         "FETCH_HEAD".into()
     };
-    Ok(cmd!(sh, "git push --quiet origin {commit}:{STATE}").run()?)
+    Ok(cmd!(sh, "git update-ref {candidate} {commit}").run()?)
 }
 
 fn published(sh: &Shell, site: &Path, skipped: &[&str]) -> Result<Vec<PathBuf>> {

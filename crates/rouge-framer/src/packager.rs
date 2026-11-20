@@ -12,6 +12,7 @@ pub enum Action {
     Setup,
     Doctor,
     Build,
+    Stage,
     Publish,
     Link,
 }
@@ -92,13 +93,14 @@ impl Packager {
             ));
         };
         ensure(
-            action != Action::Publish || self.channel != Channel::Check,
+            !matches!(action, Action::Stage | Action::Publish) || self.channel != Channel::Check,
             "Set ROUGE_CHANNEL to preview or production before publishing",
         )?;
         let build = self.prepare(target)?;
         match action {
             Action::Setup => platform.setup(&build),
             Action::Doctor => platform.doctor(&build),
+            Action::Stage => platform.stage(&build),
             Action::Publish => platform.publish(&build),
             Action::Link => platform.link(&build),
             Action::Build => {

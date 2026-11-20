@@ -34,6 +34,7 @@ fn preserves_the_other_pages_channel_from_a_fresh_shallow_checkout()
     for (checkout, channel, content) in [
         ("first", Channel::Preview, "preview v1"),
         ("second", Channel::Production, "production v1"),
+        ("failed", Channel::Production, "not deployed"),
         ("third", Channel::Preview, "preview v2"),
     ] {
         git(
@@ -47,9 +48,17 @@ fn preserves_the_other_pages_channel_from_a_fresh_shallow_checkout()
         fs::write(repo.join("Cargo.lock"), LOCK)?;
         fs::create_dir_all(repo.join("src"))?;
         fs::write(repo.join("src/main.rs"), "fn main() {}\n")?;
-        Packager::new(RougePublish::new("com.example.app").web(GitHubPages), &repo)
-            .channel(channel)
-            .run(Action::Publish, Target::Web)?;
+        let packager = Packager::new(RougePublish::new("com.example.app").web(GitHubPages), &repo)
+            .channel(channel);
+        packager.run(Action::Stage, Target::Web)?;
+        if checkout == "failed" {
+            assert_eq!(
+                fs::read_to_string(repo.join(".rouge/out/pages/index.html"))?,
+                content
+            );
+            continue;
+        }
+        packager.run(Action::Publish, Target::Web)?;
         let site = repo.join(".rouge/out/pages");
         if checkout == "first" {
             assert!(fs::read_to_string(site.join("index.html"))?.contains("./preview/"));
