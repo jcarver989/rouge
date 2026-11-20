@@ -1,5 +1,5 @@
-use crate::tokens::{GROUP_HEIGHT, HAIRLINE, Space};
-use crate::util::{chrome, entry, entry_frame};
+use crate::tokens::{HAIRLINE, Space};
+use crate::util::{by_touch, chrome, entry, entry_frame, field_height};
 use rouge_core::Role;
 use rouge_core::{
     Apply, BuildCx, DelegateStyle, Editable, StyleDelta, Styled, View, component, div,
@@ -102,10 +102,11 @@ impl View for TextInput {
             .when_some(min_rows, Editable::min_rows)
             .when_some(max_rows, Editable::max_rows);
         let fixed = min_rows.is_some() || max_rows.is_some();
+        let (height, inset) = (field_height(), by_touch(Space::X3, Space::X2));
         let root = view! {
-            <div test_id?=test_id flex px=Space::X2 py={Space::X1.px() - HAIRLINE} overflow_hidden
+            <div test_id?=test_id flex px=inset py={Space::X1.px() - HAIRLINE} overflow_hidden
                  when:items_start=multiline when:items_center={!multiline}
-                 when:min_h=(multiline && !fixed, 72.0) when:min_h=(!multiline, GROUP_HEIGHT)>
+                 when:min_h=(multiline && !fixed, 72.0) when:min_h=(!multiline, height)>
                 {div().flex_1().min_w(0.0).child(field)}
             </div>
         };

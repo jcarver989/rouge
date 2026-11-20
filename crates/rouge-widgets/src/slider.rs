@@ -2,7 +2,7 @@ use crate::material::{Material, MaterialExt};
 use crate::popover::POPPED;
 use crate::tokens::{GRAB_SCALE, Pace, Radius, Space};
 use crate::typography::UiStyles;
-use crate::util::{chrome, focus_ring};
+use crate::util::{by_touch, chrome, focus_ring};
 use rouge_core::Role;
 use rouge_core::{
     Apply, BuildCx, Color, Cursor, DelegateStyle, Div, Key, PointerButton, StyleDelta, Styled,
@@ -13,6 +13,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 const THUMB: f32 = 16.0;
+const THUMB_TOUCH: f32 = 28.0;
+const HEIGHT_TOUCH: f32 = 44.0;
 const BORDER: f32 = 1.0;
 const TIP_GAP: f32 = 4.0;
 
@@ -82,6 +84,7 @@ fn slider_root(
     test_id: Option<&str>,
 ) -> Div {
     let (hovered, grabbed) = (signal(false), signal(false));
+    let (thumb_size, height) = by_touch((THUMB_TOUCH, HEIGHT_TOUCH), (THUMB, THUMB));
     let max = max.max(min + f32::EPSILON);
     let step = step.filter(|step| *step > 0.0);
     let snap = move |raw: f32| {
@@ -90,8 +93,8 @@ fn slider_root(
     };
     let fraction = move || ((value.get() - min) / (max - min)).clamp(0.0, 1.0);
     let place = move |x: f32, width: f32| {
-        let travel = (width - THUMB).max(1.0);
-        let at = ((x - THUMB / 2.0) / travel).clamp(0.0, 1.0);
+        let travel = (width - thumb_size).max(1.0);
+        let at = ((x - thumb_size / 2.0) / travel).clamp(0.0, 1.0);
         value.set_if_changed(snap(min + at * (max - min)));
     };
     let pressed = Rc::new(Cell::new((0.0, 0.0)));
@@ -106,7 +109,7 @@ fn slider_root(
         .bg(Role::Accent)
         .w(move || pct(fraction() * 100.0));
     let thumb = view! {
-        <div absolute size=THUMB rounded=Radius::Full bg=Color::WHITE border=1.0
+        <div absolute size=thumb_size rounded=Radius::Full bg=Color::WHITE border=1.0
              border_color=Role::Border left={move || pct(fraction() * 100.0)}
              scale={move || if grabbed.get() { GRAB_SCALE } else { 1.0 }} transition=Pace::Press/>
     };
@@ -126,20 +129,20 @@ fn slider_root(
             </show>
         };
         view! {
-            <div absolute pass_through flex col items_center w=THUMB bottom={THUMB + TIP_GAP}
+            <div absolute pass_through flex col items_center w=thumb_size bottom={thumb_size + TIP_GAP}
                  left={move || pct(fraction() * 100.0)}>
                 {bubble}
             </div>
         }
     });
     let rail = view! {
-        <div absolute left=0.0 right={THUMB - 2.0 * BORDER} h=THUMB>
+        <div absolute left=0.0 right={thumb_size - 2.0 * BORDER} h=thumb_size>
             {thumb}
             {tip}
         </div>
     };
     let root = view! {
-        <div relative flex items_center h=THUMB min_w=40.0 rounded=Radius::Full border=BORDER
+        <div relative flex items_center h=height min_w=40.0 rounded=Radius::Full border=BORDER
              border_color=Color::TRANSPARENT/>
     };
     focus_ring(root)

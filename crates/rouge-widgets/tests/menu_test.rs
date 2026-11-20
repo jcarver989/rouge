@@ -1,10 +1,10 @@
 mod common;
 
-use common::builder;
+use common::{builder, handheld_test};
 use rouge_core::testing::TestResult;
 use rouge_core::{
-    Chord, Div, EditAction, InputKind, Key, Menu, MenuItem, Modifiers, Point, PointerButton,
-    Styled, Theme, WindowCommand, div, editable, focus_handle, view,
+    Chord, Div, EditAction, Key, Menu, MenuItem, Modifiers, Point, PointerButton, Styled, Theme,
+    TouchPhase, WindowCommand, div, editable, focus_handle, view,
 };
 use rouge_reactive::{Runtime, signal};
 use rouge_theme::UiPalette;
@@ -330,17 +330,14 @@ fn group_labels_are_skipped_by_the_keyboard_and_shortcuts_sit_in_a_key_cap() -> 
 fn select_lists_its_options_in_a_sheet_on_a_handheld() -> TestResult {
     let _entered = Runtime::new().enter();
     let value = signal(1u32);
-    let mut ui = component_test()
-        .size(390.0, 700.0)
-        .input(InputKind::Touch)
-        .build(move || {
-            let options = [(1, "One".to_owned()), (2, "Two".to_owned())];
-            view! {
-                <div size_full p=10.0>
-                    <select value=value options=options w=140.0/>
-                </div>
-            }
-        });
+    let mut ui = handheld_test().build(move || {
+        let options = [(1, "One".to_owned()), (2, "Two".to_owned())];
+        view! {
+            <div size_full p=10.0>
+                <select value=value options=options w=140.0/>
+            </div>
+        }
+    });
     ui.tap(Point::new(30.0, 22.0));
     ui.run(2.0);
     let row = ui.rect_of("menu-item-Two")?;
@@ -357,6 +354,62 @@ fn select_lists_its_options_in_a_sheet_on_a_handheld() -> TestResult {
         None,
         "choosing closes the sheet"
     );
+    Ok(())
+}
+
+#[test]
+fn on_touch_a_long_press_opens_the_context_menu_and_a_tap_or_a_pan_does_not() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (opened, flagged) = (signal(0), signal(false));
+    let mut ui = handheld_test()
+        .build(move || {
+            let items = [MenuItem::callback("Flag", move || flagged.set(true))];
+            view! {
+                <div size_full>
+                    <context_menu items>
+                        <div test_id="row" h=60.0 on_click={move |_| opened.update(|count| *count += 1)}/>
+                    </context_menu>
+                </div>
+            }
+        });
+    let at = Point::new(100.0, 30.0);
+    ui.tap(at);
+    ui.run(1.0);
+    assert_eq!(opened.get(), 1, "a tap is still a tap");
+    assert_eq!(ui.bounds_of("menu-item-Flag"), None);
+    ui.touch(TouchPhase::Start, at);
+    ui.run(0.3);
+    ui.touch(TouchPhase::Move, Point::new(100.0, 80.0));
+    ui.run(1.0);
+    ui.touch(TouchPhase::End, Point::new(100.0, 80.0));
+    ui.run(0.5);
+    assert_eq!(
+        ui.bounds_of("menu-item-Flag"),
+        None,
+        "a pan is not a long press"
+    );
+    ui.touch(TouchPhase::Start, at);
+    ui.run(0.3);
+    assert_eq!(ui.bounds_of("menu-item-Flag"), None, "not yet");
+    ui.run(1.5);
+    let row = ui.rect_of("menu-item-Flag")?;
+    assert!(
+        row.max().y > 600.0,
+        "it opens as a sheet on a handheld: {row:?}"
+    );
+    ui.touch(TouchPhase::End, at);
+    ui.run(0.5);
+    assert_eq!(
+        opened.get(),
+        1,
+        "lifting the finger does not also tap the row"
+    );
+    assert!(
+        ui.bounds_of("menu-item-Flag").is_some(),
+        "or close the menu"
+    );
+    ui.tap_on("menu-item-Flag")?;
+    assert!(flagged.get());
     Ok(())
 }
 

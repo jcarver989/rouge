@@ -4,9 +4,9 @@ use crate::kbd::kbd;
 use crate::material::{Material, MaterialExt};
 use crate::popover::{Placement, popup};
 use crate::roving::RovingFocus;
-use crate::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, MENU_WIDTH, Radius, Space};
+use crate::tokens::{ICON_SIZE_SMALL, MENU_WIDTH, Radius, Space};
 use crate::typography::UiStyles;
-use crate::util::focus_ring;
+use crate::util::{field_height, focus_ring, is_touch, long_press};
 use rouge_core::Role;
 use rouge_core::{
     BuildCx, DelegateStyle, Div, Key, Menu, Point, PointerButton, Rect, Styled, View, component,
@@ -241,13 +241,18 @@ impl View for ContextMenu {
                     }
                 })
         } else {
-            self.root.on_pointer_down(move |event| {
+            let root = self.root.on_pointer_down(move |event| {
+                at.set(event.position);
                 if event.button == PointerButton::Secondary {
-                    at.set(event.position);
                     open.set(true);
                     event.stop_propagation();
                 }
-            })
+            });
+            if is_touch() {
+                long_press(root, move || open.set(true))
+            } else {
+                root
+            }
         };
         root.child(popup(open, |layer| layer, place, body))
             .build(cx);
@@ -284,7 +289,7 @@ pub fn select<T: Clone + PartialEq + 'static>(
         .flex()
         .items_center()
         .px(Space::X3)
-        .h(GROUP_HEIGHT)
+        .h(field_height())
         .min_w(120.0)
         .border(1.0)
         .border_color(Role::Border)

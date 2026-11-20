@@ -1,6 +1,8 @@
-use crate::tokens::{Pace, Radius, Space};
+use crate::tokens::{
+    CHECKBOX_SIZE, CHECKBOX_SIZE_LARGE, CONTROL_HEIGHT_LARGE, Pace, Radius, Space,
+};
 use crate::typography::UiStyles;
-use crate::util::{TestId, chrome, fade_when_disabled, focus_ring};
+use crate::util::{TestId, by_touch, chrome, fade_when_disabled, focus_ring, hit_box};
 use rouge_core::Role;
 use rouge_core::{
     Apply, BuildCx, Color, DelegateStyle, Div, IntoProp, LayoutTransition, Prop, StyleDelta,
@@ -39,27 +41,26 @@ impl View for Toggle {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (checked, disabled) = (self.checked, Rc::new(self.disabled));
         let pressed = signal(false);
-        let width = move || THUMB + if pressed.get() { STRETCH } else { 0.0 };
+        let (track_width, thumb) = by_touch(TOUCH, POINTER);
+        let (track_height, reach) = (thumb + 4.0, track_width - 4.0);
+        let width = move || thumb + if pressed.get() { STRETCH } else { 0.0 };
         let travel = move || {
-            if checked.get() {
-                TRAVEL + THUMB - width()
-            } else {
-                0.0
-            }
+            if checked.get() { reach - width() } else { 0.0 }
         };
         let thumb_id = self.test_id.part("thumb");
         let track = view! {
-            <div flex_none w=36.0 h=20.0 rounded=Radius::Full border=1.0 border_color=Color::TRANSPARENT
-                 bg=Role::SurfaceSelected on_press={move |down| pressed.set(down)}>
-                <div test_id?=thumb_id w=width h=THUMB m=1.0 rounded=Radius::Full bg=Color::WHITE
+            <div flex_none w=track_width h=track_height rounded=Radius::Full border=1.0 border_color=Color::TRANSPARENT
+                 bg=Role::SurfaceSelected>
+                <div test_id?=thumb_id w=width h=thumb m=1.0 rounded=Radius::Full bg=Color::WHITE
                      translate_x=travel transition=Pace::Move
                      layout_transition={LayoutTransition::new(Pace::Press).size()}/>
             </div>
         }
         .checked(|style| style.bg(Role::Accent))
         .is_checked(checked);
-        let track = fade_when_disabled(focus_ring(track), &disabled)
+        let track = fade_when_disabled(focus_ring(hit_box(track)), &disabled)
             .enabled(move || !disabled.get())
+            .on_press(move |down| pressed.set(down))
             .on_activate(move || checked.toggle())
             .layer()
             .transition(Pace::Press);
@@ -69,9 +70,9 @@ impl View for Toggle {
     }
 }
 
-const THUMB: f32 = 16.0;
+const POINTER: (f32, f32) = (36.0, 16.0);
+const TOUCH: (f32, f32) = (52.0, 28.0);
 const STRETCH: f32 = 4.0;
-const TRAVEL: f32 = 16.0;
 
 pub struct Radio<T> {
     selected: Signal<T>,
@@ -121,11 +122,15 @@ impl<T: Clone + PartialEq + 'static> View for Radio<T> {
         } = self;
         let chosen = value.clone();
         let on = move || selected.with(|current| *current == value);
+        let (ring, mark, height) = by_touch(
+            (CHECKBOX_SIZE_LARGE, 12.0, CONTROL_HEIGHT_LARGE),
+            (CHECKBOX_SIZE, 8.0, 24.0),
+        );
         let dot = view! {
-            <div flex items_center justify_center flex_none size=16.0 rounded=Radius::Full border=1.0
+            <div flex items_center justify_center flex_none size=ring rounded=Radius::Full border=1.0
                  bg=Role::Elevated border_color=Role::Border
                  checked={|style| style.bg(Role::Accent).border_color(Role::Accent)} is_checked=on.clone()>
-                <div size=8.0 rounded=Radius::Full bg=Role::AccentForeground
+                <div size=mark rounded=Radius::Full bg=Role::AccentForeground
                      scale={{
                          let on = on.clone();
                          move || if on() { 1.0 } else { 0.0 }
@@ -134,7 +139,7 @@ impl<T: Clone + PartialEq + 'static> View for Radio<T> {
             </div>
         };
         let root = view! {
-            <div flex items_center flex_none h=24.0 gap=Space::X2 rounded=Radius::Control border=1.0 border_color=Color::TRANSPARENT>
+            <div flex items_center flex_none h=height gap=Space::X2 rounded=Radius::Control border=1.0 border_color=Color::TRANSPARENT>
                 {dot}
                 {label.map(|label| view! { <text body primary>{label}</text> })}
             </div>

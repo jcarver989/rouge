@@ -1,9 +1,9 @@
 mod common;
 
-use common::builder;
+use common::{builder, handheld_test};
 use rouge_core::testing::{TestResult, TestUi, counter};
 use rouge_core::view;
-use rouge_core::{Color, InputKind, IntoChord, Point, Rect, Role, Size, Styled, Theme, div, show};
+use rouge_core::{Color, IntoChord, Point, Rect, Role, Size, Styled, Theme, div, show};
 use rouge_reactive::{Runtime, signal};
 use rouge_theme::UiPalette;
 use rouge_widgets::testing::component_test;
@@ -344,19 +344,16 @@ fn tooltip_unmounted_while_pending_never_opens() {
 fn a_popover_is_a_bottom_sheet_on_a_handheld() -> TestResult {
     let _entered = Runtime::new().enter();
     let open = signal(false);
-    let mut ui = component_test()
-        .size(390.0, 700.0)
-        .input(InputKind::Touch)
-        .build(move || {
-            let trigger = view! { <div test_id="trigger" size=40.0/> };
-            view! {
-                <div size_full p=20.0>
-                    <popover open=open trigger=trigger>
-                        <div test_id="panel" h=200.0/>
-                    </popover>
-                </div>
-            }
-        });
+    let mut ui = handheld_test().build(move || {
+        let trigger = view! { <div test_id="trigger" size=40.0/> };
+        view! {
+            <div size_full p=20.0>
+                <popover open=open trigger=trigger>
+                    <div test_id="panel" h=200.0/>
+                </popover>
+            </div>
+        }
+    });
     ui.tap_on("trigger")?;
     assert!(open.get());
     ui.run(2.0);
