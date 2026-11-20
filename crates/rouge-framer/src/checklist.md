@@ -5,6 +5,6 @@
 3. Follow the platform setup below. Add secrets to the listed environments under **Settings → Environments**. Restrict publishing environments to the default branch.
 4. Run the workflow with `channel` set to `preview` or `production`. Use `target` to build only one platform, or select `all` for every enabled platform. Find the download or store link in the run summary.
 
-Bump the Cargo package version for each production desktop release. For iOS, use a version like `1.2.3` with no suffix. Mobile builds use the workflow run number by default. Set `build_number` if the store needs a higher number.
+Bump the Cargo package version for each production desktop release. When publishing a desktop build locally, run `build` and `publish` with the same target, channel, build number, and Git commit. A `check` package cannot be published. For iOS, use a version like `1.2.3` with no suffix. Mobile builds use the workflow run number by default. Set `build_number` if the store needs a higher number.
 
 Run `cargo rouge doctor <target>` to check your local setup. Set `ROUGE_CHANNEL=preview` to also check for release credentials. After editing `.framer/src/main.rs`, run `cargo framer` to update the generated files.

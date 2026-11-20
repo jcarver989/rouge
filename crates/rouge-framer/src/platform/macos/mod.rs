@@ -7,7 +7,7 @@ use crate::workflow::{self, Ci, PUBLISHING, ci_options};
 use crate::{RougePublish, Target};
 use framer::github::Job;
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use xshell::cmd;
 
 const TRIPLE: &str = "aarch64-apple-darwin";
@@ -105,15 +105,18 @@ impl Platform for Macos {
         if let Some(tool) = &signer {
             self.sign_bundle(build, scratch.path(), tool, &bundle)?;
         }
-        let image = create_disk_image(build, &bundle)?;
+        let package = package_name(build);
+        let image = build.out.join(&package);
+        create_disk_image(build, &bundle, &image)?;
         if let Some(tool) = &signer {
             sign_and_notarize_image(build, scratch.path(), tool, &image)?;
+            desktop::record(build, &package)?;
         }
         Ok(())
     }
 
     fn publish(&self, build: &Build) -> Result<()> {
-        desktop::publish(build)
+        desktop::publish(build, &package_name(build))
     }
 }
 
@@ -216,16 +219,17 @@ fn compile_icon(build: &Build, scratch: &Path, contents: &Path, source: &Path) -
     Ok(())
 }
 
-fn create_disk_image(build: &Build, bundle: &Path) -> Result<PathBuf> {
+fn package_name(build: &Build) -> String {
+    format!("{}-{}-macos-arm64.dmg", build.app.target, build.app.version)
+}
+
+fn create_disk_image(build: &Build, bundle: &Path, image: &Path) -> Result<()> {
     let (sh, app) = (&build.sh, &build.app);
     let binary = &app.target;
-    let image = build
-        .out
-        .join(format!("{binary}-{}-macos-arm64.dmg", app.version));
     cmd!(
         sh,
         "hdiutil create -srcfolder {bundle} -volname {binary} -format UDZO {image}"
     )
     .run()?;
-    Ok(image)
+    Ok(())
 }

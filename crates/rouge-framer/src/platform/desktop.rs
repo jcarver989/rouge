@@ -3,6 +3,7 @@ use crate::packager::Build;
 use crate::workflow::{self, Ci, PUBLISHING};
 use crate::{Channel, Target};
 use framer::github::{Job, Step};
+use serde_json::json;
 use std::env;
 use xshell::cmd;
 
@@ -32,7 +33,29 @@ pub(crate) fn job(
         )
 }
 
-pub(crate) fn publish(build: &Build) -> Result<()> {
+const RECEIPT: &str = ".release.json";
+
+fn receipt(build: &Build, head: &str, checksum: &str) -> String {
+    json!({
+        "channel": build.channel.to_string(),
+        "commit": head,
+        "package": build.app.package,
+        "version": build.app.version.to_string(),
+        "build_number": build.number,
+        "sha256sum": checksum,
+    })
+    .to_string()
+}
+
+pub(crate) fn record(build: &Build, package: &str) -> Result<()> {
+    let sh = &build.sh;
+    let head = cmd!(sh, "git rev-parse HEAD").read()?;
+    let _out = sh.push_dir(&build.out);
+    let checksum = cmd!(sh, "shasum -a 256 -- {package}").read()?;
+    Ok(sh.write_file(RECEIPT, receipt(build, &head, &checksum))?)
+}
+
+pub(crate) fn publish(build: &Build, package: &str) -> Result<()> {
     let (sh, platform) = (&build.sh, build.target);
     let mut flags = Vec::new();
     let tag = if build.channel == Channel::Preview {
@@ -47,22 +70,22 @@ pub(crate) fn publish(build: &Build) -> Result<()> {
     };
     let head = cmd!(sh, "git rev-parse HEAD").read()?;
     let _out = sh.push_dir(&build.out);
-    sh.remove_path("SHA256SUMS")?;
-    let packages: Vec<_> = sh
-        .read_dir(".")?
-        .into_iter()
-        .filter_map(|package| package.file_name().map(ToOwned::to_owned))
-        .collect();
-    ensure(
-        !packages.is_empty(),
-        format!("No packages to publish; run build {platform} first"),
-    )?;
-    let packages = &packages;
-    let checksums = cmd!(sh, "shasum -a 256 -- {packages...}").read()?;
-    sh.write_file("SHA256SUMS", format!("{checksums}\n"))?;
+    let rebuild = || {
+        format!(
+            "Run cargo rouge build {platform} --channel {} for this release before publishing",
+            build.channel
+        )
+    };
+    let Ok(recorded) = sh.read_file(RECEIPT) else {
+        return invalid(rebuild());
+    };
+    ensure(sh.path_exists(package), rebuild())?;
+    let checksum = cmd!(sh, "shasum -a 256 -- {package}").read()?;
+    ensure(recorded == receipt(build, &head, &checksum), rebuild())?;
+    sh.write_file("SHA256SUMS", format!("{checksum}\n"))?;
     let link = cmd!(
         sh,
-        "gh release create {tag} --title {tag} --generate-notes --target {head} {flags...} -- {packages...} SHA256SUMS"
+        "gh release create {tag} --title {tag} --generate-notes --target {head} {flags...} -- {package} SHA256SUMS"
     )
     .read()?;
     build.summarize(&format!("[Download the {platform} app]({link})"))

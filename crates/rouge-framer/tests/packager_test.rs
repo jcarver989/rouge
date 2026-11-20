@@ -1,6 +1,8 @@
 #![cfg(unix)]
 
-use rouge_framer::{Action, Channel, Packager, RougePublish, Target, TestFlight};
+use rouge_framer::{
+    Action, Channel, GitHubReleases, Packager, PublishError, RougePublish, Target, TestFlight,
+};
 use std::env;
 use std::error::Error;
 use std::fs::{self, Permissions};
@@ -10,6 +12,68 @@ use tempfile::tempdir;
 use xshell::{Shell, cmd};
 
 type Result = std::result::Result<(), Box<dyn Error>>;
+
+#[test]
+fn desktop_publishes_only_the_recorded_release() -> Result {
+    in_app("desktop_publishes_only_the_recorded_release", |sh| {
+        let packager = Packager::new(RougePublish::new(APP_ID).desktop(GitHubReleases), ".");
+        let release = packager.clone().channel(Channel::Production);
+        cmd!(sh, "git init --quiet").run()?;
+        commit(sh)?;
+        tool(
+            sh,
+            "gh",
+            "printf '%s\\n' \"$@\" > \"$ROUGE_TEST_APP/upload\"",
+        )?;
+        sh.write_file(
+            ".rouge/out/macos/app-1.0.0-macos-arm64.dmg",
+            "unsigned check artifact",
+        )?;
+        assert!(matches!(
+            release.run(Action::Publish, Target::Macos),
+            Err(PublishError::Invalid(_))
+        ));
+
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            let target = Target::Linux;
+            let archive = ".rouge/out/linux/app-1.0.0-linux-x86_64.tar.gz";
+            packager.run(Action::Build, target)?;
+            assert!(matches!(
+                release.run(Action::Publish, target),
+                Err(PublishError::Invalid(_))
+            ));
+            let preview = packager.channel(Channel::Preview);
+            preview.run(Action::Build, target)?;
+            assert!(matches!(
+                release.run(Action::Publish, target),
+                Err(PublishError::Invalid(_))
+            ));
+            release.run(Action::Build, target)?;
+            sh.write_file(".rouge/out/linux/unrelated.txt", "not a release asset")?;
+            release.run(Action::Publish, target)?;
+            let uploaded = sh.read_file("upload")?;
+            assert!(uploaded.ends_with("--\napp-1.0.0-linux-x86_64.tar.gz\nSHA256SUMS\n"));
+            sh.remove_path("upload")?;
+            fs::OpenOptions::new()
+                .append(true)
+                .open(archive)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, b"modified"))?;
+            assert!(matches!(
+                release.run(Action::Publish, target),
+                Err(PublishError::Invalid(_))
+            ));
+            release.run(Action::Build, target)?;
+            commit(sh)?;
+            assert!(matches!(
+                release.run(Action::Publish, target),
+                Err(PublishError::Invalid(_))
+            ));
+        }
+        assert!(!sh.path_exists("upload"));
+        Ok(())
+    })
+}
 
 #[test]
 fn signing_tools_install_without_credentials_and_use_private_key_files() -> Result {
@@ -88,6 +152,11 @@ fn in_app(test: &str, run: impl FnOnce(&Shell) -> Result) -> Result {
         .env("ANDROID_UPLOAD_STORE_PASSWORD", "test")
         .env("GH_TOKEN", "test")
         .run()?;
+    Ok(())
+}
+
+fn commit(sh: &Shell) -> Result {
+    cmd!(sh, "git -c user.name=Test -c user.email=test@example.com commit --quiet --allow-empty -m fixture").run()?;
     Ok(())
 }
 

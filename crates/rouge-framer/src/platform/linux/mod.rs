@@ -89,17 +89,24 @@ impl Platform for Linux {
 
     fn build(&self, build: &Build) -> Result<()> {
         self.doctor(build)?;
-        let app = &build.app;
-        let stem = format!("{}-{}-linux-x86_64", app.target, app.version);
+        let stem = archive_stem(build);
         let staging = build.out.join(&stem);
 
         stage_release(build, &staging)?;
-        archive_release(build, &stem, &staging)
+        archive_release(build, &stem, &staging)?;
+        if build.publishing() {
+            desktop::record(build, &format!("{stem}.tar.gz"))?;
+        }
+        Ok(())
     }
 
     fn publish(&self, build: &Build) -> Result<()> {
-        desktop::publish(build)
+        desktop::publish(build, &format!("{}.tar.gz", archive_stem(build)))
     }
+}
+
+fn archive_stem(build: &Build) -> String {
+    format!("{}-{}-linux-x86_64", build.app.target, build.app.version)
 }
 
 fn stage_release(build: &Build, staging: &Path) -> Result<()> {
