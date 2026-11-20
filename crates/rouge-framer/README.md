@@ -33,10 +33,10 @@ Run `cargo framer` from the repository root and commit the generated files. Foll
 | `.web(GitHubPages)` | GitHub Pages |
 | `.linux(GitHubReleases)` | GitHub Releases (x86-64 Linux) |
 | `.macos(GitHubReleases)` | GitHub Releases (Apple Silicon) |
-| `.ios(TestFlight::new("1234567890"))` | TestFlight and the App Store. Use your app's numeric Apple ID from App Store Connect. |
+| `.ios(TestFlight::new("1234567890"))` | `TestFlight` and the App Store. Use your app's numeric Apple ID from App Store Connect. |
 | `.android(PlayInternal)` | Google Play internal testing and production |
 
-Use `.desktop(GitHubReleases)` to enable both Linux and macOS. For iOS, set `.icon("assets/app-icon.png")` to an opaque 1024 × 1024 PNG. For Android, provide a `cdylib` that exports Rouge's `android_main` entry point.
+Use `.desktop(GitHubReleases)` to enable both Linux and macOS; each can be selected independently in the workflow. For iOS, set `.icon("assets/app-icon.png")` to an opaque 1024 × 1024 PNG. For Android, provide a `cdylib` that exports Rouge's `android_main` entry point.
 
 If the workspace has more than one default package, select one with `.package(...)`. Use `.binary(...)` or `.android_library(...)` if the selected package has multiple targets of the required kind.
 

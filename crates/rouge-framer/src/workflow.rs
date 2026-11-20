@@ -71,7 +71,7 @@ pub(crate) fn secrets(step: Step, names: &[&str]) -> Step {
 }
 
 pub(crate) fn render(config: &RougePublish) -> String {
-    let mut groups = vec!["all".to_owned()];
+    let mut targets = vec!["all".to_owned()];
     let mut workflow = Workflow::new("rouge-publish", "Publish Rouge app")
         .on(Triggers::new().workflow_dispatch())
         .concurrency("rouge-app-publish", false)
@@ -83,19 +83,17 @@ pub(crate) fn render(config: &RougePublish) -> String {
         .permission("contents", "read");
     for platform in config.platforms() {
         workflow = workflow.job(platform.job(config));
-        if !groups.contains(&platform.group()) {
-            groups.push(platform.group());
-        }
+        targets.push(platform.target().to_string());
     }
     let mut document = workflow.to_yaml();
     if let Some(dispatch) = child(&mut document, "on").and_then(|on| child(on, "workflow_dispatch"))
     {
-        *dispatch = Yaml::map().with("inputs", inputs(groups));
+        *dispatch = Yaml::map().with("inputs", inputs(targets));
     }
     for platform in config.platforms() {
         let run_if = format!(
             "${{{{ github.ref == format('refs/heads/{{0}}', github.event.repository.default_branch) && (inputs.target == 'all' || inputs.target == '{}') }}}}",
-            platform.group()
+            platform.target()
         );
         let job = child(&mut document, "jobs")
             .and_then(|jobs| child(jobs, &platform.target().to_string()));
@@ -124,7 +122,7 @@ pub(crate) fn checklist(config: &RougePublish) -> String {
     doc
 }
 
-fn inputs(groups: Vec<String>) -> Yaml {
+fn inputs(targets: Vec<String>) -> Yaml {
     let choice = |description: &str, options: Yaml, default: &str| {
         Yaml::map()
             .with("description", description)
@@ -141,7 +139,7 @@ fn inputs(groups: Vec<String>) -> Yaml {
                 "check",
             ),
         )
-        .with("target", choice("Target to run", groups.into(), "all"))
+        .with("target", choice("Target to run", targets.into(), "all"))
         .with(
             "build_number",
             Yaml::map()

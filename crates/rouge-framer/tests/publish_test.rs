@@ -41,7 +41,7 @@ fn only_generates_enabled_targets() -> Result<(), Box<dyn std::error::Error>> {
 fn renders_a_full_default_branch_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let fs = render_preset(all_targets())?;
     let workflow = fs.get(WORKFLOW).ok_or_else(|| missing(WORKFLOW))?;
-    assert!(workflow.contains("options: [all, web, desktop, ios, android]"));
+    assert!(workflow.contains("options: [all, web, linux, macos, ios, android]"));
     assert!(!workflow.contains("@@"));
     assert!(!workflow.contains("pull_request"));
     assert_eq!(
@@ -55,6 +55,7 @@ fn renders_a_full_default_branch_workflow() -> Result<(), Box<dyn std::error::Er
     assert!(workflow.contains("packageName: com.example.app"));
     for target in ["web", "linux", "macos", "ios", "android"] {
         assert!(workflow.contains(&format!("run: cargo rouge build {target}")));
+        assert!(workflow.contains(&format!("inputs.target == '{target}'")));
     }
     assert!(!workflow.contains("run: |"));
     if let Some(path) = std::env::var_os("ROUGE_TEST_WORKFLOW") {

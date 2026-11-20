@@ -42,10 +42,6 @@ impl Platform for Linux {
         Target::Linux
     }
 
-    fn group(&self) -> String {
-        "desktop".into()
-    }
-
     fn job(&self, _config: &RougePublish) -> Job {
         let install = format!(
             "sudo apt-get update && sudo apt-get install -y {}",

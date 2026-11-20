@@ -55,10 +55,6 @@ impl Platform for Macos {
         Target::Macos
     }
 
-    fn group(&self) -> String {
-        "desktop".into()
-    }
-
     fn job(&self, _config: &RougePublish) -> Job {
         desktop::job(self.target(), &self.ci, "macos-26", None, APPLE)
     }

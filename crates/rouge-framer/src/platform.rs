@@ -22,10 +22,6 @@ pub use web::{GitHubPages, Web};
 pub(crate) trait Platform {
     fn target(&self) -> Target;
 
-    fn group(&self) -> String {
-        self.target().to_string()
-    }
-
     fn job(&self, config: &RougePublish) -> Job;
 
     fn environment(&self) -> Yaml {
