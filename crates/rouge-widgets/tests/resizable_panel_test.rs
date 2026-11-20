@@ -1,9 +1,10 @@
 mod common;
 
-use common::{builder, line_widths};
+use common::{builder, handheld_test, line_widths};
 use rouge_core::testing::{BLACK, GREEN, RED, TestError, TestResult, TestUi, WHITE};
 use rouge_core::{Color, Palette, Point, PointerButton, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
+use rouge_widgets::testing::component_test;
 use rouge_widgets::{ResizablePanel, Side, resizable_panel};
 
 #[test]
@@ -121,6 +122,83 @@ fn the_resting_divider_is_whole_device_pixels_at_any_panel_size() -> TestResult 
         widths.extend(line_widths((0..img.width).map(|x| img.pixel(x, 90)), RED));
     }
     assert_eq!(widths, vec![2; 4]);
+    Ok(())
+}
+
+#[test]
+fn an_open_signal_collapses_the_panel_with_a_pointer() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (size, open) = (signal(200.0), signal(true));
+    let mut ui = component_test().size(800.0, 400.0).build(move || {
+        div().flex().size_full().child(
+            resizable_panel(Side::Left, size)
+                .open(open)
+                .test_id("sidebar")
+                .child(div().size_full()),
+        )
+    });
+    assert_eq!(ui.rect_of("sidebar")?.size.width, 200.0);
+    assert_eq!(ui.bounds_of("drawer"), None, "beside the page, not over it");
+    open.set(false);
+    ui.run(0.5);
+    assert_eq!(ui.rect_of("sidebar")?.size.width, 0.0);
+    Ok(())
+}
+
+#[test]
+fn on_a_handheld_an_open_side_panel_is_a_drawer_closed_by_a_press_outside_or_a_drag() -> TestResult
+{
+    let _entered = Runtime::new().enter();
+    let (size, open, mounts) = (signal(280.0), signal(false), signal(0));
+    let mut ui = handheld_test().build(move || {
+        mounts.update(|count| *count += 1);
+        div().flex().size_full().child(
+            resizable_panel(Side::Left, size)
+                .open(open)
+                .child(div().test_id("menu").size_full()),
+        )
+    });
+    ui.run(0.5);
+    assert!(
+        ui.rect_of("drawer")?.max().x <= 0.0,
+        "closed, it waits off the leading edge"
+    );
+    assert_eq!(ui.bounds_of("drawer-scrim"), None);
+    open.set(true);
+    ui.run(1.0);
+    let drawer = ui.rect_of("drawer")?;
+    assert_eq!(
+        (
+            drawer.origin.x,
+            drawer.origin.y,
+            drawer.size.width,
+            drawer.max().y
+        ),
+        (8.0, 8.0, 280.0, 692.0),
+        "a floating panel as wide as the panel's size"
+    );
+    assert!(ui.bounds_of("menu").is_some() && ui.bounds_of("drawer-scrim").is_some());
+    ui.tap(Point::new(360.0, 300.0));
+    assert!(!open.get(), "a press on the scrim closes it");
+    ui.run(1.0);
+    assert!(ui.rect_of("drawer")?.max().x <= 0.0);
+    open.set(true);
+    ui.run(1.0);
+    ui.swipe_over(Point::new(200.0, 300.0), Point::new(180.0, 300.0), 0.3);
+    ui.run(1.0);
+    assert!(open.get(), "a short drag springs back");
+    assert_eq!(ui.rect_of("drawer")?.origin.x, 8.0);
+    ui.swipe_over(Point::new(200.0, 300.0), Point::new(20.0, 300.0), 0.3);
+    assert!(!open.get(), "a drag towards its edge closes it");
+    size.set(1000.0);
+    open.set(true);
+    ui.run(1.0);
+    assert_eq!(
+        ui.rect_of("drawer")?.size.width,
+        390.0 - 56.0,
+        "it always leaves some of the page in reach"
+    );
+    assert_eq!(mounts.get(), 1, "its content is built once");
     Ok(())
 }
 

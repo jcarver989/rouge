@@ -1,10 +1,15 @@
 use crate::components::{IconButton, icon_button};
 use crate::icon::IconName;
+use crate::material::{Material, MaterialExt};
+use crate::popover::{FADED, dismiss_layer};
+use crate::snap::dragged;
+use crate::tokens::{Pace, Space};
 use rouge_core::Role;
 use rouge_core::component;
 use rouge_core::{
-    BuildCx, Cursor, DelegateStyle, Div, DragPhase, Fill, IntoProp, Length, Prop, Styled, Theme,
-    View, div,
+    BuildCx, Cursor, DelegateStyle, Div, DragAxis, DragPhase, Fill, IntoProp, Key, Length,
+    MotionProp, PointerEvent, Prop, Styled, Theme, View, div, motion, overlay, presentation,
+    safe_area, show, view, window_size,
 };
 use rouge_reactive::{Memo, Signal, effect, memo, signal};
 use std::cell::Cell;
@@ -30,6 +35,7 @@ pub struct ResizablePanel {
     min: f32,
     max: f32,
     reset: f32,
+    open: Option<Signal<bool>>,
     divider_color: Option<Prop<Fill>>,
     on_reset: Option<Rc<dyn Fn()>>,
     on_resize: Option<Rc<dyn Fn(f32)>>,
@@ -44,6 +50,7 @@ pub fn resizable_panel(edge: Side, size: Signal<f32>) -> ResizablePanel {
         min: 0.0,
         max: f32::MAX,
         reset: size.get_untracked(),
+        open: None,
         divider_color: None,
         on_reset: None,
         on_resize: None,
@@ -55,26 +62,32 @@ impl ResizablePanel {
         self.min = size.max(0.0);
         self
     }
+
     pub fn max_size(mut self, size: f32) -> Self {
         self.max = size.max(0.0);
         self
     }
+
     pub fn reset_size(mut self, size: f32) -> Self {
         self.reset = size;
         self
     }
+
     pub fn divider_color<T>(mut self, color: impl IntoProp<Fill, T>) -> Self {
         self.divider_color = Some(color.into_prop());
         self
     }
+
     pub fn on_resize(mut self, f: impl Fn(f32) + 'static) -> Self {
         self.on_resize = Some(Rc::new(f));
         self
     }
+
     pub fn on_reset(mut self, f: impl Fn() + 'static) -> Self {
         self.on_reset = Some(Rc::new(f));
         self
     }
+
     pub fn test_id(mut self, id: impl Into<String>) -> Self {
         self.root = self.root.test_id(id);
         self
@@ -87,6 +100,11 @@ impl ResizablePanel {
 
     pub fn children<T: View>(mut self, children: impl IntoIterator<Item = T>) -> Self {
         self.root = self.root.children(children);
+        self
+    }
+
+    pub fn open(mut self, open: Signal<bool>) -> Self {
+        self.open = Some(open);
         self
     }
 }
@@ -106,10 +124,18 @@ impl View for ResizablePanel {
             min,
             max,
             reset,
+            open,
             divider_color,
             on_reset,
             on_resize,
         } = self;
+        let sideways = matches!(side, Side::Left | Side::Right);
+        if let Some(open) =
+            open.filter(|_| sideways && presentation().get_untracked().is_handheld())
+        {
+            return drawer(root, side, size, open, cx);
+        }
+        let shown = move || open.is_none_or(|open| open.get());
         let max = max.max(min);
         effect(move || {
             size.set_if_changed(size.get().clamp(min, max));
@@ -158,15 +184,18 @@ impl View for ResizablePanel {
                 };
                 set(origin.get() + delta);
             });
-        let cursor = match side {
-            Side::Left | Side::Right => {
-                root = root.w(size);
-                Cursor::ResizeHorizontal
-            }
-            Side::Top | Side::Bottom => {
-                root = root.h(size);
-                Cursor::ResizeVertical
-            }
+        let extent = move || if shown() { size.get() } else { 0.0 };
+        if open.is_some() {
+            root = root
+                .overflow_hidden()
+                .when(move || !shown(), Styled::invisible);
+        }
+        let cursor = if sideways {
+            root = root.w(extent);
+            Cursor::ResizeHorizontal
+        } else {
+            root = root.h(extent);
+            Cursor::ResizeVertical
         };
         let handle = thickness(pin_to_edge(handle, side), side, HANDLE_SIZE)
             .cursor(cursor)
@@ -174,6 +203,70 @@ impl View for ResizablePanel {
         root.child(handle).build(cx);
     }
 }
+
+fn drawer(root: Div, edge: Side, extent: Signal<f32>, open: Signal<bool>, cx: &mut BuildCx<'_>) {
+    let (window, safe) = (window_size(), safe_area());
+    let width = move || extent.get().min(window.get().width - DRAWER_PEEK).max(0.0);
+    let away = if edge == Side::Left { -1.0 } else { 1.0 };
+    let closed = move || away * (width() + DRAWER_INSET);
+    let x = motion(if open.get_untracked() { 0.0 } else { closed() });
+    effect(move || {
+        if open.get() {
+            x.animate_to(0.0, Pace::Gesture);
+        } else {
+            x.animate_to(closed(), Pace::Exit);
+        }
+    });
+    let dim = move || match closed() {
+        0.0 => MotionProp::Value(0.0),
+        closed => MotionProp::Mapped(x.map([closed, 0.0], [0.0, 1.0])),
+    };
+    let scrim = overlay(move || {
+        let layer = move || {
+            dismiss_layer(div(), move || open.set(false)).child(view! {
+                <div test_id="drawer-scrim" absolute inset=0.0 pass_through bg=Role::Scrim opacity=dim/>
+            })
+        };
+        view! { <show when={move || open.get()} children=layer exit=(FADED, Pace::Exit)/> }
+    });
+    let panel = view! {
+        <div test_id="drawer" absolute top={move || DRAWER_INSET + safe.get().top}
+             bottom={move || DRAWER_INSET + safe.get().bottom} w=width flex col p=Space::X1 overflow_hidden
+             material=Material::Glass translate_x=x on_pointer_down=PointerEvent::stop_propagation
+             on_key_down={move |event| {
+                 if event.key == Key::Escape {
+                     open.set(false);
+                     event.stop_propagation();
+                 }
+             }}>
+            {root.w_full().flex_1().min_h(0.0)}
+        </div>
+    };
+    let panel = dragged(
+        panel,
+        DragAxis::Horizontal,
+        x,
+        move || (closed().min(0.0), closed().max(0.0)),
+        move |projected, _| {
+            if projected * away > width() / 2.0 {
+                open.set(false);
+                None
+            } else {
+                Some(0.0)
+            }
+        },
+    );
+    let panel = if edge == Side::Left {
+        panel.left(DRAWER_INSET)
+    } else {
+        panel.right(DRAWER_INSET)
+    };
+    scrim.build(cx);
+    overlay(move || panel).build(cx);
+}
+
+const DRAWER_INSET: f32 = 8.0;
+const DRAWER_PEEK: f32 = 56.0;
 
 #[component]
 pub fn panel_toggle(side: Side, open: Signal<bool>, name: &str) -> IconButton {

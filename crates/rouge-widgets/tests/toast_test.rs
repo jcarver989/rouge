@@ -1,9 +1,12 @@
+mod common;
+
+use common::handheld_test;
 use rouge_core::testing::TestResult;
 use rouge_core::view;
-use rouge_core::{Point, Styled, div};
+use rouge_core::{Edges, Point, Styled, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
-use rouge_widgets::{NoticeTone, Toasts, button, toast};
+use rouge_widgets::{NoticeTone, Toasts, button, tabs, toast};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -87,5 +90,75 @@ fn a_toast_action_runs_and_dismisses_it() -> TestResult {
     ui.click_on("toast-0-action")?;
     assert!(undone.get());
     assert!(toasts.is_empty());
+    Ok(())
+}
+
+#[test]
+fn on_a_handheld_one_toast_spans_the_window_above_the_tab_bar_and_swipes_away() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let tab = signal(0usize);
+    let (mut ui, toasts) = handheld_test().build_with(move || {
+        let toasts = Toasts::install();
+        let page = view! {
+            <tabs selected=tab test_id="tabs" bar tab=("Inbox", || view! { <div/> }) tab=("You", || view! { <div/> })
+                 size_full/>
+        };
+        (view! { <div size_full>{page}{toasts}</div> }, toasts)
+    });
+    ui.run(1.0);
+    toasts.show(toast("Archived").duration(Duration::from_secs(30)));
+    toasts.show(toast("Moved").duration(Duration::from_secs(30)));
+    ui.run(1.0);
+    let (bar, newest) = (ui.rect_of("tabs-bar")?, ui.rect_of("toast-1")?);
+    assert_eq!((newest.origin.x, newest.size.width), (12.0, 366.0));
+    assert_eq!(newest.max().y, bar.origin.y - 8.0, "it clears the bar");
+    assert_eq!(
+        ui.rect_of("toast-0")?.size,
+        newest.size,
+        "the older toast waits behind instead of peeking out"
+    );
+    let at = newest.center();
+    ui.swipe_over(at, Point::new(at.x + 200.0, at.y), 0.2);
+    ui.run(1.0);
+    assert_eq!(toasts.len(), 1, "a sideways swipe dismisses it");
+    assert_eq!(ui.bounds_of("toast-1"), None);
+    let at = ui.rect_of("toast-0")?.center();
+    ui.swipe_over(at, Point::new(at.x + 20.0, at.y), 0.2);
+    ui.run(1.0);
+    assert_eq!(toasts.len(), 1, "a short drag springs back");
+    assert_eq!(ui.rect_of("toast-0")?.center(), at);
+    Ok(())
+}
+
+#[test]
+fn a_banner_drops_from_the_top_safe_area_and_leaves_the_bottom_stack_alone() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, toasts) = handheld_test().build_with(|| {
+        let toasts = Toasts::install();
+        (view! { <div size_full>{toasts}</div> }, toasts)
+    });
+    ui.set_safe_area(Edges {
+        top: 48.0,
+        ..Edges::ZERO
+    });
+    toasts.show(
+        toast("Build failed")
+            .tone(NoticeTone::Error)
+            .banner()
+            .duration(Duration::from_secs(30)),
+    );
+    toasts.show(toast("Saved").duration(Duration::from_secs(30)));
+    ui.run(1.0);
+    let (banner, saved) = (ui.rect_of("toast-0")?, ui.rect_of("toast-1")?);
+    assert_eq!(
+        (banner.origin.x, banner.origin.y, banner.size.width),
+        (12.0, 56.0, 366.0)
+    );
+    assert_eq!(saved.max().y, 700.0 - 8.0);
+    let at = banner.center();
+    ui.swipe_over(at, Point::new(at.x, at.y - 80.0), 0.2);
+    ui.run(1.0);
+    assert_eq!(ui.bounds_of("toast-0"), None, "a banner is pushed back up");
+    assert_eq!(toasts.len(), 1);
     Ok(())
 }
