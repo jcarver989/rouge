@@ -1,11 +1,12 @@
 use crate::material::{Material, MaterialExt};
 use crate::popover::dismiss_layer;
+use crate::snap::dragged;
 use crate::tokens::{Pace, Radius};
 use crate::util::{TestId, focus_ring};
 use rouge_core::view;
 use rouge_core::{
-    AnyView, BuildCx, Color, Cursor, DragAxis, DragPhase, Key, MotionProp, PointerEvent, Role,
-    Size, Styled, Timing, View, component, div, motion, overlay, safe_area, show, window_size,
+    AnyView, BuildCx, Color, Cursor, DragAxis, Key, MotionProp, PointerEvent, Role, Size, Styled,
+    View, component, div, motion, overlay, safe_area, show, window_size,
 };
 use rouge_reactive::{Callback, Signal, effect, signal, spawn};
 use std::rc::Rc;
@@ -89,7 +90,7 @@ impl Presenter {
         let fitted = detents.iter().all(|detent| *detent == Detent::Content);
         let (window, safe) = (window_size(), safe_area());
         let (panel, body) = (signal(Size::ZERO), signal(Size::ZERO));
-        let (y, origin) = (motion(0.0), signal(0.0));
+        let y = motion(0.0);
         let (shown, phase) = (signal(false), signal(Phase::Closed));
         let room = move || (window.get().height - safe.get().top - TOP_GAP).max(0.0);
         let height = {
@@ -149,18 +150,17 @@ impl Presenter {
         });
         let settle = {
             let (full, rest) = (full.clone(), rest.clone());
-            move |velocity: f32| {
-                let projected = y.get() + velocity * PROJECTION;
+            move |projected: f32, _| {
                 let nearest = (0..count)
                     .map(|index| (Some(index), rest(index)))
                     .chain([(None, full())])
                     .min_by(|a, b| (a.1 - projected).abs().total_cmp(&(b.1 - projected).abs()));
-                match nearest {
-                    Some((Some(index), at)) => {
-                        phase.set(Phase::Open(index));
-                        y.fling_to(at, velocity, Timing::from(Pace::Gesture));
-                    }
-                    _ => open.set(false),
+                if let Some((Some(index), at)) = nearest {
+                    phase.set(Phase::Open(index));
+                    Some(at)
+                } else {
+                    open.set(false);
+                    None
                 }
             }
         };
@@ -236,21 +236,14 @@ impl Presenter {
                             <div absolute left=0.0 right=0.0 bottom={-OVERHANG} flex col
                                  pb={move || OVERHANG + safe.get().bottom} max_h={move || room() + OVERHANG} overflow_hidden
                                  material=Material::Glass focus_scope autofocus track_size=panel translate_y=y
-                                 on_pointer_down=PointerEvent::stop_propagation drag_axis=DragAxis::Vertical
-                                 on_drag={move |event| match event.phase {
-                                     DragPhase::Start => origin.set(y.get()),
-                                     DragPhase::Move => {
-                                         let to = origin.get_untracked() + event.translation.y;
-                                         y.set(if to < 0.0 { to * RESISTANCE } else { to });
-                                     }
-                                     DragPhase::End => settle(event.velocity.y),
-                                 }}
-                                 test_id?=test_id.clone()>
+                                 on_pointer_down=PointerEvent::stop_propagation test_id?=test_id.clone()>
                                 {grabber}
                                 {inner}
                             </div>
                         };
                         let surface = if fitted { surface } else { surface.h(sized) };
+                        let surface =
+                            dragged(surface, DragAxis::Vertical, y, || (0.0, f32::INFINITY), settle);
                         dismiss_layer(view! { <div/> }, move || open.set(false))
                             .child(scrim)
                             .child(surface)
@@ -267,5 +260,3 @@ const OVERHANG: f32 = 64.0;
 const HANDLE: f32 = 20.0;
 const GRABBER_WIDTH: f32 = 36.0;
 const GRABBER_HEIGHT: f32 = 4.0;
-const PROJECTION: f32 = 0.2;
-const RESISTANCE: f32 = 0.3;

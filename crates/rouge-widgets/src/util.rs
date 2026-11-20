@@ -1,13 +1,15 @@
 use crate::components::ControlSize;
 use crate::icon::IconName;
-use crate::tokens::{HAIRLINE, Pace, Radius};
+use crate::tokens::{
+    CONTROL_HEIGHT_LARGE, GROUP_HEIGHT, HAIRLINE, Hold, PRESS_SCALE, Pace, Radius,
+};
 use crate::typography::UiStyles;
 use rouge_core::view;
 use rouge_core::{
-    Color, Cursor, Div, Editable, FocusHandle, LayoutTransition, Prop, Rect, Role, Styled, Theme,
-    View, div, dynamic, editable, presentation,
+    Color, Cursor, Div, Editable, Fill, FocusHandle, LayoutTransition, Prop, Rect, Role, Styled,
+    Theme, View, div, dynamic, editable, motion, presentation,
 };
-use rouge_reactive::{Memo, Signal, effect, memo, signal, use_context};
+use rouge_reactive::{Memo, Signal, effect, memo, signal, spawn, use_context};
 use rouge_theme::NoticeTone;
 use std::cell::Cell;
 use std::fmt::Display;
@@ -28,6 +30,54 @@ pub(crate) fn row_height() -> impl Fn() -> f32 + Copy + 'static {
     let presentation = presentation();
     move || ControlSize::of(presentation.get()).metrics().0
 }
+
+pub(crate) fn is_touch() -> bool {
+    presentation().get_untracked().is_touch()
+}
+
+pub(crate) fn pressable(root: Div) -> Div {
+    let pressed = signal(false);
+    root.on_press(move |down| pressed.set(down))
+        .scale(move || if pressed.get() { PRESS_SCALE } else { 1.0 })
+        .transition(Pace::Press)
+}
+
+pub(crate) fn by_touch<T>(touch: T, pointer: T) -> T {
+    if is_touch() { touch } else { pointer }
+}
+
+pub(crate) fn field_height() -> f32 {
+    by_touch(CONTROL_HEIGHT_LARGE, GROUP_HEIGHT)
+}
+
+pub(crate) fn hit_box(glyph: Div) -> Div {
+    if is_touch() {
+        view! {
+            <div flex flex_none items_center justify_center min_w=CONTROL_HEIGHT_LARGE min_h=CONTROL_HEIGHT_LARGE>
+                {glyph}
+            </div>
+        }
+    } else {
+        glyph
+    }
+}
+
+pub(crate) fn long_press(root: Div, action: impl Fn() + 'static) -> Div {
+    let (clock, action) = (motion(0.0), Rc::new(action));
+    root.on_press(move |down| {
+        clock.set(0.0);
+        if down {
+            let (held, action) = (clock.animate_to(1.0, LONG_PRESS), action.clone());
+            spawn(async move {
+                if held.await {
+                    action();
+                }
+            });
+        }
+    })
+}
+
+const LONG_PRESS: Hold = Hold::seconds(0.5);
 
 pub(crate) fn tone_icon(tone: NoticeTone) -> IconName {
     match tone {
@@ -65,6 +115,23 @@ pub(crate) fn entry_frame(root: Div, focus: FocusHandle) -> Div {
 
 pub(crate) fn focus_ring(root: Div) -> Div {
     root.focus_visible(|style| style.border_color(Role::Accent))
+}
+
+pub(crate) fn focus_frame(root: Div) -> Div {
+    let shown = signal(false);
+    let edge = move || {
+        if shown.get() {
+            Fill::Role(Role::Accent)
+        } else {
+            Fill::Color(Color::TRANSPARENT)
+        }
+    };
+    let ring = view! {
+        <div absolute inset=0.0 pass_through rounded=Radius::Control border=HAIRLINE border_color=edge/>
+    };
+    root.on_focus(move |event| shown.set(event.visible))
+        .on_blur(move |_| shown.set(false))
+        .child(ring)
 }
 
 pub(crate) fn follower(

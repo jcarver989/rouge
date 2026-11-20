@@ -18,6 +18,7 @@ use std::time::Duration;
 const GAP: f32 = 4.0;
 
 pub(crate) const POPPED: Pose = Pose::new().opacity(0.0).scale(POP_SCALE);
+pub(crate) const FADED: Pose = Pose::new().opacity(0.0);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Placement {
@@ -89,14 +90,18 @@ pub(crate) fn dismiss_layer(layer: Div, dismiss: impl Fn() + Clone + 'static) ->
         })
 }
 
-fn dismissable(layer: Div, panel: Div, dismiss: impl Fn() + Clone + 'static) -> Div {
+pub(crate) fn dismissable(layer: Div, panel: Div, dismiss: impl Fn() + Clone + 'static) -> Div {
     dismiss_layer(layer, dismiss).child(panel.on_pointer_down(PointerEvent::stop_propagation))
 }
 
-fn floating(open: impl Fn() -> bool + 'static, panel: impl Fn() -> Div + 'static) -> impl View {
+pub(crate) fn floating(
+    open: impl Fn() -> bool + 'static,
+    hidden: Pose,
+    panel: impl Fn() -> Div + 'static,
+) -> impl View {
     overlay(move || {
         view! {
-            <show when=open children=panel enter=(POPPED, Pace::Enter) exit=(POPPED, Pace::Exit)/>
+            <show when=open children=panel enter=(hidden, Pace::Enter) exit=(hidden, Pace::Exit)/>
         }
     })
 }
@@ -121,6 +126,7 @@ pub(crate) fn popup(
                 } else {
                     floating(
                         move || open.get(),
+                        POPPED,
                         move || dismissable(backdrop(view! { <div/> }), place(content()), move || open.set(false)),
                     )
                     .into_any()
@@ -268,6 +274,7 @@ impl View for Tooltip {
         });
         let bubble = floating(
             move || open.get(),
+            POPPED,
             move || {
                 let body = match &content {
                     Some(content) => content(),
@@ -350,7 +357,7 @@ impl View for HoverCard {
             placement,
             material,
         } = self;
-        floating(open, move || {
+        floating(open, POPPED, move || {
             let panel = div()
                 .material(material)
                 .on_pointer_down(PointerEvent::stop_propagation)

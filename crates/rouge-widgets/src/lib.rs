@@ -29,6 +29,7 @@ mod scroll_view;
 mod sheet;
 mod skeleton;
 mod slider;
+mod snap;
 mod sortable;
 #[cfg(feature = "syntax")]
 mod syntax;
