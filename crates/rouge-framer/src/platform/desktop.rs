@@ -21,7 +21,7 @@ pub(crate) fn job(
         .job(target, runner, 60, workflow::checkout())
         .permission("contents", "write");
     if let Some(setup) = setup {
-        job.steps_mut().insert(1, setup);
+        job = job.step(setup);
     }
     job.step(workflow::secrets(build, secrets))
         .step(workflow::inspect(target, "*"))

@@ -43,7 +43,7 @@ pub(crate) trait Platform {
     }
 
     fn setup(&self, _build: &Build) -> Result<()> {
-        invalid("setup is only available for Android")
+        invalid(format!("{} has no setup step", self.target()))
     }
 
     fn doctor(&self, _build: &Build) -> Result<()> {

@@ -2,6 +2,7 @@ use base64::DecodeError;
 use cargo_metadata::Error as MetadataError;
 use framer::FramerError;
 use plist::Error as PlistError;
+use std::io;
 use thiserror::Error;
 use xshell::Error as ShellError;
 
@@ -12,6 +13,9 @@ pub enum PublishError {
 
     #[error(transparent)]
     Config(#[from] FramerError),
+
+    #[error(transparent)]
+    Io(#[from] io::Error),
 
     #[error(transparent)]
     Shell(#[from] ShellError),

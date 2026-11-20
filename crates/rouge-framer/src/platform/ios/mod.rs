@@ -168,6 +168,7 @@ impl Platform for Ios {
         let toolchain = &self.bundle.toolchain;
         self.ci
             .job(target, "macos-26", 90, workflow::checkout())
+            .step(workflow::rouge("Install signing tool", "setup", target).condition(PUBLISHING))
             .step(signing(
                 workflow::rouge("Check signing setup", "doctor", target).condition(PUBLISHING),
             ))
@@ -237,6 +238,10 @@ impl Platform for Ios {
         Ok(())
     }
 
+    fn setup(&self, build: &Build) -> Result<()> {
+        self.bundle.toolchain.signer(build).map(drop)
+    }
+
     fn doctor(&self, build: &Build) -> Result<()> {
         let sh = &build.sh;
         apple::doctor(build)?;
@@ -258,7 +263,7 @@ impl Platform for Ios {
 
     fn build(&self, build: &Build) -> Result<()> {
         self.doctor(build)?;
-        let scratch = build.sh.create_temp_dir()?;
+        let scratch = secrets::scratch()?;
         let bundle = scratch
             .path()
             .join(format!("Payload/{}.app", build.app.target));
@@ -276,7 +281,7 @@ impl Platform for Ios {
 
     fn publish(&self, build: &Build) -> Result<()> {
         let (sh, app) = (&build.sh, &build.app);
-        let scratch = sh.create_temp_dir()?;
+        let scratch = secrets::scratch()?;
         let key = apple::api_key(build, scratch.path())?;
         let (id, issuer, version) = (&key.id, &key.issuer, app.version.to_string());
         let package = build.out.join("app.ipa");
@@ -303,7 +308,7 @@ impl Platform for Ios {
         need("fastlane")?;
         let credentials = scratch.path().join("key.json");
         let bundle_id = &app.id;
-        sh.write_file(
+        secrets::write(
             &credentials,
             json!({"key_id": id, "issuer_id": issuer, "key": key.contents}).to_string(),
         )?;
@@ -317,7 +322,9 @@ impl Ios {
     fn compile_bundle_binary(&self, build: &Build, bundle: &Path) -> Result<()> {
         let sh = &build.sh;
         let binary = &build.app.target;
-        cmd!(sh, "rustup target add {TRIPLE}").run()?;
+        build
+            .isolated(cmd!(sh, "rustup target add {TRIPLE}"))
+            .run()?;
         let compiled = {
             let _deployment = sh.push_env("IPHONEOS_DEPLOYMENT_TARGET", &self.minimum_os);
             let _sdk = sh.push_env("SDKROOT", sdk(build, "--show-sdk-path")?);
@@ -391,15 +398,14 @@ impl Ios {
         let embedded = bundle.join("embedded.mobileprovision");
         let decoded = scratch.join("profile.plist");
         let entitlements = scratch.join("entitlements.plist");
-        sh.write_file(&embedded, secrets::decoded(IOS_PROFILE)?)?;
+        let signer = self.bundle.toolchain.signer(build)?;
+        secrets::write(&embedded, secrets::decoded(IOS_PROFILE)?)?;
         cmd!(sh, "security cms -D -i {embedded} -o {decoded}").run()?;
         let mut granted = self::entitlements(&plist::from_file(&decoded)?, &build.app.id)?;
         apple::extend(&mut granted, &self.bundle.entitlements);
         plist::to_file_xml(&entitlements, &granted)?;
         let entitled = [Path::new("--entitlements-xml-file"), &entitlements];
-        let rcodesign = &self.bundle.toolchain.rcodesign;
-        apple::sign(build, scratch, rcodesign, &entitled, bundle)?;
-        Ok(())
+        apple::sign(build, scratch, &signer, &entitled, bundle)
     }
 }
 

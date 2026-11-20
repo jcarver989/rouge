@@ -155,7 +155,8 @@ impl Build {
 
     pub(crate) fn tool(&self, binary: &str, package: &str, version: &str) -> Result<PathBuf> {
         let sh = &self.sh;
-        let found = cmd!(sh, "{binary} --version")
+        let found = self
+            .isolated(cmd!(sh, "{binary} --version"))
             .quiet()
             .ignore_stderr()
             .read();
@@ -167,10 +168,10 @@ impl Build {
             .join(format!(".rouge/out/tools/{package}-{version}"));
         let installed = tools.join("bin").join(binary);
         if !installed.is_file() {
-            cmd!(
+            self.isolated(cmd!(
                 sh,
                 "cargo install {package} --locked --version ={version} --root {tools}"
-            )
+            ))
             .run()?;
         }
         Ok(installed)

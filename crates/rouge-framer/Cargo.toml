@@ -17,14 +17,12 @@ framer = "0.1.3"
 plist = "1"
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 xshell = "0.2"
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
 
 [[test]]
 name = "pages_test"

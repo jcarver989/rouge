@@ -2,8 +2,8 @@ use crate::error::Result;
 use crate::packager::Build;
 use crate::platform::apple::{Bundle, bundle_options};
 use crate::platform::{GitHubReleases, Platform, apple, desktop, os_version};
-use crate::secrets::APPLE;
-use crate::workflow::{Ci, ci_options};
+use crate::secrets::{self, APPLE};
+use crate::workflow::{self, Ci, PUBLISHING, ci_options};
 use crate::{RougePublish, Target};
 use framer::github::Job;
 use serde_json::json;
@@ -56,7 +56,16 @@ impl Platform for Macos {
     }
 
     fn job(&self, _config: &RougePublish) -> Job {
-        desktop::job(self.target(), &self.ci, "macos-26", None, APPLE)
+        desktop::job(
+            self.target(),
+            &self.ci,
+            "macos-26",
+            Some(
+                workflow::rouge("Install signing tool", "setup", self.target())
+                    .condition(PUBLISHING),
+            ),
+            APPLE,
+        )
     }
 
     fn guide(&self) -> &'static str {
@@ -73,24 +82,32 @@ impl Platform for Macos {
         }
     }
 
+    fn setup(&self, build: &Build) -> Result<()> {
+        self.bundle.toolchain.signer(build).map(drop)
+    }
+
     fn doctor(&self, build: &Build) -> Result<()> {
         apple::doctor(build)
     }
 
     fn build(&self, build: &Build) -> Result<()> {
         self.doctor(build)?;
-        let scratch = build.sh.create_temp_dir()?;
+        let scratch = secrets::scratch()?;
         let bundle = scratch.path().join(format!("{}.app", build.app.target));
         let contents = bundle.join("Contents");
 
         self.compile_bundle_binary(build, &contents)?;
         self.write_bundle_info(build, scratch.path(), &contents)?;
-        if build.publishing() {
-            self.sign_bundle(build, scratch.path(), &bundle)?;
+        let signer = build
+            .publishing()
+            .then(|| self.bundle.toolchain.signer(build))
+            .transpose()?;
+        if let Some(tool) = &signer {
+            self.sign_bundle(build, scratch.path(), tool, &bundle)?;
         }
         let image = create_disk_image(build, &bundle)?;
-        if build.publishing() {
-            self.sign_and_notarize_image(build, scratch.path(), &image)?;
+        if let Some(tool) = &signer {
+            sign_and_notarize_image(build, scratch.path(), tool, &image)?;
         }
         Ok(())
     }
@@ -104,7 +121,9 @@ impl Macos {
     fn compile_bundle_binary(&self, build: &Build, contents: &Path) -> Result<()> {
         let sh = &build.sh;
         let binary = &build.app.target;
-        cmd!(sh, "rustup target add {TRIPLE}").run()?;
+        build
+            .isolated(cmd!(sh, "rustup target add {TRIPLE}"))
+            .run()?;
         let compiled = {
             let _minimum = self
                 .minimum_os
@@ -132,8 +151,13 @@ impl Macos {
         Ok(())
     }
 
-    fn sign_bundle(&self, build: &Build, scratch: &Path, bundle: &Path) -> Result<()> {
-        let rcodesign = &self.bundle.toolchain.rcodesign;
+    fn sign_bundle(
+        &self,
+        build: &Build,
+        scratch: &Path,
+        rcodesign: &Path,
+        bundle: &Path,
+    ) -> Result<()> {
         let entitlements = scratch.join("entitlements.plist");
         let mut flags = vec![Path::new("--for-notarization")];
         if !self.bundle.entitlements.is_empty() {
@@ -142,30 +166,34 @@ impl Macos {
             plist::to_file_xml(&entitlements, &granted)?;
             flags.extend([Path::new("--entitlements-xml-file"), &entitlements]);
         }
-        apple::sign(build, scratch, rcodesign, &flags, bundle)?;
-        Ok(())
+        apple::sign(build, scratch, rcodesign, &flags, bundle)
     }
+}
 
-    fn sign_and_notarize_image(&self, build: &Build, scratch: &Path, image: &Path) -> Result<()> {
-        let sh = &build.sh;
-        let rcodesign = &self.bundle.toolchain.rcodesign;
-        let rcodesign = apple::sign(build, scratch, rcodesign, &[], image)?;
-        let key = apple::api_key(build, scratch)?;
-        let (issuer, id, file) = (&key.issuer, &key.id, &key.file);
-        let encoded = scratch.join("notary.json");
-        cmd!(
-            sh,
-            "{rcodesign} encode-app-store-connect-api-key -o {encoded} {issuer} {id} {file}"
-        )
-        .run()?;
-        cmd!(
-            sh,
-            "{rcodesign} notary-submit --api-key-file {encoded} --staple {image}"
-        )
-        .run()?;
-        cmd!(sh, "xcrun stapler validate {image}").run()?;
-        Ok(())
-    }
+fn sign_and_notarize_image(
+    build: &Build,
+    scratch: &Path,
+    rcodesign: &Path,
+    image: &Path,
+) -> Result<()> {
+    let sh = &build.sh;
+    apple::sign(build, scratch, rcodesign, &[], image)?;
+    let key = apple::api_key(build, scratch)?;
+    let (issuer, id, file) = (&key.issuer, &key.id, &key.file);
+    let encoded = scratch.join("notary.json");
+    let json = cmd!(
+        sh,
+        "{rcodesign} encode-app-store-connect-api-key {issuer} {id} {file}"
+    )
+    .read()?;
+    secrets::write(&encoded, json)?;
+    cmd!(
+        sh,
+        "{rcodesign} notary-submit --api-key-file {encoded} --staple {image}"
+    )
+    .run()?;
+    cmd!(sh, "xcrun stapler validate {image}").run()?;
+    Ok(())
 }
 
 fn compile_icon(build: &Build, scratch: &Path, contents: &Path, source: &Path) -> Result<()> {

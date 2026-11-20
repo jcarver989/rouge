@@ -123,7 +123,8 @@ impl Android {
 
     fn cargo_ndk(&self, build: &Build) -> bool {
         let sh = &build.sh;
-        cmd!(sh, "cargo ndk --version")
+        build
+            .isolated(cmd!(sh, "cargo ndk --version"))
             .quiet()
             .ignore_stderr()
             .read()
@@ -149,10 +150,6 @@ impl Platform for Android {
         let toolchain = &self.toolchain;
         self.ci
             .job(target, "ubuntu-24.04", 60, workflow::checkout())
-            .step(workflow::secrets(
-                workflow::rouge("Check Play credentials", "doctor", target).condition(PUBLISHING),
-                &[ANDROID, &[PLAY_ACCOUNT]].concat(),
-            ))
             .step(
                 Step::uses(JAVA)
                     .with("distribution", "temurin")
@@ -168,6 +165,10 @@ impl Platform for Android {
                 "Install Android build tools",
                 "setup",
                 target,
+            ))
+            .step(workflow::secrets(
+                workflow::rouge("Check Play credentials", "doctor", target).condition(PUBLISHING),
+                &[ANDROID, &[PLAY_ACCOUNT]].concat(),
             ))
             .step(workflow::secrets(
                 workflow::rouge("Build signed Android App Bundle", "build", target),
@@ -256,18 +257,22 @@ impl Platform for Android {
         let (sdk, toolchain) = (self.target_sdk.to_string(), &self.toolchain);
         let (build_tools, ndk, cargo_ndk) =
             (&toolchain.build_tools, &toolchain.ndk, &toolchain.cargo_ndk);
-        cmd!(
-            sh,
-            "sdkmanager platforms;android-{sdk} build-tools;{build_tools} ndk;{ndk}"
-        )
-        .run()?;
-        cmd!(sh, "rustup target add aarch64-linux-android").run()?;
-        if !self.cargo_ndk(build) {
-            cmd!(
+        build
+            .isolated(cmd!(
                 sh,
-                "cargo install cargo-ndk --locked --version ={cargo_ndk}"
-            )
+                "sdkmanager platforms;android-{sdk} build-tools;{build_tools} ndk;{ndk}"
+            ))
             .run()?;
+        build
+            .isolated(cmd!(sh, "rustup target add aarch64-linux-android"))
+            .run()?;
+        if !self.cargo_ndk(build) {
+            build
+                .isolated(cmd!(
+                    sh,
+                    "cargo install cargo-ndk --locked --version ={cargo_ndk}"
+                ))
+                .run()?;
         }
         Ok(())
     }
@@ -283,13 +288,13 @@ impl Platform for Android {
 
     fn build(&self, build: &Build) -> Result<()> {
         let (ndk, image_tool) = self.check_build_tools(build)?;
-        let scratch = build.sh.create_temp_dir()?;
+        let scratch = secrets::scratch()?;
         let project = scratch.path();
         let main = project.join("src/main");
 
-        let keystore = prepare_keystore(build, project)?;
         self.compile_library(build, &ndk, &main.join("jniLibs"))?;
         self.write_gradle_project(build, project, &main, image_tool)?;
+        let keystore = prepare_keystore(build, project)?;
         self.bundle_release(build, project, &keystore)?;
         copy_and_verify_bundle(build, project)
     }
@@ -390,22 +395,23 @@ impl Android {
 
     fn bundle_release(&self, build: &Build, project: &Path, keystore: &Keystore) -> Result<()> {
         let (sh, app) = (&build.sh, &build.app);
-        cmd!(
-            sh,
-            "gradle --no-daemon --project-dir {project} bundleRelease"
-        )
-        .env("APP_ID", &app.id)
-        .env("APP_NAME", &app.name)
-        .env("APP_TARGET", &app.target)
-        .env("APP_VERSION", app.version.to_string())
-        .env("ROUGE_BUILD_NUMBER", build.number.to_string())
-        .env("ROUGE_MIN_SDK", self.min_sdk.to_string())
-        .env("ROUGE_TARGET_SDK", self.target_sdk.to_string())
-        .env("ROUGE_KEYSTORE", &keystore.path)
-        .env(ANDROID[1], &keystore.store_password)
-        .env(ANDROID[2], &keystore.alias)
-        .env(ANDROID[3], &keystore.key_password)
-        .run()?;
+        build
+            .isolated(cmd!(
+                sh,
+                "gradle --no-daemon --project-dir {project} bundleRelease"
+            ))
+            .env("APP_ID", &app.id)
+            .env("APP_NAME", &app.name)
+            .env("APP_TARGET", &app.target)
+            .env("APP_VERSION", app.version.to_string())
+            .env("ROUGE_BUILD_NUMBER", build.number.to_string())
+            .env("ROUGE_MIN_SDK", self.min_sdk.to_string())
+            .env("ROUGE_TARGET_SDK", self.target_sdk.to_string())
+            .env("ROUGE_KEYSTORE", &keystore.path)
+            .env(ANDROID[1], &keystore.store_password)
+            .env(ANDROID[2], &keystore.alias)
+            .env(ANDROID[3], &keystore.key_password)
+            .run()?;
         Ok(())
     }
 }
@@ -422,7 +428,7 @@ fn prepare_keystore(build: &Build, project: &Path) -> Result<Keystore> {
     let path = project.join("upload.p12");
     let [store_password, alias, key_password] = if build.publishing() {
         secrets::require(ANDROID)?;
-        sh.write_file(&path, secrets::decoded(ANDROID[0])?)?;
+        secrets::write(&path, secrets::decoded(ANDROID[0])?)?;
         [
             secret(ANDROID[1])?,
             secret(ANDROID[2])?,

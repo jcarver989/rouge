@@ -43,6 +43,10 @@ impl AppleToolchain {
         self
     }
 
+    pub(crate) fn signer(&self, build: &Build) -> Result<PathBuf> {
+        build.tool("rcodesign", "apple-codesign", &self.rcodesign)
+    }
+
     pub(crate) fn validate(&self) -> Result<(), String> {
         match [&self.rcodesign, &self.fastlane, &self.ruby]
             .into_iter()
@@ -131,23 +135,22 @@ pub(crate) fn info(build: &Build) -> Value {
 pub(crate) fn sign(
     build: &Build,
     scratch: &Path,
-    version: &str,
+    rcodesign: &Path,
     flags: &[&Path],
     path: &Path,
-) -> Result<PathBuf> {
+) -> Result<()> {
     let sh = &build.sh;
-    let rcodesign = build.tool("rcodesign", "apple-codesign", version)?;
     let certificate = scratch.join("certificate.p12");
     let password = scratch.join("certificate.password");
-    sh.write_file(&certificate, secrets::decoded(APPLE[0])?)?;
-    sh.write_file(&password, secret(APPLE[1])?)?;
+    secrets::write(&certificate, secrets::decoded(APPLE[0])?)?;
+    secrets::write(&password, secret(APPLE[1])?)?;
     cmd!(
         sh,
         "{rcodesign} sign --p12-file {certificate} --p12-password-file {password} {flags...} {path}"
     )
     .run()?;
     cmd!(sh, "codesign --verify --strict {path}").run()?;
-    Ok(rcodesign)
+    Ok(())
 }
 
 pub(crate) fn api_key(build: &Build, scratch: &Path) -> Result<ApiKey> {
@@ -161,7 +164,8 @@ pub(crate) fn api_key(build: &Build, scratch: &Path) -> Result<ApiKey> {
     let directory = scratch.join("private_keys");
     let file = directory.join(format!("AuthKey_{id}.p8"));
     let contents = secret("APPLE_API_KEY")?;
-    build.sh.write_file(&file, format!("{contents}\n"))?;
+    build.sh.create_dir(&directory)?;
+    secrets::write(&file, format!("{contents}\n"))?;
     Ok(ApiKey {
         directory,
         file,

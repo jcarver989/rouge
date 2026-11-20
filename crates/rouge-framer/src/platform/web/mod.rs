@@ -156,7 +156,9 @@ fn resolve_bindgen(build: &Build) -> Result<PathBuf> {
 
 fn compile_wasm(build: &Build) -> Result<PathBuf> {
     let sh = &build.sh;
-    cmd!(sh, "rustup target add {TRIPLE}").run()?;
+    build
+        .isolated(cmd!(sh, "rustup target add {TRIPLE}"))
+        .run()?;
     Ok(build
         .compile(TRIPLE)?
         .join(format!("{}.wasm", build.app.target)))
