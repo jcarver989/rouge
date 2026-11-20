@@ -1,10 +1,11 @@
 use super::Platform;
 use super::native::{WinitPlatform, run};
 use crate::app::{App, AppError};
+use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_foundation::NSString;
-use objc2_ui_kit::UIPasteboard;
-use rouge_core::{Clipboard, ClipboardMedia, Menu, PasteRequest};
+use objc2_ui_kit::{UIPasteboard, UITraitEnvironment, UIUserInterfaceStyle, UIView};
+use rouge_core::{Appearance, Clipboard, ClipboardMedia, Menu, PasteRequest, Ui};
 use rouge_render::Edges;
 #[cfg(feature = "persist")]
 use std::env::home_dir;
@@ -15,6 +16,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoopProxy;
+use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
 #[derive(Debug, Error)]
@@ -53,6 +55,33 @@ impl WinitPlatform for Ios {
     #[cfg(feature = "persist")]
     fn default_config_dir(name: &str) -> Option<PathBuf> {
         home_dir().map(|home| home.join("Library/Application Support").join(name))
+    }
+
+    fn appearance(window: &Window) -> Appearance {
+        if MainThreadMarker::new().is_none() {
+            return Appearance::Light;
+        }
+        let Ok(handle) = window.window_handle() else {
+            return Appearance::Light;
+        };
+        let RawWindowHandle::UiKit(handle) = handle.as_raw() else {
+            return Appearance::Light;
+        };
+        #[allow(unsafe_code)]
+        let dark = unsafe {
+            // Winit lends its live UIView for the lifetime of the window handle.
+            let view = handle.ui_view.cast::<UIView>().as_ref();
+            view.traitCollection().userInterfaceStyle() == UIUserInterfaceStyle::Dark
+        };
+        if dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        }
+    }
+
+    fn sync(window: &Window, ui: &mut Ui) {
+        ui.set_appearance(Self::appearance(window));
     }
 
     fn surface_size(window: &Window) -> PhysicalSize<u32> {
