@@ -33,6 +33,7 @@ fn only_generates_enabled_targets() -> Result<(), Box<dyn std::error::Error>> {
         (_, remaining) = remaining.split_once(step).ok_or_else(|| missing(step))?;
     }
     assert!(!workflow.contains("cargo rouge build ios"));
+    assert!(fs.get("justfile").is_none());
     assert!(fs.paths().all(|path| !path.starts_with(".rouge")));
     Ok(())
 }
@@ -124,6 +125,43 @@ fn generated_files_pass_framer_check() -> Result<(), Box<dyn std::error::Error>>
             .linux(GitHubReleases),
     );
     project.synth_with(&mut fs, Mode::Write)?;
+    let report = project.synth_with(&mut fs, Mode::Check)?;
+    assert!(report.is_clean(), "{}", report.diff());
+    Ok(())
+}
+
+#[test]
+fn adds_and_removes_only_the_simulator_recipe() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let mut fs = DiskFs::new(root.path());
+    let justfile = root.path().join("justfile");
+    let existing = "set quiet\n\nhello:\n    echo hello\n";
+    fs::write(&justfile, existing)?;
+    let config = RougePublish::new(APP_ID).web(GitHubPages).icon("icon.png");
+    let mut project = Project::new();
+    project.apply(config.clone().ios(TestFlight::new("0")));
+    project.synth_with(&mut fs, Mode::Write)?;
+
+    let generated = fs::read_to_string(&justfile)?;
+    assert!(generated.starts_with(existing));
+    assert!(generated.contains("# framer:begin rouge/ios-sim"));
+    assert!(generated.contains("ios-sim:\n    cargo rouge run ios\n"));
+    let workflow = fs::read_to_string(root.path().join(WORKFLOW))?;
+    assert!(workflow.contains("run: cargo rouge build ios"));
+    assert!(!workflow.contains("ios-sim"));
+    assert!(!workflow.contains("cargo rouge run ios"));
+    let report = project.synth_with(&mut fs, Mode::Check)?;
+    assert!(report.is_clean(), "{}", report.diff());
+
+    let mut project = Project::new();
+    project.apply(config);
+    let report = project.synth_with(&mut fs, Mode::Check)?;
+    assert!(!report.is_clean());
+    project.synth_with(&mut fs, Mode::Write)?;
+    assert_eq!(
+        fs::read_to_string(&justfile)?.trim_end(),
+        existing.trim_end()
+    );
     let report = project.synth_with(&mut fs, Mode::Check)?;
     assert!(report.is_clean(), "{}", report.diff());
     Ok(())

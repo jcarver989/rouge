@@ -1,5 +1,5 @@
 use crate::error::{Result, ensure, invalid};
-use crate::{RougePublish, Target};
+use crate::{RougePublish, Target, secrets};
 use cargo_metadata::semver::Version;
 use cargo_metadata::{MetadataCommand, TargetKind};
 use std::path::{Path, PathBuf};
@@ -16,11 +16,15 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn resolve(config: &RougePublish, root: &Path, target: Target) -> Result<Self> {
-        let metadata = MetadataCommand::new()
+        let mut command = MetadataCommand::new();
+        command
             .current_dir(root)
             .no_deps()
-            .other_options(["--locked".to_owned(), "--offline".to_owned()])
-            .exec()?;
+            .other_options(["--locked".to_owned(), "--offline".to_owned()]);
+        for secret in secrets::all() {
+            command.env_remove(secret);
+        }
+        let metadata = command.exec()?;
         let package = only(
             match &config.package {
                 Some(name) => metadata

@@ -160,7 +160,7 @@ fn compile_wasm(build: &Build) -> Result<PathBuf> {
         .isolated(cmd!(sh, "rustup target add {TRIPLE}"))
         .run()?;
     Ok(build
-        .compile(TRIPLE)?
+        .compile(TRIPLE, true)?
         .join(format!("{}.wasm", build.app.target)))
 }
 

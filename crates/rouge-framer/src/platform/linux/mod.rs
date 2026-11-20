@@ -112,7 +112,10 @@ fn archive_stem(build: &Build) -> String {
 fn stage_release(build: &Build, staging: &Path) -> Result<()> {
     let sh = &build.sh;
     let binary = &build.app.target;
-    build.copy(build.compile(TRIPLE)?.join(binary), staging.join(binary))?;
+    build.copy(
+        build.compile(TRIPLE, true)?.join(binary),
+        staging.join(binary),
+    )?;
     sh.write_file(
         staging.join("README.txt"),
         format!(

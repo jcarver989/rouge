@@ -9,6 +9,7 @@ mod workflow;
 
 use clap::{Parser, value_parser};
 pub use error::PublishError;
+use framer::just::{Justfile, Recipe};
 use framer::toml_edit::value;
 use framer::{Component, FramerError, Output, Preset, Project, Result};
 pub use packager::{Action, Channel, Packager, Target};
@@ -24,7 +25,10 @@ use std::process::ExitCode;
 const ALIAS: &str = "run --quiet --locked --manifest-path .framer/Cargo.toml --";
 
 #[derive(Parser)]
-#[command(bin_name = "cargo rouge", about = "Package and publish this Rouge app")]
+#[command(
+    bin_name = "cargo rouge",
+    about = "Run, package and publish this Rouge app"
+)]
 struct Cli {
     action: Action,
     target: Target,
@@ -32,6 +36,12 @@ struct Cli {
     channel: Channel,
     #[arg(long, env = "ROUGE_BUILD_NUMBER", default_value_t = 1, value_parser = value_parser!(u32).range(1..=999_999_999))]
     build_number: u32,
+    #[arg(
+        long,
+        env = "ROUGE_IOS_DEVICE",
+        help = "iOS simulator name or UDID for run"
+    )]
+    device: Option<String>,
 }
 
 pub fn run(project: &Project) -> ExitCode {
@@ -47,9 +57,14 @@ pub fn run(project: &Project) -> ExitCode {
             PublishError::Invalid("Apply RougePublish in .framer/src/main.rs first".into())
         })
         .and_then(|config| {
-            Packager::new(config.clone(), root)
+            let packager = Packager::new(config.clone(), root)
                 .channel(cli.channel)
-                .build_number(cli.build_number)
+                .build_number(cli.build_number);
+            cli.device
+                .into_iter()
+                .fold(packager, |packager, device| {
+                    packager.simulator_device(device)
+                })
                 .run(cli.action, cli.target)
         });
     match packaged {
@@ -221,6 +236,16 @@ impl Component for RougePublish {
             ".github/workflows/rouge-publish.yml",
             workflow::render(self),
         )?;
-        output.managed("PUBLISHING.md", workflow::checklist(self))
+        output.managed("PUBLISHING.md", workflow::checklist(self))?;
+        if self.ios.is_some() {
+            Justfile::new("rouge/ios-sim")
+                .recipe(
+                    Recipe::new("ios-sim")
+                        .doc("Build and launch the app in the iOS Simulator")
+                        .line("cargo rouge run ios"),
+                )
+                .synthesize(output)?;
+        }
+        Ok(())
     }
 }

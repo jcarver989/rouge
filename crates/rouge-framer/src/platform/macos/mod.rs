@@ -132,7 +132,7 @@ impl Macos {
                 .minimum_os
                 .as_ref()
                 .map(|version| sh.push_env("MACOSX_DEPLOYMENT_TARGET", version));
-            build.compile(TRIPLE)?
+            build.compile(TRIPLE, true)?
         };
         build.copy(compiled.join(binary), contents.join("MacOS").join(binary))
     }

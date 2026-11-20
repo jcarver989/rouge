@@ -1,3 +1,5 @@
+mod simulator;
+
 use crate::error::{Result, ensure, invalid};
 use crate::packager::{Build, need};
 use crate::platform::apple::{Bundle, bundle_options};
@@ -11,13 +13,42 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use xshell::cmd;
 
-const TRIPLE: &str = "aarch64-apple-ios";
 const SUPPORTED: (u32, u32) = (15, 0);
 const RELEASING: &str = "${{ inputs.channel == 'production' }}";
 const RUBY: &str = "ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0";
 const ICON_REQUIREMENT: &str = "iOS requires an opaque 1024 × 1024 PNG icon";
 const PROFILE_REQUIREMENT: &str =
     "IOS_PROFILE_BASE64 must be an App Store distribution profile for the configured app ID";
+
+#[derive(Clone, Copy)]
+struct Sdk {
+    name: &'static str,
+    platform: &'static str,
+    triple: &'static str,
+    release: bool,
+}
+
+const DEVICE: Sdk = Sdk {
+    name: "iphoneos",
+    platform: "iPhoneOS",
+    triple: "aarch64-apple-ios",
+    release: true,
+};
+const SIMULATOR: Sdk = Sdk {
+    name: "iphonesimulator",
+    platform: "iPhoneSimulator",
+    triple: "aarch64-apple-ios-sim",
+    release: false,
+};
+
+impl Sdk {
+    fn query(self, build: &Build, query: &str) -> Result<String> {
+        let (sh, sdk) = (&build.sh, self.name);
+        Ok(build
+            .isolated(cmd!(sh, "xcrun --sdk {sdk} {query}"))
+            .read()?)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TestFlight {
@@ -90,7 +121,7 @@ impl Ios {
         self
     }
 
-    fn device_info(&self) -> Value {
+    fn device_info(&self, sdk: Sdk) -> Value {
         let named = |orientations: &[Orientation]| -> Vec<String> {
             orientations
                 .iter()
@@ -118,7 +149,7 @@ impl Ios {
             "MinimumOSVersion": self.minimum_os,
             "LSRequiresIPhoneOS": true,
             "UIDeviceFamily": families,
-            "CFBundleSupportedPlatforms": ["iPhoneOS"],
+            "CFBundleSupportedPlatforms": [sdk.platform],
             "UILaunchScreen": {},
             "UISupportedInterfaceOrientations": named(chosen.unwrap_or(&phone)),
             "UISupportedInterfaceOrientations~ipad": named(chosen.unwrap_or(&pad)),
@@ -243,22 +274,11 @@ impl Platform for Ios {
     }
 
     fn doctor(&self, build: &Build) -> Result<()> {
-        let sh = &build.sh;
         apple::doctor(build)?;
         if build.publishing() {
             secret(IOS_PROFILE)?;
         }
-        let icon = icon(build)?;
-        cmd!(sh, "xcrun --sdk iphoneos --find actool")
-            .ignore_stdout()
-            .run()?;
-        let properties = cmd!(sh, "sips -g pixelWidth -g pixelHeight -g hasAlpha {icon}").read()?;
-        ensure(
-            ["pixelWidth: 1024", "pixelHeight: 1024", "hasAlpha: no"]
-                .iter()
-                .all(|property| properties.contains(property)),
-            ICON_REQUIREMENT,
-        )
+        check_icon(build, DEVICE)
     }
 
     fn build(&self, build: &Build) -> Result<()> {
@@ -268,15 +288,17 @@ impl Platform for Ios {
             .path()
             .join(format!("Payload/{}.app", build.app.target));
 
-        self.compile_bundle_binary(build, &bundle)?;
-        let assets = self.compile_assets(build, scratch.path(), &bundle)?;
-        self.write_bundle_info(build, &bundle, &assets)?;
+        self.assemble_bundle(build, scratch.path(), &bundle, DEVICE)?;
         if build.publishing() {
             self.sign_bundle(build, scratch.path(), &bundle)?;
             package_ipa(build, scratch.path())
         } else {
             package_unsigned_app(build, &bundle)
         }
+    }
+
+    fn run_local(&self, build: &Build, device: Option<&str>) -> Result<()> {
+        simulator::run(self, build, device)
     }
 
     fn publish(&self, build: &Build) -> Result<()> {
@@ -319,22 +341,41 @@ impl Platform for Ios {
 }
 
 impl Ios {
-    fn compile_bundle_binary(&self, build: &Build, bundle: &Path) -> Result<()> {
+    fn assemble_bundle(
+        &self,
+        build: &Build,
+        scratch: &Path,
+        bundle: &Path,
+        sdk: Sdk,
+    ) -> Result<()> {
+        self.compile_bundle_binary(build, bundle, sdk)?;
+        let assets = self.compile_assets(build, scratch, bundle, sdk)?;
+        self.write_bundle_info(build, bundle, &assets, sdk)
+    }
+
+    fn compile_bundle_binary(&self, build: &Build, bundle: &Path, sdk: Sdk) -> Result<()> {
         let sh = &build.sh;
         let binary = &build.app.target;
+        let triple = sdk.triple;
         build
-            .isolated(cmd!(sh, "rustup target add {TRIPLE}"))
+            .isolated(cmd!(sh, "rustup target add {triple}"))
             .run()?;
         let compiled = {
             let _deployment = sh.push_env("IPHONEOS_DEPLOYMENT_TARGET", &self.minimum_os);
-            let _sdk = sh.push_env("SDKROOT", sdk(build, "--show-sdk-path")?);
-            build.compile(TRIPLE)?
+            let _sdk = sh.push_env("SDKROOT", sdk.query(build, "--show-sdk-path")?);
+            build.compile(triple, sdk.release)?
         };
         build.copy(compiled.join(binary), bundle.join(binary))
     }
 
-    fn compile_assets(&self, build: &Build, scratch: &Path, bundle: &Path) -> Result<PathBuf> {
-        let sh = &build.sh;
+    fn compile_assets(
+        &self,
+        build: &Build,
+        scratch: &Path,
+        bundle: &Path,
+        sdk: Sdk,
+    ) -> Result<PathBuf> {
+        let (sh, sdk) = (&build.sh, sdk.name);
         let catalog = scratch.join("Assets.xcassets");
         let icons = catalog.join("AppIcon.appiconset");
         let assets = scratch.join("assets.plist");
@@ -361,34 +402,44 @@ impl Ios {
             })
             .to_string(),
         )?;
-        cmd!(sh, "xcrun --sdk iphoneos actool {catalog} --compile {bundle} --platform iphoneos --app-icon AppIcon {devices...} --minimum-deployment-target {minimum} --output-partial-info-plist {assets}")
+        build.isolated(cmd!(sh, "xcrun --sdk {sdk} actool {catalog} --compile {bundle} --platform {sdk} --app-icon AppIcon {devices...} --minimum-deployment-target {minimum} --output-partial-info-plist {assets}"))
             .ignore_stdout()
             .run()?;
         Ok(assets)
     }
 
-    fn write_bundle_info(&self, build: &Build, bundle: &Path, assets: &Path) -> Result<()> {
+    fn write_bundle_info(
+        &self,
+        build: &Build,
+        bundle: &Path,
+        assets: &Path,
+        sdk: Sdk,
+    ) -> Result<()> {
         let sh = &build.sh;
-        let (sdk_version, sdk_build) = (
-            sdk(build, "--show-sdk-version")?,
-            sdk(build, "--show-sdk-build-version")?,
-        );
-        let xcode = cmd!(sh, "xcodebuild -version").read()?;
-        let mut info = apple::info(build);
-        merge(&mut info, self.device_info());
+        let sdk_version = sdk.query(build, "--show-sdk-version")?;
+        let sdk_build = sdk.query(build, "--show-sdk-build-version")?;
+        let xcode = build.isolated(cmd!(sh, "xcodebuild -version")).read()?;
+        let mut info = json!({});
+        if !sdk.release {
+            apple::extend(&mut info, &self.bundle.info);
+        }
+        merge(&mut info, apple::info(build));
+        merge(&mut info, self.device_info(sdk));
         merge(&mut info, plist::from_file(assets)?);
         merge(
             &mut info,
             json!({
-                "DTPlatformName": "iphoneos",
+                "DTPlatformName": sdk.name,
                 "DTPlatformVersion": sdk_version,
-                "DTSDKName": format!("iphoneos{sdk_version}"),
+                "DTSDKName": format!("{}{sdk_version}", sdk.name),
                 "DTPlatformBuild": sdk_build,
                 "DTSDKBuild": sdk_build,
                 "DTXcodeBuild": xcode.rsplit(' ').next(),
             }),
         );
-        apple::extend(&mut info, &self.bundle.info);
+        if sdk.release {
+            apple::extend(&mut info, &self.bundle.info);
+        }
         plist::to_file_xml(bundle.join("Info.plist"), &info)?;
         Ok(())
     }
@@ -426,9 +477,25 @@ fn package_unsigned_app(build: &Build, bundle: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sdk(build: &Build, query: &str) -> Result<String> {
-    let sh = &build.sh;
-    Ok(cmd!(sh, "xcrun --sdk iphoneos {query}").read()?)
+fn check_icon(build: &Build, sdk: Sdk) -> Result<()> {
+    let (sh, sdk) = (&build.sh, sdk.name);
+    let icon = icon(build)?;
+    build
+        .isolated(cmd!(sh, "xcrun --sdk {sdk} --find actool"))
+        .ignore_stdout()
+        .run()?;
+    let properties = build
+        .isolated(cmd!(
+            sh,
+            "sips -g pixelWidth -g pixelHeight -g hasAlpha {icon}"
+        ))
+        .read()?;
+    ensure(
+        ["pixelWidth: 1024", "pixelHeight: 1024", "hasAlpha: no"]
+            .iter()
+            .all(|property| properties.contains(property)),
+        ICON_REQUIREMENT,
+    )
 }
 
 fn icon(build: &Build) -> Result<&Path> {

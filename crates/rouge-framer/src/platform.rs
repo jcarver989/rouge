@@ -52,6 +52,10 @@ pub(crate) trait Platform {
 
     fn build(&self, build: &Build) -> Result<()>;
 
+    fn run_local(&self, _build: &Build, _device: Option<&str>) -> Result<()> {
+        invalid("run is only supported for iOS")
+    }
+
     fn stage(&self, _build: &Build) -> Result<()> {
         invalid("only Pages deployments need a staging step")
     }

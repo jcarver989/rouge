@@ -1,6 +1,6 @@
 # rouge-framer
 
-`rouge-framer` generates a GitHub Actions publishing workflow, a `cargo rouge` command for packaging your app, and a `PUBLISHING.md` setup guide.
+`rouge-framer` generates a GitHub Actions publishing workflow, a `cargo rouge` command for running and packaging your app, and a `PUBLISHING.md` setup guide.
 
 ## Setup
 
@@ -41,3 +41,15 @@ Use `.desktop(GitHubReleases)` to enable both Linux and macOS; each can be selec
 If the workspace has more than one default package, select one with `.package(...)`. Use `.binary(...)` or `.android_library(...)` if the selected package has multiple targets of the required kind.
 
 Pass a platform builder to change its defaults. For example, `.linux(Linux::new(GitHubReleases).apt_packages(["libasound2-dev"]))` adds a Linux build dependency. Every platform builder accepts `runner`, `timeout_minutes`, and `setup`.
+
+## Run on the iOS Simulator
+
+Apps with `.ios(...)` get a `just ios-sim` recipe after Framer synthesis. Use an Apple Silicon Mac with full Xcode selected and a compatible iOS simulator runtime installed in Xcode.
+
+```sh
+just ios-sim
+ROUGE_IOS_DEVICE="iPhone 17 Pro" just ios-sim
+cargo rouge run ios --device "iPhone 17 Pro"  # without Just
+```
+
+The command builds a debug `.app` in `.rouge/out/ios-sim/`, opens Simulator, then installs and launches the app. By default it prefers a compatible booted simulator, then the newest compatible runtime. Use a name or UDID to override the selection; use a UDID if the name is ambiguous (`xcrun simctl list devices available`). No Apple account, valid App Store Connect ID, or distribution signing is needed. `cargo rouge build ios` still builds a separate device package.

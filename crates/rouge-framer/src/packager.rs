@@ -12,6 +12,7 @@ pub enum Action {
     Setup,
     Doctor,
     Build,
+    Run,
     Stage,
     Publish,
     Link,
@@ -52,6 +53,7 @@ pub struct Packager {
     root: PathBuf,
     channel: Channel,
     build_number: u32,
+    simulator_device: Option<String>,
 }
 
 pub(crate) struct Build {
@@ -72,6 +74,7 @@ impl Packager {
             root: root.into(),
             channel: Channel::default(),
             build_number: 1,
+            simulator_device: None,
         }
     }
 
@@ -85,8 +88,18 @@ impl Packager {
         self
     }
 
+    pub fn simulator_device(mut self, device: impl Into<String>) -> Self {
+        self.simulator_device = Some(device.into());
+        self
+    }
+
     pub fn run(&self, action: Action, target: Target) -> Result<()> {
         self.config.validate()?;
+        let simulator = action == Action::Run;
+        ensure(
+            !simulator || target == Target::Ios,
+            "run is only supported for iOS",
+        )?;
         let Some(platform) = self.config.platform(target) else {
             return invalid(format!(
                 "{target} is not enabled; add it to RougePublish in .framer/src/main.rs"
@@ -96,13 +109,14 @@ impl Packager {
             !matches!(action, Action::Stage | Action::Publish) || self.channel != Channel::Check,
             "Set ROUGE_CHANNEL to preview or production before publishing",
         )?;
-        let build = self.prepare(target)?;
+        let build = self.prepare(target, simulator)?;
         match action {
             Action::Setup => platform.setup(&build),
             Action::Doctor => platform.doctor(&build),
             Action::Stage => platform.stage(&build),
             Action::Publish => platform.publish(&build),
             Action::Link => platform.link(&build),
+            Action::Run => platform.run_local(&build, self.simulator_device.as_deref()),
             Action::Build => {
                 build.sh.remove_path(&build.out)?;
                 build.sh.create_dir(&build.out)?;
@@ -113,7 +127,7 @@ impl Packager {
         }
     }
 
-    fn prepare(&self, target: Target) -> Result<Build> {
+    fn prepare(&self, target: Target, simulator: bool) -> Result<Build> {
         let sh = Shell::new()?;
         let root = path::absolute(sh.current_dir().join(&self.root)).unwrap_or(self.root.clone());
         sh.change_dir(&root);
@@ -122,11 +136,19 @@ impl Packager {
             sh,
             app: App::resolve(&self.config, &root, target)?,
             target,
-            channel: self.channel,
-            number: self.build_number,
+            channel: if simulator {
+                Channel::Check
+            } else {
+                self.channel
+            },
+            number: if simulator { 1 } else { self.build_number },
             cargo_target: env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(|| out.join("cargo"), PathBuf::from),
-            out: out.join(target.to_string()),
+            out: if simulator {
+                out.join("ios-sim")
+            } else {
+                out.join(target.to_string())
+            },
             root,
         })
     }
@@ -143,14 +165,19 @@ impl Build {
             .env("CARGO_TARGET_DIR", &self.cargo_target)
     }
 
-    pub(crate) fn compile(&self, triple: &str) -> Result<PathBuf> {
+    pub(crate) fn compile(&self, triple: &str, release: bool) -> Result<PathBuf> {
         let (sh, package, binary) = (&self.sh, &self.app.package, &self.app.target);
+        let (profile, dir) = if release {
+            (Some("--release"), "release")
+        } else {
+            (None, "debug")
+        };
         self.isolated(cmd!(
             sh,
-            "cargo build --locked --release --package {package} --bin {binary} --target {triple}"
+            "cargo build --locked {profile...} --package {package} --bin {binary} --target {triple}"
         ))
         .run()?;
-        Ok(self.cargo_target.join(triple).join("release"))
+        Ok(self.cargo_target.join(triple).join(dir))
     }
 
     pub(crate) fn tool(&self, binary: &str, package: &str, version: &str) -> Result<PathBuf> {
