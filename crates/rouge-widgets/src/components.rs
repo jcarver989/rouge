@@ -8,7 +8,10 @@ use crate::{
     tokens::{self, Hold, MotionScale, Pace, Space},
     tree::indent,
     typography::UiStyles,
-    util::{Spot, TestId, chrome, fade_when_disabled, focus_ring, row_height, tone_icon},
+    util::{
+        Spot, TestId, by_touch, chrome, fade_when_disabled, focus_ring, hit_box, row_height,
+        tone_icon,
+    },
 };
 use rouge_core::Role;
 use rouge_core::{
@@ -356,7 +359,8 @@ const RIPPLE_ALPHA: f32 = 0.24;
 pub struct IconButton {
     icon: IconName,
     label: String,
-    icon_size: f32,
+    size: Option<ControlSize>,
+    icon_size: Option<f32>,
     color: Option<Prop<Fill>>,
     shortcut: Option<Chord>,
     disabled: Prop<bool>,
@@ -373,7 +377,8 @@ pub fn icon_button(icon: IconName, #[prop(into)] label: String) -> IconButton {
     IconButton {
         icon,
         label,
-        icon_size: tokens::ICON_SIZE,
+        size: None,
+        icon_size: None,
         color: None,
         shortcut: None,
         disabled: Prop::Static(false),
@@ -393,7 +398,7 @@ impl IconButton {
     }
 
     pub fn icon_size(mut self, size: f32) -> Self {
-        self.icon_size = size;
+        self.icon_size = Some(size);
         self
     }
 
@@ -427,6 +432,11 @@ impl IconButton {
         self.on_click = on_click.into();
         self
     }
+
+    pub fn control_size(mut self, size: ControlSize) -> Self {
+        self.size = Some(size);
+        self
+    }
 }
 
 chrome!(IconButton);
@@ -446,13 +456,22 @@ impl View for IconButton {
                 None => Fill::Role(Role::TextMuted),
             }
         };
+        let control = self
+            .size
+            .unwrap_or_else(|| ControlSize::of(presentation().get_untracked()));
+        let (side, glyph) = match control {
+            ControlSize::Large => (tokens::CONTROL_HEIGHT_LARGE, tokens::ICON_SIZE_LARGE),
+            ControlSize::Small | ControlSize::Medium => {
+                (tokens::ICON_BUTTON_SIZE, tokens::ICON_SIZE)
+            }
+        };
         let root = view! {
-            <div flex flex_none items_center justify_center size=tokens::ICON_BUTTON_SIZE
+            <div flex flex_none items_center justify_center size=side
                  rounded=tokens::Radius::Control border=1.0 border_color=Color::TRANSPARENT
                  on_hover={move |inside| hovered.set(inside)}
                  on_press={move |down| pressed.set(down)}
                  scale={move || if pressed.get() { tokens::PRESS_SCALE } else { 1.0 }}>
-                {Icon::new(self.icon, foreground).size(self.icon_size)}
+                {Icon::new(self.icon, foreground).size(self.icon_size.unwrap_or(glyph))}
             </div>
         }
         .hover(|style| style.bg(Role::SurfaceHover))
@@ -599,14 +618,15 @@ impl<T: CheckModel> View for Checkbox<T> {
                 })
             }
         };
+        let side = by_touch(tokens::CHECKBOX_SIZE_LARGE, tokens::CHECKBOX_SIZE);
         let root = view! {
-            <div flex_none size=tokens::CHECKBOX_SIZE rounded=tokens::Radius::Inner border=1.0
+            <div flex_none size=side rounded=tokens::Radius::Inner border=1.0
                  bg={marked(Role::Accent, Role::Elevated)} border_color={marked(Role::Accent, Role::Border)}>
                 {mark}
             </div>
         }
         .hover(|style| style.border_color(Role::Accent));
-        let root = fade_when_disabled(focus_ring(root), &disabled)
+        let root = fade_when_disabled(focus_ring(hit_box(root)), &disabled)
             .enabled(move || !disabled.get())
             .is_checked(move || model.state() == CheckState::Checked)
             .on_activate(move || model.toggle());
@@ -792,8 +812,9 @@ impl View for Segment {
         let badge = badge.map(|badge| {
             view! { <div absolute top=0.0 right=0.0 flex pass_through>{badge}</div> }
         });
+        let height = by_touch(SEGMENT_TOUCH, 24.0);
         let root = view! {
-            <div relative h=24.0 flex items_center justify_center gap=Space::X1 px=padding rounded=tokens::Radius::Inner
+            <div relative h=height flex items_center justify_center gap=Space::X1 px=padding rounded=tokens::Radius::Inner
                  text_color=Role::TextSecondary>
                 {icon}
                 {caption.map(|caption| view! { <text small>{caption}</text> })}
@@ -821,6 +842,8 @@ impl View for Segment {
             .build(cx);
     }
 }
+
+const SEGMENT_TOUCH: f32 = 36.0;
 
 pub struct Disclosure {
     expanded: Prop<bool>,
@@ -1046,13 +1069,14 @@ impl View for SectionHeader {
     }
 }
 
+#[derive(Clone)]
 pub struct RowAction {
-    label: String,
-    icon: Option<IconName>,
+    pub(crate) label: String,
+    pub(crate) icon: Option<IconName>,
     icon_only: bool,
-    destructive: bool,
-    on_select: Callback,
-    test_id: Option<String>,
+    pub(crate) destructive: bool,
+    pub(crate) on_select: Callback,
+    pub(crate) test_id: Option<String>,
 }
 
 pub fn row_action(label: impl Into<String>, on_select: impl Into<Callback>) -> RowAction {
@@ -1146,11 +1170,17 @@ pub struct ListRow {
     selection: Prop<SelectionState>,
     on_click: Callback,
     actions: Vec<RowAction>,
+    leading: Option<AnyView>,
+    detail: Option<String>,
     trailing: Option<AnyView>,
+    chevron: bool,
     test_id: Option<String>,
     style: StyleDelta,
     children: Vec<AnyView>,
 }
+
+#[derive(Clone, Copy)]
+pub(crate) struct Grouped;
 
 #[component]
 pub fn list_row() -> ListRow {
@@ -1159,7 +1189,10 @@ pub fn list_row() -> ListRow {
         selection: Prop::Static(SelectionState::None),
         on_click: Callback::default(),
         actions: Vec::new(),
+        leading: None,
+        detail: None,
         trailing: None,
+        chevron: false,
         test_id: None,
         style: StyleDelta::default(),
         children: Vec::new(),
@@ -1203,6 +1236,21 @@ impl ListRow {
             .extend(children.into_iter().map(View::into_any));
         self
     }
+
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn chevron(mut self) -> Self {
+        self.chevron = true;
+        self
+    }
+
+    pub fn leading(mut self, leading: impl View) -> Self {
+        self.leading = Some(leading.into_any());
+        self
+    }
 }
 
 chrome!(ListRow);
@@ -1227,10 +1275,42 @@ impl View for ListRow {
             let look = look.clone();
             move || look().background.unwrap_or_default()
         };
+        let grouped = use_context::<Grouped>().is_some();
+        let (height, taller) = (row_height(), self.detail.is_some());
+        let min_h = move || height() + if taller { DETAIL_HEIGHT } else { 0.0 };
+        let (inset, gap) = if grouped {
+            (Space::X3.px(), Space::X3)
+        } else {
+            (8.0, Space::X2)
+        };
+        let body = match self.detail {
+            Some(detail) => vec![
+                view! {
+                    <div flex col flex_1 min_w=0.0>
+                        <div flex items_center gap=Space::X2>{self.children}</div>
+                        <text small muted no_wrap>{detail}</text>
+                    </div>
+                }
+                .into_any(),
+            ],
+            None => self.children,
+        };
+        let pointer = self.chevron.then(|| {
+            Icon::new(IconName::ChevronRight, Role::TextMuted)
+                .size(tokens::ICON_SIZE_SMALL)
+                .into_any()
+        });
+        let trailing = match (self.trailing, pointer) {
+            (Some(trailing), Some(pointer)) => Some(
+                view! { <div flex items_center gap=Space::X1>{trailing}{pointer}</div> }.into_any(),
+            ),
+            (trailing, pointer) => trailing.or(pointer),
+        };
         let root = view! {
-            <div flex items_center min_h={row_height()} pl={8.0 + indent(self.depth)} pr=Space::X2 gap=Space::X2
+            <div flex items_center min_h=min_h pl={inset + indent(self.depth)} pr={inset} gap=gap
                  rounded=tokens::Radius::Inner text_color={move || look().foreground}>
-                {self.children}
+                {self.leading}
+                {body}
             </div>
         }
         .hover(|style| style.bg(Role::SurfaceHover))
@@ -1241,13 +1321,13 @@ impl View for ListRow {
         let resting = |trailing: AnyView| view! { <div flex flex_none items_center ml=auto()>{trailing}</div> };
         let root = if self.actions.is_empty() {
             activate(
-                root.children(self.trailing.map(resting)),
+                root.children(trailing.map(resting)),
                 self.on_click,
                 FocusPolicy::Tab,
             )
         } else if presentation().get_untracked().is_touch() {
             swiped(
-                root.children(self.trailing.map(resting)),
+                root.children(trailing.map(resting)),
                 self.actions,
                 self.on_click,
             )
@@ -1259,7 +1339,7 @@ impl View for ListRow {
                     Fill::Role(Role::SurfaceHover)
                 }
             };
-            hovered(root, self.trailing, fill, self.actions, self.on_click)
+            hovered(root, trailing, fill, self.actions, self.on_click)
         };
         self.style.apply(root).build(cx);
     }
@@ -1351,15 +1431,9 @@ fn swiped(root: Div, actions: Vec<RowAction>, on_click: Callback) -> Div {
     view! { <div relative overflow_hidden>{row}</div> }
 }
 
+const DETAIL_HEIGHT: f32 = 12.0;
 const SWIPE_RESISTANCE: f32 = 0.2;
 const SWIPE_PROJECTION: f32 = 0.2;
-
-#[component]
-pub fn action_bar() -> Div {
-    view! {
-        <div flex items_center justify_end gap=Space::X2 min_h=tokens::BAR_HEIGHT px=Space::X3 bg=Role::Chrome/>
-    }
-}
 
 pub struct Backdrop {
     align_top: bool,

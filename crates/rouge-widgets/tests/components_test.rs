@@ -1,3 +1,6 @@
+mod common;
+
+use common::handheld_test;
 use rouge_core::testing::{TestError, TestResult, TestUi, assert_near, counter};
 use rouge_core::{
     Color, Cursor, Div, InputKind, Key, KeyEvent, Point, PointerButton, Rect, Styled, Theme,
@@ -908,24 +911,21 @@ fn a_modal_is_a_full_height_sheet_on_a_handheld() -> TestResult {
     let _entered = Runtime::new().enter();
     let open = signal(true);
     let (confirmed, confirm) = counter();
-    let mut ui = component_test()
-        .size(390.0, 700.0)
-        .input(InputKind::Touch)
-        .build(move || {
-            let dialog = move || {
-                let confirm = confirm.clone();
-                view! {
-                    <modal test_id="dialog" title="Confirm" on_dismiss={move || open.set(false)}>
-                        <button test_id="ok" label="OK" on_click=confirm/>
-                    </modal>
-                }
-            };
+    let mut ui = handheld_test().build(move || {
+        let dialog = move || {
+            let confirm = confirm.clone();
             view! {
-                <div size_full>
-                    <show when={move || open.get()} children=dialog/>
-                </div>
+                <modal test_id="dialog" title="Confirm" on_dismiss={move || open.set(false)}>
+                    <button test_id="ok" label="OK" on_click=confirm/>
+                </modal>
             }
-        });
+        };
+        view! {
+            <div size_full>
+                <show when={move || open.get()} children=dialog/>
+            </div>
+        }
+    });
     ui.run(2.0);
     let sheet = ui.rect_of("dialog")?;
     assert_eq!(

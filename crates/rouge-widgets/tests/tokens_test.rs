@@ -3,7 +3,7 @@ mod common;
 use common::builder;
 use rouge_core::testing::{RED, TestResult, TestUi};
 use rouge_core::view;
-use rouge_core::{Color, LayoutTransition, Styled, View, div};
+use rouge_core::{Color, InputKind, LayoutTransition, Styled, View, div};
 use rouge_reactive::{Runtime, Signal, keyed_list, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::tokens::{MotionScale, Pace, Space, UNIT};
@@ -134,6 +134,35 @@ fn every_control_is_a_whole_number_of_units_tall_and_starts_on_the_grid() -> Tes
     for control in CONTROLS {
         assert!(ui.bounds_of(control).is_some(), "{control} is mounted");
     }
+    Ok(())
+}
+
+#[test]
+fn on_touch_every_control_stays_on_the_grid_and_offers_a_44_px_target() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = component_test()
+        .size(480.0, 1600.0)
+        .input(InputKind::Touch)
+        .build(catalogue);
+    ui.run(0.5);
+    for control in CONTROLS {
+        let bounds = ui.rect_of(control)?;
+        assert_eq!(
+            (bounds.origin.y % UNIT, bounds.size.height % UNIT),
+            (0.0, 0.0),
+            "{control} is on the grid: {bounds:?}"
+        );
+    }
+    for control in [
+        "iconed", "icon", "toggle", "mixed", "checked", "radio", "segments", "slider", "input",
+        "number", "select",
+    ] {
+        let height = ui.rect_of(control)?.size.height;
+        assert!(height >= 44.0, "{control} is {height} tall on touch");
+    }
+    assert_eq!(ui.rect_of("icon")?.size.width, 44.0);
+    let thumb = ui.rect_of("toggle-thumb")?.size;
+    assert_eq!((thumb.width, thumb.height), (28.0, 28.0));
     Ok(())
 }
 

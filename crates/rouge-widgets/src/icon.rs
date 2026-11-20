@@ -36,6 +36,7 @@ icons! {
     ChevronDown => "chevron-down",
     ChevronLeft => "chevron-left",
     ChevronRight => "chevron-right",
+    ChevronUp => "chevron-up",
     ChevronsDownUp => "chevrons-down-up",
     ChevronsUpDown => "chevrons-up-down",
     Circle => "circle",
