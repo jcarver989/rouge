@@ -129,3 +129,22 @@ fn a_composer_sends_on_enter_or_its_button_and_morphs_into_stop_while_busy() -> 
     assert_eq!(sent.get().len(), 3);
     Ok(())
 }
+
+#[test]
+fn a_busy_composer_without_a_stop_handler_only_shows_progress() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let draft = signal("next message".to_owned());
+    let busy = signal(true);
+    let mut ui = component_test().size(400.0, 200.0).build(move || {
+        view! { <composer draft=draft busy=busy test_id="composer"/> }
+    });
+    ui.run(0.3);
+    assert!(ui.bounds_of("composer-spinner").is_some());
+    assert!(ui.bounds_of("composer-stop").is_none());
+    ui.click_on("composer-send")?;
+    assert_eq!(draft.get(), "next message");
+    busy.set(false);
+    ui.run(0.5);
+    assert!(ui.bounds_of("composer-spinner").is_none());
+    Ok(())
+}

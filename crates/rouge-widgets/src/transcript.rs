@@ -11,7 +11,7 @@ use rouge_core::{
     virtual_list,
 };
 use rouge_markdown::MarkdownStream;
-use rouge_reactive::{Callback, KeyedList, ReadSignal, Signal, signal};
+use rouge_reactive::{Callback, KeyedList, ReadSignal, Signal, memo, signal};
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -149,138 +149,94 @@ impl Composer {
 
 chrome!(Composer);
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ComposerAction {
+    Send,
+    Busy,
+    Stop,
+}
+
 impl View for Composer {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (draft, on_send, on_stop, id) = (self.draft, self.on_send, self.on_stop, self.test_id);
-        let busy = Rc::new(self.busy.memo());
+        let can_stop = on_stop.is_set();
+        let state = memo(move || match (self.busy.get(), can_stop) {
+            (false, _) => ComposerAction::Send,
+            (true, false) => ComposerAction::Busy,
+            (true, true) => ComposerAction::Stop,
+        });
+        let working = move || state.get() != ComposerAction::Send;
+        let interactive = move || match state.get() {
+            ComposerAction::Send => !draft.with(|draft| draft.trim().is_empty()),
+            ComposerAction::Busy => false,
+            ComposerAction::Stop => true,
+        };
         let theme = Theme::current();
         let part = |name: &str| id.part(format_args!("{name}"));
-        let working = {
-            let busy = busy.clone();
-            move || busy.get()
-        };
-        let send = {
-            let working = working.clone();
-            move || {
-                let said = draft.get_untracked().trim().to_owned();
-                if !said.is_empty() && !working() {
-                    draft.set(String::new());
-                    on_send.call(said);
-                }
+        let send = move || {
+            let said = draft.get_untracked().trim().to_owned();
+            if !working() && !said.is_empty() {
+                draft.set(String::new());
+                on_send.call(said);
             }
         };
         let field = view! {
             <text_input value=draft multiline min_rows=1 max_rows=MAX_ROWS submit_on_enter
-                 on_submit={{
-                     let send = send.clone();
-                     move |_: String| send()
-                 }}
+                 on_submit={move |_: String| send()}
                  flex_1 min_w=0.0 bg=Color::TRANSPARENT border_color=Color::TRANSPARENT
                  placeholder?=self.placeholder test_id?=part("input")/>
         };
         let pressed = signal(false);
-        let can_stop = on_stop.is_set();
-        let interactive = {
-            let working = working.clone();
-            move || {
-                if working() {
-                    can_stop
-                } else {
-                    !draft.with(|draft| draft.trim().is_empty())
-                }
-            }
+        let activate = move || match state.get() {
+            ComposerAction::Send => send(),
+            ComposerAction::Stop => on_stop.call(),
+            ComposerAction::Busy => (),
         };
-        let action_bg = {
-            let working = working.clone();
-            move || {
-                let palette = theme.get();
-                if working() {
-                    palette.surface_selected
-                } else {
-                    palette.accent
-                }
-            }
-        };
-        let action_width = {
-            let working = working.clone();
-            move || if working() { STOP_DIAMETER } else { SEND_WIDTH }
-        };
-        let action_radius = {
-            let working = working.clone();
-            move || {
-                if working() {
-                    Radius::Full
-                } else {
-                    Radius::Control
-                }
-            }
-        };
-        let action_opacity = {
-            let working = working.clone();
-            let interactive = interactive.clone();
-            move || {
-                if !working() && !interactive() {
-                    DISABLED_OPACITY
-                } else {
-                    1.0
-                }
-            }
-        };
-        let activate = {
-            let working = working.clone();
-            move || {
-                if working() {
-                    if can_stop {
-                        on_stop.call();
-                    }
-                } else {
-                    send();
-                }
-            }
-        };
+        let spinner_id = part("spinner");
         let stop_id = part("stop");
-        let stop = view! {
-            <show when=working.clone() enter=(MORPH_HIDDEN, Pace::Enter) exit=(MORPH_HIDDEN, Pace::Exit)>
-                <div test_id?={stop_id.clone()} absolute inset=0.0 flex items_center justify_center pass_through>
+        let indicator = view! {
+            <show when=working enter=(MORPH_HIDDEN, Pace::Enter) exit=(MORPH_HIDDEN, Pace::Exit)>
+                <div test_id?={spinner_id.clone()} absolute inset=0.0 flex items_center justify_center pass_through>
                     {spinning_ring(STOP_DIAMETER, Role::Text, Role::Accent)}
-                    <div absolute size=STOP_GLYPH rounded=Radius::Inner bg=Role::Text/>
+                    {can_stop.then(|| view! {
+                        <div test_id?={stop_id.clone()} absolute size=STOP_GLYPH rounded=Radius::Inner bg=Role::Text/>
+                    })}
                 </div>
             </show>
         };
         let label = view! {
             <div flex items_center justify_center
-                 opacity={
-                     let working = working.clone();
-                     move || if working() { 0.0 } else { 1.0 }
-                 }
-                 scale={
-                     let working = working.clone();
-                     move || if working() { MORPH_SCALE } else { 1.0 }
-                 }
+                 opacity={move || if working() { 0.0 } else { 1.0 }}
+                 scale={move || if working() { MORPH_SCALE } else { 1.0 }}
                  transition=Pace::Move>
                 <text label no_wrap text_color=Role::AccentForeground>"Send"</text>
             </div>
         };
         let action = focus_ring(view! {
             <div relative flex items_center justify_center flex_none overflow_hidden
-                 h=STOP_DIAMETER w=action_width rounded=action_radius
+                 h=STOP_DIAMETER w={move || if working() { STOP_DIAMETER } else { SEND_WIDTH }}
+                 rounded={move || if working() { Radius::Full } else { Radius::Control }}
                  border=1.0 border_color=Color::TRANSPARENT
-                 bg=action_bg opacity=action_opacity
-                 cursor={
-                     let interactive = interactive.clone();
-                     move || if interactive() { Cursor::Pointer } else { Cursor::Default }
-                 }
+                 bg={move || if working() { Role::SurfaceSelected } else { Role::Accent }}
+                 opacity={move || if working() || interactive() { 1.0 } else { DISABLED_OPACITY }}
                  on_press={move |down| pressed.set(down)}
                  scale={move || if pressed.get() { PRESS_SCALE } else { 1.0 }}
                  transition=Pace::Move
                  layout_transition={LayoutTransition::new(Pace::Move).size()}
                  test_id?=part("send")>
                 {label}
-                {stop}
+                {indicator}
             </div>
         })
         .enabled(interactive)
         .on_activate(activate)
+        .cursor(move || {
+            if interactive() {
+                Cursor::Pointer
+            } else {
+                Cursor::Default
+            }
+        })
         .focus_policy(FocusPolicy::Tab);
         let root = view! {
             <div flex items_end gap=Space::X2 p=Space::X2 material=Material::Glass
@@ -288,16 +244,13 @@ impl View for Composer {
                 {field}
                 {action}
                 <div absolute inset=0.0 pass_through rounded=Radius::Floating
-                     border=1.0 border_color={
-                         let working = working.clone();
-                         move || {
-                             if working() {
-                                 theme.get().accent.with_alpha(BUSY_BORDER_ALPHA)
-                             } else {
-                                 Color::TRANSPARENT
-                             }
+                     border=1.0 border_color={move || {
+                         if working() {
+                             theme.get().accent.with_alpha(BUSY_BORDER_ALPHA)
+                         } else {
+                             Color::TRANSPARENT
                          }
-                     }/>
+                     }}/>
             </div>
         };
         self.style.apply(root).build(cx);
