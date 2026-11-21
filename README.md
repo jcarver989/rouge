@@ -152,14 +152,14 @@ fn the_button_adds_one() -> TestResult {
 
 ## Run the examples
 
-Clone this repository and install [`just`](https://github.com/casey/just). Use `just run <example> [platform]` from the checkout. Omit the platform to run on your macOS or Linux desktop.
+Clone this repository and install [Mise](https://mise.jdx.dev). From the checkout, run `mise trust` and `mise install`, then use `mise run run <example> [platform]`. Omit the platform to run on your macOS or Linux desktop.
 
 ```sh
-just examples             # list examples and supported platforms
-just run todomvc          # desktop
-just run todomvc web      # browser
-just run todomvc ios      # iOS simulator
-just run todomvc android  # connected arm64 Android device or emulator
+mise run examples            # list examples and supported platforms
+mise run run todomvc         # desktop
+mise run run todomvc web     # browser
+mise run run todomvc ios     # iOS simulator
+mise run run todomvc android # connected arm64 Android device or emulator
 ```
 
 | Example | What it shows | Platforms |
@@ -174,19 +174,19 @@ just run todomvc android  # connected arm64 Android device or emulator
 | `settings` | A settings screen | Desktop |
 | `surface` | GPU content from a different thread, shown with no copy | Desktop |
 
-Use `just --list` for workspace tasks, `just --list platform web` (or `ios` or `android` in place of `web`) for platform build and check tasks, and `just --list perf` for benchmarks and profiling. The platform-specific `build` recipes take Cargo example names (such as `android_todomvc`); `just run` takes the IDs in the table above.
+Use `mise tasks` to list workspace tasks, including the `platform:web:*`, `platform:ios:*`, and `platform:android:*` build and check tasks and the `perf:*` benchmark and profiling tasks. The platform-specific `build` tasks take Cargo example names (such as `android_todomvc`); `mise run run` takes the IDs in the table above.
 
 ### In the browser
 
-Install Python 3, the `wasm32-unknown-unknown` Rust target, and `wasm-bindgen-cli` at the same version as `wasm-bindgen` in `Cargo.lock`. After `just run todomvc web` starts the server, open <http://localhost:8000> in a browser that supports WebGPU or WebGL2. Add `?rouge_backend=gl` to the URL to use WebGL2 where WebGPU is available.
+Install Python 3, the `wasm32-unknown-unknown` Rust target, and `wasm-bindgen-cli` at the same version as `wasm-bindgen` in `Cargo.lock`. After `mise run run todomvc web` starts the server, open <http://localhost:8000> in a browser that supports WebGPU or WebGL2. Add `?rouge_backend=gl` to the URL to use WebGL2 where WebGPU is available.
 
 ### In the iOS simulator
 
-On an Apple Silicon Mac, select the full Xcode installation with `xcode-select`, install an iOS simulator runtime and the `aarch64-apple-ios-sim` Rust target, then run `just run todomvc ios`. This builds, installs, and launches the app and streams its console output. The default simulator is `iPhone 17 Pro`; set `ROUGE_IOS_DEVICE` to a name or UDID from `xcrun simctl list devices available` to use another one.
+On an Apple Silicon Mac, select the full Xcode installation with `xcode-select`, install an iOS simulator runtime and the `aarch64-apple-ios-sim` Rust target, then run `mise run run todomvc ios`. This builds, installs, and launches the app and streams its console output. The default simulator is `iPhone 17 Pro`; set `ROUGE_IOS_DEVICE` to a name or UDID from `xcrun simctl list devices available` to use another one.
 
 ### On Android
 
-Android support is experimental. Install the Android SDK (`ANDROID_HOME`, including build-tools, platform-tools and a platform), a JDK (`keytool` and `java` on `PATH`), the Android NDK (`ANDROID_NDK_HOME`), [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk), and the `aarch64-linux-android` Rust target. Put `adb` on `PATH`, then run `just run todomvc android` with an arm64 device or emulator connected. If more than one is connected, set `ANDROID_SERIAL` to the serial shown by `adb devices`.
+Android support is experimental. Install the Android SDK (`ANDROID_HOME`, including build-tools, platform-tools and a platform), a JDK (`keytool` and `java` on `PATH`), the Android NDK (`ANDROID_NDK_HOME`), [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk), and the `aarch64-linux-android` Rust target. Put `adb` on `PATH`, then run `mise run run todomvc android` with an arm64 device or emulator connected. If more than one is connected, set `ANDROID_SERIAL` to the serial shown by `adb devices`.
 
 An Android app is a `cdylib` that exports `android_main` and gives the activity to Rouge:
 
@@ -208,7 +208,7 @@ extern "Rust" fn android_main(android: AndroidApp) {
 
 ## Publish an app
 
-Add the [`rouge-framer`](crates/rouge-framer) preset to your app's `.framer/` project and run `cargo framer`. It generates the GitHub Actions publishing workflow, a `cargo rouge` packaging command and a setup checklist for the destinations you enable: GitHub Pages, Linux and macOS downloads, TestFlight/App Store and Google Play. Start with the workflow's `check` channel to validate builds without publishing or providing store credentials. Mobile `preview` uploads to TestFlight or Play internal testing. Mobile jobs do not run for `production`; promote the tested preview build in App Store Connect or Play Console. Downstream preset users can also deploy debug builds with `cargo rouge run ios` or `cargo rouge run android`. Those commands are separate from this repository’s `just run` example launchers. See the generated `PUBLISHING.md` for setup and cutover checks.
+Add the [`rouge-framer`](crates/rouge-framer) preset to your app's `.framer/` project and run `cargo framer`. It generates the GitHub Actions publishing workflow, a `cargo rouge` packaging command and a setup checklist for the destinations you enable: GitHub Pages, Linux and macOS downloads, TestFlight/App Store and Google Play. Start with the workflow's `check` channel to validate builds without publishing or providing store credentials. Mobile `preview` uploads to TestFlight or Play internal testing. Mobile jobs do not run for `production`; promote the tested preview build in App Store Connect or Play Console. Downstream preset users can also deploy debug builds with `cargo rouge run ios` or `cargo rouge run android`. Those commands are separate from this repository’s `mise run run` example launchers. See the generated `PUBLISHING.md` for setup and cutover checks.
 
 See the [`rouge-framer` setup examples](crates/rouge-framer/README.md) for configuring a downstream app.
 

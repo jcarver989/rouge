@@ -75,14 +75,17 @@ run_example() {
                 [[ -n ${ANDROID_HOME:-} ]] || fail 'Set ANDROID_HOME to the Android SDK. See README.md for setup.'
                 ;;
         esac
-        exec "${ROUGE_JUST:-just}" "platform::$platform::run" "$target"
+        exec mise run "platform:$platform:run" "$target"
     done < <(catalog)
 
-    fail "Unknown example '$example'. Run 'just examples' to see the available examples."
+    fail "Unknown example '$example'. Run 'mise run examples' to see the available examples."
 }
 
 case "${1-}" in
     list) show_examples ;;
-    run) run_example "$2" "$3" ;;
-    *) fail 'Use just examples or just run <example> [platform].' ;;
+    run)
+        [[ $# -ge 2 && $# -le 3 ]] || fail 'Use mise run run <example> [platform].'
+        run_example "$2" "${3:-desktop}"
+        ;;
+    *) fail 'Use mise run examples or mise run run <example> [platform].' ;;
 esac

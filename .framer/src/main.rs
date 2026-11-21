@@ -1,7 +1,7 @@
 use framer::Project;
 use framer::github::Step;
 use framer::rust::CargoWorkspace;
-use framer_presets::{Ci, Release, ReleasePlz, Rust, RustMonorepo, Workspace};
+use framer_presets::{Ci, Release, ReleasePlz, Rust, RustMonorepo, Tools, Workspace};
 use std::mem;
 use std::process::ExitCode;
 
@@ -25,7 +25,12 @@ fn main() -> ExitCode {
                 "aarch64-apple-ios-sim",
                 "aarch64-linux-android",
             ]))
-            .workspace(Workspace::new().license("MIT"))
+            .workspace(
+                Workspace::new()
+                    .license("MIT")
+                    .members(["crates/*", "crates/rouge-framer/tests/fixtures/mobile"]),
+            )
+            .tools(Tools::new().mise_toml())
             .ci(Ci::new().setup(install_fontconfig()).setup(
                 Step::run("sudo apt-get install -y libvulkan1 mesa-vulkan-drivers")
                     .name("Install Vulkan software rendering")

@@ -1,0 +1,185 @@
+[tasks.examples]
+description = "List examples and their supported platforms"
+run = "scripts/run-example list"
+
+[tasks.run]
+description = "Launch an example on desktop, web, iOS, or Android"
+usage = '''
+arg "<example>"
+arg "[platform]" default="desktop"
+'''
+raw = true
+run = 'scripts/run-example run "$usage_example" "$usage_platform"'
+
+[tasks.style-check]
+description = "Keep widget spacing on the 4px grid and radii on the token scale"
+run = "scripts/style-check"
+
+[tasks."platform:web:check"]
+description = "Type-check the browser target"
+run = [
+    "cargo check --locked --target wasm32-unknown-unknown -p rouge --tests --all-features",
+    "cargo check --locked --target wasm32-unknown-unknown -p rouge --example component_gallery",
+]
+
+[tasks."platform:web:lint"]
+description = "Run Clippy on the browser target, failing on any warning"
+run = [
+    "cargo clippy --locked --target wasm32-unknown-unknown --workspace --lib --all-features -- -D warnings",
+    "cargo clippy --locked --target wasm32-unknown-unknown -p rouge --tests --all-features -- -D warnings",
+    "cargo clippy --locked --target wasm32-unknown-unknown -p rouge --example component_gallery -- -D warnings",
+]
+
+[tasks."platform:web:test"]
+description = "Run browser tests in headless Chrome (requires matching chromedriver and wasm-bindgen-test-runner)"
+run = 'CHROMEDRIVER="$(command -v chromedriver)" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner cargo test --locked --target wasm32-unknown-unknown -p rouge --test platform_web_test --test platform_web_host_test --test platform_web_host_webgl_test'
+
+[tasks."platform:web:build"]
+description = "Build a browser example into target/web (requires wasm-bindgen; uses wasm-opt when installed)"
+usage = '''
+arg "[example]" default="component_gallery"
+arg "[package]" default="rouge"
+'''
+run = '''
+out="target/web/$usage_example"
+cargo build --locked --profile wasm-release --target wasm32-unknown-unknown -p "$usage_package" --example "$usage_example"
+wasm-bindgen --target web --no-typescript --out-dir "$out" "target/wasm32-unknown-unknown/wasm-release/examples/$usage_example.wasm"
+if command -v wasm-opt >/dev/null; then
+    wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals --enable-reference-types --enable-multivalue "$out/${usage_example}_bg.wasm" -o "$out/${usage_example}_bg.wasm"
+fi
+sed "s/MODULE/$usage_example/g" web/index.html > "$out/index.html"
+'''
+
+[tasks."platform:web:run"]
+usage = 'arg "<example>"'
+hide = true
+raw = true
+depends = [{ task = "platform:web:build", args = ["{{ usage.example }}"] }]
+run = 'python3 -m http.server 8000 --bind 127.0.0.1 -d "target/web/$usage_example"'
+
+[tasks."platform:ios:check"]
+description = "Type-check the iOS targets (requires full Xcode and the iOS Rust targets)"
+run = [
+    "cargo check --locked --target aarch64-apple-ios -p rouge --all-features",
+    "cargo check --locked --target aarch64-apple-ios-sim -p rouge --tests --all-features",
+    "cargo check --locked --target aarch64-apple-ios-sim -p rouge --example component_gallery",
+]
+
+[tasks."platform:ios:build"]
+description = "Bundle an example into target/ios for the iOS simulator"
+usage = '''
+arg "[example]" default="component_gallery"
+arg "[package]" default="rouge"
+'''
+run = '''
+bundle="target/ios/$usage_example.app"
+bundle_id="dev.rouge.$(printf '%s' "$usage_example" | tr _ -)"
+cargo build --locked --target aarch64-apple-ios-sim -p "$usage_package" --example "$usage_example"
+rm -rf "$bundle"
+mkdir -p "$bundle"
+cp "target/aarch64-apple-ios-sim/debug/examples/$usage_example" "$bundle/"
+sed -e "s/EXECUTABLE/$usage_example/g" -e "s/BUNDLE_ID/$bundle_id/g" ios/Info.plist > "$bundle/Info.plist"
+'''
+
+[tasks."platform:ios:run"]
+usage = 'arg "<example>"'
+hide = true
+raw = true
+depends = [{ task = "platform:ios:build", args = ["{{ usage.example }}"] }]
+run = '''
+device="${ROUGE_IOS_DEVICE:-iPhone 17 Pro}"
+bundle_id="dev.rouge.$(printf '%s' "$usage_example" | tr _ -)"
+xcrun simctl boot "$device" 2>/dev/null || true
+open -a Simulator
+xcrun simctl install "$device" "target/ios/$usage_example.app"
+xcrun simctl launch --console-pty --terminate-running-process "$device" "$bundle_id"
+'''
+
+[tasks."platform:android:check"]
+description = "Type-check the Android target (requires the Android NDK, cargo-ndk, and the Android Rust target)"
+run = [
+    "cargo ndk -t arm64-v8a check --locked -p rouge --all-features",
+    "cargo ndk -t arm64-v8a check --locked -p rouge --tests --all-features",
+    "cargo ndk -t arm64-v8a check --locked -p rouge --example android_todomvc",
+]
+
+[tasks."platform:android:build"]
+description = "Package an example into an APK in target/android (requires the Android SDK and a JDK)"
+usage = '''
+arg "[example]" default="android_todomvc"
+arg "[package]" default="rouge"
+'''
+run = '''
+cargo ndk -t arm64-v8a build --locked -p "$usage_package" --example "$usage_example"
+scripts/android-apk "$usage_example" "dev.rouge.$(printf '%s' "$usage_example" | tr - _)"
+'''
+
+[tasks."platform:android:run"]
+usage = 'arg "<example>"'
+hide = true
+raw = true
+depends = [{ task = "platform:android:build", args = ["{{ usage.example }}"] }]
+run = '''
+package_id="dev.rouge.$(printf '%s' "$usage_example" | tr - _)"
+adb install -r "target/android/$usage_example/$usage_example.apk"
+adb shell am start -n "$package_id/android.app.NativeActivity"
+adb logcat -v color RustStdoutStderr:V AndroidRuntime:E '*:S'
+'''
+
+[tasks."perf:bench"]
+description = "Measure headless GPU benchmarks; accepts scenario filters, --save, and --runs <n>"
+raw_args = true
+run = "cargo run --release -p rouge-bench -- run"
+
+[tasks."perf:profile"]
+description = "Sample a benchmark scenario and print its hottest functions (macOS: sample; Linux: perf)"
+usage = '''
+arg "<scenario>"
+arg "[seconds]" default="10"
+'''
+run = 'scripts/profile "$usage_scenario" "$usage_seconds"'
+
+[tasks."perf:heap"]
+description = "Write a dhat heap profile for one scenario to target/bench/dhat-heap.json"
+usage = 'arg "<scenario>"'
+run = 'cargo run --release -p rouge-bench --features dhat -- run "$usage_scenario" --runs 0'
+
+[tasks.check]
+description = "Type-check every crate and target"
+run = "cargo check --workspace --all-targets --all-features"
+
+[tasks.test]
+description = "Run tests with nextest, then doctests, which nextest doesn't run"
+run = ['"$(mise which cargo-nextest)" nextest run --profile "${usage_profile?}" --workspace --all-features --no-tests pass', "cargo test --doc --workspace --all-features"]
+usage = 'arg "[profile]" default="default"'
+
+[tasks.test-ci]
+description = "Run tests with nextest's CI profile, which writes JUnit results"
+depends = ["test ci"]
+
+[tasks.lint]
+description = "Run Clippy, failing on any rustc, Clippy or Cargo warning"
+run = "CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features"
+
+[tasks.fmt]
+description = "Format all code"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.doc-check]
+description = "Build docs, failing on any warning"
+run = 'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --document-private-items'
+
+[tasks.framer]
+description = "Regenerate files from .framer/"
+run = "cargo run --quiet --manifest-path .framer/Cargo.toml"
+
+[tasks.framer-check]
+description = "Check generated files are up to date"
+run = "cargo run --quiet --locked --manifest-path .framer/Cargo.toml -- --check"
+
+[tools]
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.152"
