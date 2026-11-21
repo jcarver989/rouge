@@ -47,6 +47,7 @@ pub(crate) enum Op {
     Effect(EffectSlot, EffectInstance),
     ScrollLink(u64, ScrollLinked),
     ScrollTo(Point, bool),
+    LayoutTransition(LayoutTransition),
 }
 
 impl Op {
@@ -65,6 +66,7 @@ impl Op {
             Op::Effect(slot, effect) => tree.set_layer_effect(id, slot, effect),
             Op::ScrollLink(key, link) => tree.set_scroll_link(id, key, link),
             Op::ScrollTo(offset, anchored) => tree.scroll_to(id, offset, anchored),
+            Op::LayoutTransition(transition) => tree.set_layout_transition(id, transition),
         }
     }
 }
@@ -717,9 +719,13 @@ impl Div {
         self
     }
 
-    pub fn layout_transition(mut self, transition: impl Into<LayoutTransition>) -> Self {
-        self.spec.layer.get_or_insert_default().layout_transition = Some(transition.into());
-        self
+    pub fn layout_transition<U>(self, transition: impl IntoProp<LayoutTransition, U>) -> Self {
+        let mut last = None;
+        self.layer()
+            .write(transition.into_prop(), move |transition| {
+                (last.replace(transition) != Some(transition))
+                    .then_some(Op::LayoutTransition(transition))
+            })
     }
 
     pub fn animate(mut self, keyframes: Keyframes) -> Self {

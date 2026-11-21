@@ -1,4 +1,5 @@
 use crate::Cursor;
+use crate::animation::{LayoutTransition, Spring, Timing, Tween};
 use crate::length::Length;
 use rouge_reactive::{ReadSignal, Signal, memo};
 use rouge_render::{Color, EffectInstance, ShaderEffect};
@@ -70,6 +71,24 @@ impl PropFrom<i32> for Length {
 impl PropFrom<Cursor> for Option<Cursor> {
     fn prop_from(value: Cursor) -> Self {
         Some(value)
+    }
+}
+
+impl PropFrom<Timing> for LayoutTransition {
+    fn prop_from(value: Timing) -> Self {
+        value.into()
+    }
+}
+
+impl PropFrom<Spring> for LayoutTransition {
+    fn prop_from(value: Spring) -> Self {
+        value.into()
+    }
+}
+
+impl PropFrom<Tween> for LayoutTransition {
+    fn prop_from(value: Tween) -> Self {
+        value.into()
     }
 }
 

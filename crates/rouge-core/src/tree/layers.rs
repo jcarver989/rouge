@@ -8,7 +8,6 @@ use rouge_render::{Color, Corners, EffectInstance, Rect, SurfaceId};
 #[derive(Default)]
 pub(crate) struct LayerSpec {
     pub transition: Option<Timing>,
-    pub layout_transition: Option<LayoutTransition>,
     pub keyframes: Option<Keyframes>,
     pub rasterize: bool,
     pub surface: Option<SurfaceId>,
@@ -41,7 +40,6 @@ impl Tree {
         let layers = &mut self.layers;
         let id = layers.create_layer();
         layers.set_transition(id, spec.transition);
-        layers.set_layout_transition(id, spec.layout_transition);
         if let Some(keyframes) = spec.keyframes {
             layers.animate(id, keyframes);
         }
@@ -129,6 +127,12 @@ impl Tree {
         if let Some(layer) = self.layer_id(id, Slot::Own) {
             self.layers.set_effect(layer, slot, Some(effect), true);
             self.mark(Dirty::Composite);
+        }
+    }
+
+    pub(crate) fn set_layout_transition(&mut self, id: ElementId, transition: LayoutTransition) {
+        if let Some(layer) = self.layer_id(id, Slot::Own) {
+            self.layers.set_layout_transition(layer, Some(transition));
         }
     }
 
