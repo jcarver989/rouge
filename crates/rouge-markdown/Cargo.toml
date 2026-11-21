@@ -14,7 +14,7 @@ categories = ["text-processing", "parser-implementations"]
 workspace = true
 
 [dependencies]
-linkify = "0.10.0"
+linkify = "0.11.0"
 pulldown-cmark = "0.13.0"
 rouge-syntax.workspace = true
 serde = { workspace = true, features = ["rc"] }
