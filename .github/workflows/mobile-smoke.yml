@@ -1,0 +1,60 @@
+name: Mobile smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  ROUGE_CHANNEL: check
+
+defaults:
+  run:
+    working-directory: crates/rouge-framer/tests/fixtures/mobile
+
+jobs:
+  ios:
+    name: iOS device archive (Xcode 26)
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - run: mkdir -p .framer && cargo run --locked -p rouge-framer --example mobile_smoke
+      - run: cargo run --locked -p rouge-framer --example mobile_smoke -- setup ios
+      - run: cargo run --locked -p rouge-framer --example mobile_smoke -- build ios
+      - name: Check archive output
+        run: |
+          test -s .rouge/out/ios/app.xcarchive/Info.plist
+          test -d .rouge/out/ios/app.xcarchive/dSYMs/RougeApp.app.dSYM
+          test -s .rouge/out/ios/unsigned-app.zip
+          plutil -lint .rouge/out/ios/app.xcarchive/Products/Applications/RougeApp.app/PrivacyInfo.xcprivacy
+          unzip -t .rouge/out/ios/dSYMs.zip
+
+  android:
+    name: Android bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          cmdline-tools-version: "16111833"
+      - run: mkdir -p .framer && cargo run --locked -p rouge-framer --example mobile_smoke
+      - run: cargo run --locked -p rouge-framer --example mobile_smoke -- setup android
+      - run: cargo run --locked -p rouge-framer --example mobile_smoke -- build android
+      - run: test -s .rouge/out/android/app.aab
