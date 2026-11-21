@@ -1,7 +1,9 @@
 #![cfg(unix)]
 
+use framer::{DiskFs, Mode, Project};
 use rouge_framer::{
-    Action, Channel, GitHubReleases, Packager, PublishError, RougePublish, Target, TestFlight,
+    Action, Channel, GitHubReleases, Packager, PlayInternal, PublishError, RougePublish, Target,
+    TestFlight,
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use rouge_framer::{Device, Ios, Orientation};
@@ -92,29 +94,50 @@ fn signing_tools_install_without_credentials_and_use_private_key_files() -> Resu
             )
             .channel(Channel::Preview);
             sh.write_file("icon.png", "unused during upload")?;
-            tool(sh, "rcodesign", "echo 'rcodesign 0.0.0'")?;
-            tool(
-                sh,
-                "cargo",
-                r#"if [ "$1" != install ]; then exec "$REAL_CARGO" "$@"; fi
-[ -z "${APPLE_API_KEY+x}${APPLE_CERTIFICATE_PASSWORD+x}${ANDROID_UPLOAD_STORE_PASSWORD+x}${GH_TOKEN+x}" ]
+            #[cfg(target_os = "macos")]
+            {
+                tool(sh, "xcodebuild", "echo Xcode 26.2")?;
+                tool(sh, "xcrun", "echo 26.2")?;
+                tool(
+                    sh,
+                    "rustup",
+                    r#"[ "$*" = 'target add aarch64-apple-ios' ]
+[ -z "${APPLE_API_KEY+x}${IOS_PROFILE_BASE64+x}${ANDROID_UPLOAD_STORE_PASSWORD+x}${GH_TOKEN+x}" ]
 touch "$ROUGE_TEST_APP/installed""#,
-            )?;
-            packager.run(Action::Setup, Target::Ios)?;
-            assert!(sh.path_exists("installed"));
+                )?;
+                packager.run(Action::Setup, Target::Ios)?;
+                assert!(sh.path_exists("installed"));
+            }
             tool(
                 sh,
-                "xcrun",
-                r"python3 - <<'PY'
-import os, pathlib, stat
-keys = pathlib.Path(os.environ['API_PRIVATE_KEYS_DIR'])
-assert stat.S_IMODE(keys.parent.stat().st_mode) == 0o700
-key = keys / 'AuthKey_TEST.p8'
+                "xcodebuild",
+                r#"python3 - "$@" <<'PY'
+import pathlib, plistlib, stat, sys
+args = sys.argv[1:]
+assert args[0] == '-exportArchive'
+assert pathlib.Path(args[args.index('-archivePath') + 1]).name == 'app.xcarchive'
+assert args[args.index('-authenticationKeyID') + 1] == 'TEST'
+options = plistlib.loads(pathlib.Path(args[args.index('-exportOptionsPlist') + 1]).read_bytes())
+assert options['destination'] == 'upload' and options['teamID'] == 'TEAM123456'
+key = pathlib.Path(args[args.index('-authenticationKeyPath') + 1])
+scratch = key.parent.parent
+assert stat.S_IMODE(scratch.stat().st_mode) == 0o700
 assert stat.S_IMODE(key.stat().st_mode) == 0o600
 assert key.read_text().strip() == 'test-only'
-(pathlib.Path(os.environ['ROUGE_TEST_APP']) / 'scratch-path').write_text(str(keys.parent))
-PY",
+pathlib.Path('scratch-path').write_text(str(scratch))
+PY"#,
             )?;
+            assert!(matches!(
+                packager.run(Action::Publish, Target::Ios),
+                Err(PublishError::Invalid(message)) if message.contains("signed archive")
+            ));
+            assert!(!sh.path_exists("scratch-path"));
+            sh.create_dir(".rouge/out/ios/app.xcarchive")?;
+            assert!(matches!(
+                packager.clone().channel(Channel::Production).run(Action::Publish, Target::Ios),
+                Err(PublishError::Invalid(message)) if message.contains("App Store Connect")
+            ));
+            assert!(!sh.path_exists("scratch-path"));
             packager.run(Action::Publish, Target::Ios)?;
             assert!(!Path::new(&sh.read_file("scratch-path")?).exists());
             Ok(())
@@ -141,22 +164,21 @@ fn builds_and_relaunches_on_the_best_matching_simulator() -> Result {
                 .minimum_os("17.2.1")
                 .devices([Device::Phone])
                 .orientations([Orientation::Portrait])
-                .info("NSCameraUsageDescription", "Scan receipts")
-                .info("CFBundleSupportedPlatforms", json!(["iPhoneOS"]))
-                .info("DTSDKName", "iphoneos")
-                .entitlement("aps-environment", "production");
+                .info("NSCameraUsageDescription", "Scan receipts");
             let app = RougePublish::new(APP_ID)
                 .name("Fixture")
                 .icon("icon.png")
                 .ios(ios);
-            let packager = Packager::new(app, ".")
+            let packager = Packager::new(app.clone(), ".")
                 .channel(Channel::Production)
                 .build_number(123);
             let archive = ".rouge/out/ios/unsigned-app.zip";
-            let bundle = sh.current_dir().join(".rouge/out/ios-sim/app.app");
+            let root = sh.current_dir();
+            let derived = root.join(".rouge/out/ios-sim/DerivedData");
+            let bundle = derived.join("Build/Products/Debug-iphonesimulator/RougeApp.app");
             sh.write_file(archive, "preserve device artifact")?;
-            sh.write_file(bundle.join("embedded.mobileprovision"), "stale profile")?;
             sh.write_file("icon.png", "test icon")?;
+            generate(sh, app)?;
             simulator_tools(sh)?;
 
             let older = simulator(1, "Shared name", "Booted", "iPhone", true);
@@ -176,7 +198,7 @@ fn builds_and_relaunches_on_the_best_matching_simulator() -> Result {
                 ("Old", "17.2.1 or newer"),
             ] {
                 assert!(matches!(
-                    packager.clone().simulator_device(selector).run(Action::Run, Target::Ios),
+                    packager.clone().device(selector).run(Action::Run, Target::Ios),
                     Err(PublishError::Invalid(details)) if details.contains(message)
                 ));
             }
@@ -186,38 +208,19 @@ fn builds_and_relaunches_on_the_best_matching_simulator() -> Result {
 
             packager
                 .clone()
-                .simulator_device(udid(0xABC).to_ascii_lowercase())
+                .device(udid(0xABC).to_ascii_lowercase())
                 .run(Action::Run, Target::Ios)?;
             assert_launch(sh, &bundle, 0xABC)?;
             let commands = sh.read_file("commands")?;
-            let target = "aarch64-apple-ios-sim";
-            assert!(commands.contains(&format!("rustup target add {target}\n")));
+            assert!(commands.contains("rustup target add aarch64-apple-ios-sim\n"));
             assert!(commands.contains(&format!(
-                "cargo build --locked --package app --bin app --target {target}\n"
-            )));
-            assert!(commands.contains("--platform iphonesimulator --app-icon AppIcon --target-device iphone --minimum-deployment-target 17.2.1"));
-            assert!(!bundle.join("embedded.mobileprovision").exists());
+                "xcodebuild -quiet -project {} -scheme RougeApp -derivedDataPath {} EXECUTABLE_NAME=app ROUGE_DISPLAY_NAME=Fixture MARKETING_VERSION=1.0.0 CURRENT_PROJECT_VERSION=1 CARGO_TARGET_DIR={} -configuration Debug -destination id={} build\n",
+                root.join("ios/RougeApp.xcodeproj").display(),
+                derived.display(),
+                env::var("CARGO_TARGET_DIR")?,
+                udid(0xABC),
+            )), "{commands}");
             assert_eq!(sh.read_file(archive)?, "preserve device artifact");
-            let info: Value = plist::from_file(bundle.join("Info.plist"))?;
-            for (key, value) in [
-                ("CFBundleIdentifier", json!(APP_ID)),
-                ("CFBundleDisplayName", json!("Fixture")),
-                ("CFBundleExecutable", json!("app")),
-                ("CFBundleVersion", json!("1")),
-                ("CFBundleSupportedPlatforms", json!(["iPhoneSimulator"])),
-                ("DTPlatformName", json!("iphonesimulator")),
-                ("DTSDKName", json!("iphonesimulator26.2")),
-                ("MinimumOSVersion", json!("17.2.1")),
-                ("UIDeviceFamily", json!([1])),
-                (
-                    "UISupportedInterfaceOrientations",
-                    json!(["UIInterfaceOrientationPortrait"]),
-                ),
-                ("CFBundleIconName", json!("AppIcon")),
-                ("NSCameraUsageDescription", json!("Scan receipts")),
-            ] {
-                assert_eq!(info[key], value, "{key}");
-            }
 
             sh.write_file("devices.json", json!({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-17-2": [simulator(4, "Old", "Booted", "iPhone", true)]}}).to_string())?;
             assert!(matches!(
@@ -243,10 +246,109 @@ fn builds_and_relaunches_on_the_best_matching_simulator() -> Result {
         }}).to_string())?;
             packager.run(Action::Run, Target::Ios)?;
             assert_launch(sh, &bundle, 4)?;
-            packager
-                .simulator_device("A Pad")
-                .run(Action::Run, Target::Ios)?;
+            packager.device("A Pad").run(Action::Run, Target::Ios)?;
             assert_launch(sh, &bundle, 2)?;
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn android_doctor_requires_the_configured_compile_sdk() -> Result {
+    in_app("android_doctor_requires_the_configured_compile_sdk", |sh| {
+        sh.create_dir("sdk/ndk/28.2.13676358")?;
+        sh.create_dir("sdk/platforms/android-37")?;
+        tool(sh, "java", "exit 1")?;
+        let packager = Packager::new(RougePublish::new(APP_ID).android(PlayInternal), ".");
+        assert!(
+            matches!(packager.run(Action::Doctor, Target::Android), Err(PublishError::Invalid(message)) if message.contains("platform android-37.0"))
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn android_accepts_only_aligned_libraries_in_bundles_signed_with_the_build_key() -> Result {
+    in_app(
+        "android_accepts_only_aligned_libraries_in_bundles_signed_with_the_build_key",
+        |sh| {
+            if cmd!(sh, "java -version")
+                .quiet()
+                .ignore_stderr()
+                .run()
+                .is_err()
+                || cmd!(sh, "javac -version")
+                    .quiet()
+                    .ignore_stdout()
+                    .ignore_stderr()
+                    .run()
+                    .is_err()
+            {
+                return Ok(());
+            }
+            for path in ["platforms/android-37.0", "build-tools/36.0.0"] {
+                sh.create_dir(format!("sdk/{path}"))?;
+            }
+            let readelf = sh
+                .current_dir()
+                .join("sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/host/bin/llvm-readelf");
+            tool(
+                sh,
+                readelf.to_str().ok_or("non-UTF-8 NDK path")?,
+                r#"align=0x4000
+[ "$(cat "$ROUGE_TEST_APP/mode")" != misaligned ] || align=0x1000
+echo "  LOAD 0x000000 0x0000000000000000 0x0000000000000000 0x001000 0x001000 R E $align""#,
+            )?;
+            tool(
+                sh,
+                "cargo",
+                r#"if [ "$1" != ndk ]; then exec "$REAL_CARGO" "$@"; fi
+echo 'cargo-ndk 4.1.2'"#,
+            )?;
+            tool(
+                sh,
+                "java",
+                r#"[ "$3" = -jar ] && [ "$8" = bundleRelease ]
+[ "$APP_TARGET" = app ] && [ "$APP_VERSION" = 1.0.0 ] && [ "$ROUGE_BUILD_NUMBER" = 1 ]
+cd "$7"
+[ -f build.gradle ] && [ -f gradle/wrapper/gradle-wrapper.jar ]
+mkdir -p src/release/jniLibs/arm64-v8a
+touch src/release/jniLibs/arm64-v8a/libapp.so
+bundle=build/outputs/bundle/release/RougeApp-release.aab
+mkdir -p "${bundle%/*}"
+printf payload > payload
+jar cf "$bundle" payload
+mode=$(cat "$ROUGE_TEST_APP/mode")
+[ "$mode" != unsigned ] || exit 0
+key=$ROUGE_KEYSTORE
+if [ "$mode" = wrong ]; then
+    key=wrong.p12
+    keytool -genkeypair -keystore "$key" -storepass "$ANDROID_UPLOAD_STORE_PASSWORD" -alias "$ANDROID_UPLOAD_KEY_ALIAS" -keyalg RSA -dname CN=Wrong
+fi
+jarsigner -keystore "$key" -storepass "$ANDROID_UPLOAD_STORE_PASSWORD" "$bundle" "$ANDROID_UPLOAD_KEY_ALIAS""#,
+            )?;
+            let app = RougePublish::new(APP_ID).android(PlayInternal);
+            let packager = Packager::new(app.clone(), ".");
+            assert!(matches!(
+                packager.run(Action::Build, Target::Android),
+                Err(PublishError::Invalid(message)) if message.contains("cargo framer")
+            ));
+            generate(sh, app)?;
+            for (mode, expected) in [
+                ("misaligned", "16 KB alignment"),
+                ("unsigned", "not signed with the configured upload key"),
+                ("wrong", "not signed with the configured upload key"),
+            ] {
+                sh.write_file("mode", mode)?;
+                assert!(
+                    matches!(packager.run(Action::Build, Target::Android), Err(PublishError::Invalid(message)) if message.contains(expected)),
+                    "{mode}"
+                );
+                assert!(!sh.path_exists(".rouge/out/android/app.aab"));
+            }
+            sh.write_file("mode", "matching")?;
+            packager.run(Action::Build, Target::Android)?;
+            assert!(sh.path_exists(".rouge/out/android/app.aab"));
             Ok(())
         },
     )
@@ -264,9 +366,10 @@ fn in_app(test: &str, run: impl FnOnce(&Shell) -> Result) -> Result {
     sh.change_dir(root);
     sh.write_file(
         "Cargo.toml",
-        "[workspace]\n[package]\nname='app'\nversion='1.0.0'\nedition='2024'\n",
+        "[workspace]\n[package]\nname='app'\nversion='1.0.0'\nedition='2024'\n[lib]\ncrate-type=['cdylib']\n",
     )?;
     sh.write_file("src/main.rs", "fn main() {}")?;
+    sh.write_file("src/lib.rs", "")?;
     cmd!(sh, "cargo generate-lockfile --offline").run()?;
     let bin = sh.create_dir("tools")?;
     let path = env::join_paths([bin].into_iter().chain(env::split_paths(
@@ -279,14 +382,23 @@ fn in_app(test: &str, run: impl FnOnce(&Shell) -> Result) -> Result {
         .env("REAL_CARGO", env!("CARGO"))
         .env("CARGO_TARGET_DIR", root.join("target"))
         .env_remove("GITHUB_STEP_SUMMARY")
+        .env("ANDROID_HOME", root.join("sdk"))
         .env("IOS_PROFILE_BASE64", "test")
         .env("APPLE_API_KEY", "test-only")
         .env("APPLE_KEY_ID", "TEST")
         .env("APPLE_ISSUER_ID", "test")
+        .env("APPLE_TEAM_ID", "TEAM123456")
         .env("APPLE_CERTIFICATE_PASSWORD", "test")
         .env("ANDROID_UPLOAD_STORE_PASSWORD", "test")
         .env("GH_TOKEN", "test")
         .run()?;
+    Ok(())
+}
+
+fn generate(sh: &Shell, app: RougePublish) -> Result {
+    let mut project = Project::new();
+    project.apply(app);
+    project.synth_with(&mut DiskFs::new(sh.current_dir()), Mode::Write)?;
     Ok(())
 }
 
@@ -321,28 +433,16 @@ fn assert_launch(sh: &Shell, bundle: &Path, index: u32) -> Result {
     let udid = udid(index);
     let commands = sh.read_file("commands")?;
     assert!(commands.ends_with(&format!(
-        "codesign --sign - {bundle}\nxcrun simctl bootstatus {udid} -b\nopen -a Simulator\nxcrun simctl install {udid} {bundle}\nxcrun simctl launch --terminate-running-process {udid} {APP_ID}\n"
+        " build\nxcrun simctl bootstatus {udid} -b\nopen -a Simulator\nxcrun simctl install {udid} {bundle}\nxcrun simctl launch --terminate-running-process {udid} {APP_ID}\n"
     )), "{commands}");
     Ok(())
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn simulator_tools(sh: &Shell) -> Result {
-    plist::to_file_xml(
-        sh.current_dir().join("assets.plist"),
-        &json!({"CFBundleIconName": "AppIcon"}),
-    )?;
     let isolated = r#"[ -z "${APPLE_API_KEY+x}${APPLE_CERTIFICATE_PASSWORD+x}${IOS_PROFILE_BASE64+x}${GH_TOKEN+x}" ]"#;
     let log = r#"printf '%s %s\n' "${0##*/}" "$*" >> "$ROUGE_TEST_APP/commands""#;
     for (name, script) in [
-        (
-            "cargo",
-            r#"if [ "$1" = metadata ]; then exec "$REAL_CARGO" "$@"; fi
-[ "$SDKROOT" = /fixture/iphonesimulator ]
-[ -n "$IPHONEOS_DEPLOYMENT_TARGET" ]
-mkdir -p "$CARGO_TARGET_DIR/aarch64-apple-ios-sim/debug"
-touch "$CARGO_TARGET_DIR/aarch64-apple-ios-sim/debug/app""#,
-        ),
         (
             "xcrun",
             r#"case "$*" in
@@ -350,11 +450,6 @@ touch "$CARGO_TARGET_DIR/aarch64-apple-ios-sim/debug/app""#,
   'simctl list devices available --json') cat "$ROUGE_TEST_APP/devices.json"; exit ;;
 esac
 case "$*" in
-  '--sdk iphonesimulator --find actool') echo /fixture/actool ;;
-  '--sdk iphonesimulator --show-sdk-path') echo /fixture/iphonesimulator ;;
-  '--sdk iphonesimulator --show-sdk-version') echo 26.2 ;;
-  '--sdk iphonesimulator --show-sdk-build-version') echo 23C53 ;;
-  '--sdk iphonesimulator actool '*) for last do :; done; cp "$ROUGE_TEST_APP/assets.plist" "$last" ;;
   'simctl bootstatus '*|'simctl install '*|'simctl launch '*) ;;
   *) exit 1 ;;
 esac"#,
@@ -364,18 +459,10 @@ esac"#,
             "sips",
             "printf '%s\n' 'pixelWidth: 1024' 'pixelHeight: 1024' 'hasAlpha: no'",
         ),
-        (
-            "xcodebuild",
-            "printf '%s\n' 'Xcode 26.2' 'Build version 17C52'",
-        ),
-        (
-            "codesign",
-            r#"[ "$#" = 3 ] && [ "$1" = --sign ] && [ "$2" = - ] && [ -f "$3/app" ]"#,
-        ),
+        ("xcodebuild", ""),
         ("open", ""),
     ] {
         let skip_log = match name {
-            "cargo" => r#"[ "$1" = metadata ]"#,
             "xcrun" => r#"[ "$1" = --find ] || [ "${2-}" = list ]"#,
             _ => "false",
         };

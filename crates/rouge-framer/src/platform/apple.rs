@@ -3,14 +3,13 @@ use crate::packager::{Build, need};
 use crate::platform::pinned;
 use crate::secrets::{self, APPLE, APPLE_API, secret};
 use serde_json::{Value, json};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use xshell::cmd;
 
 #[derive(Clone, Debug)]
 pub struct AppleToolchain {
     pub(crate) rcodesign: String,
-    pub(crate) fastlane: String,
-    pub(crate) ruby: String,
 }
 
 impl Default for AppleToolchain {
@@ -23,8 +22,6 @@ impl AppleToolchain {
     pub fn new() -> Self {
         Self {
             rcodesign: "0.29.0".into(),
-            fastlane: "2.232.2".into(),
-            ruby: "3.4".into(),
         }
     }
 
@@ -33,27 +30,15 @@ impl AppleToolchain {
         self
     }
 
-    pub fn fastlane(mut self, version: impl Into<String>) -> Self {
-        self.fastlane = version.into();
-        self
-    }
-
-    pub fn ruby(mut self, version: impl Into<String>) -> Self {
-        self.ruby = version.into();
-        self
-    }
-
     pub(crate) fn signer(&self, build: &Build) -> Result<PathBuf> {
         build.tool("rcodesign", "apple-codesign", &self.rcodesign)
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
-        match [&self.rcodesign, &self.fastlane, &self.ruby]
-            .into_iter()
-            .find(|version| !pinned(version))
-        {
-            Some(version) => Err(format!("`{version}` is not a tool version")),
-            None => Ok(()),
+        if pinned(&self.rcodesign) {
+            Ok(())
+        } else {
+            Err(format!("`{}` is not a tool version", self.rcodesign))
         }
     }
 }
@@ -102,11 +87,23 @@ pub(crate) fn extend(values: &mut Value, entries: &[(String, Value)]) {
 }
 
 pub(crate) struct ApiKey {
-    pub(crate) directory: PathBuf,
     pub(crate) file: PathBuf,
     pub(crate) id: String,
     pub(crate) issuer: String,
-    pub(crate) contents: String,
+}
+
+impl ApiKey {
+    pub(crate) fn xcode_auth(&self) -> [&OsStr; 7] {
+        [
+            OsStr::new("-allowProvisioningUpdates"),
+            OsStr::new("-authenticationKeyPath"),
+            self.file.as_os_str(),
+            OsStr::new("-authenticationKeyID"),
+            OsStr::new(&self.id),
+            OsStr::new("-authenticationKeyIssuerID"),
+            OsStr::new(&self.issuer),
+        ]
+    }
 }
 
 pub(crate) fn doctor(build: &Build) -> Result<()> {
@@ -167,10 +164,8 @@ pub(crate) fn api_key(build: &Build, scratch: &Path) -> Result<ApiKey> {
     build.sh.create_dir(&directory)?;
     secrets::write(&file, format!("{contents}\n"))?;
     Ok(ApiKey {
-        directory,
         file,
         id,
         issuer: secret("APPLE_ISSUER_ID")?,
-        contents,
     })
 }

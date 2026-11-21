@@ -1,54 +1,29 @@
+mod archive;
 mod simulator;
 
 use crate::error::{Result, ensure, invalid};
-use crate::packager::{Build, need};
+use crate::packager::Build;
 use crate::platform::apple::{Bundle, bundle_options};
 use crate::platform::{Platform, apple, os_version};
-use crate::secrets::{self, APPLE, APPLE_API, IOS_PROFILE, secret};
-use crate::workflow::{self, Ci, PUBLISHING, ci_options};
+use crate::secrets::{self, APPLE_API, secret};
+use crate::workflow::{self, Ci, PREVIEWING, ci_options};
 use crate::{Channel, RougePublish, Target};
-use framer::github::{Job, Step};
-use serde::Deserialize;
+use framer::github::Job;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use xshell::cmd;
+use xshell::{Cmd, cmd};
 
 const SUPPORTED: (u32, u32) = (15, 0);
-const RELEASING: &str = "${{ inputs.channel == 'production' }}";
-const RUBY: &str = "ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0";
+const XCODE_INFO: [&str; 3] = [
+    "UIDeviceFamily",
+    "MinimumOSVersion",
+    "CFBundleSupportedPlatforms",
+];
 const ICON_REQUIREMENT: &str = "iOS requires an opaque 1024 × 1024 PNG icon";
-const PROFILE_REQUIREMENT: &str =
-    "IOS_PROFILE_BASE64 must be an App Store distribution profile for the configured app ID";
 
-#[derive(Clone, Copy)]
-struct Sdk {
-    name: &'static str,
-    platform: &'static str,
-    triple: &'static str,
-    release: bool,
-}
-
-const DEVICE: Sdk = Sdk {
-    name: "iphoneos",
-    platform: "iPhoneOS",
-    triple: "aarch64-apple-ios",
-    release: true,
-};
-const SIMULATOR: Sdk = Sdk {
-    name: "iphonesimulator",
-    platform: "iPhoneSimulator",
-    triple: "aarch64-apple-ios-sim",
-    release: false,
-};
-
-impl Sdk {
-    fn query(self, build: &Build, query: &str) -> Result<String> {
-        let (sh, sdk) = (&build.sh, self.name);
-        Ok(build
-            .isolated(cmd!(sh, "xcrun --sdk {sdk} {query}"))
-            .read()?)
-    }
-}
+const DEVICE: &str = "aarch64-apple-ios";
+const SIMULATOR: &str = "aarch64-apple-ios-sim";
+const PROJECT: &str = "ios/RougeApp.xcodeproj";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TestFlight {
@@ -91,6 +66,7 @@ pub struct Ios {
     devices: Vec<Device>,
     orientations: Option<Vec<Orientation>>,
     bundle: Bundle,
+    privacy_manifest: Option<PathBuf>,
     ci: Ci,
 }
 
@@ -102,6 +78,7 @@ impl Ios {
             devices: vec![Device::Phone, Device::Pad],
             orientations: None,
             bundle: Bundle::default(),
+            privacy_manifest: None,
             ci: Ci::default(),
         }
     }
@@ -121,7 +98,19 @@ impl Ios {
         self
     }
 
-    fn device_info(&self, sdk: Sdk) -> Value {
+    pub fn privacy_manifest(mut self, path: impl Into<PathBuf>) -> Self {
+        self.privacy_manifest = Some(path.into());
+        self
+    }
+
+    fn families(&self) -> Vec<u32> {
+        self.devices
+            .iter()
+            .map(|device| if *device == Device::Phone { 1 } else { 2 })
+            .collect()
+    }
+
+    fn info_plist(&self) -> Value {
         let named = |orientations: &[Orientation]| -> Vec<String> {
             orientations
                 .iter()
@@ -140,20 +129,29 @@ impl Ios {
             Orientation::LandscapeRight,
         ];
         let chosen = self.orientations.as_deref();
-        let families: Vec<u32> = self
-            .devices
-            .iter()
-            .map(|device| if *device == Device::Phone { 1 } else { 2 })
-            .collect();
-        json!({
-            "MinimumOSVersion": self.minimum_os,
-            "LSRequiresIPhoneOS": true,
-            "UIDeviceFamily": families,
-            "CFBundleSupportedPlatforms": [sdk.platform],
+        let mut info = json!({
             "UILaunchScreen": {},
             "UISupportedInterfaceOrientations": named(chosen.unwrap_or(&phone)),
             "UISupportedInterfaceOrientations~ipad": named(chosen.unwrap_or(&pad)),
-        })
+        });
+        apple::extend(&mut info, &self.bundle.info);
+        if let Some(fields) = info.as_object_mut() {
+            fields.retain(|key, _| !key.starts_with("DT") && !XCODE_INFO.contains(&key.as_str()));
+        }
+        for (key, value) in [
+            ("CFBundleIdentifier", json!("$(PRODUCT_BUNDLE_IDENTIFIER)")),
+            ("CFBundleDisplayName", json!("$(ROUGE_DISPLAY_NAME)")),
+            ("CFBundleName", json!("$(ROUGE_DISPLAY_NAME)")),
+            ("CFBundleExecutable", json!("$(EXECUTABLE_NAME)")),
+            ("CFBundlePackageType", json!("APPL")),
+            ("CFBundleInfoDictionaryVersion", json!("6.0")),
+            ("CFBundleShortVersionString", json!("$(MARKETING_VERSION)")),
+            ("CFBundleVersion", json!("$(CURRENT_PROJECT_VERSION)")),
+            ("LSRequiresIPhoneOS", json!(true)),
+        ] {
+            info[key] = value;
+        }
+        info
     }
 }
 
@@ -166,28 +164,6 @@ impl From<TestFlight> for Ios {
 bundle_options!(Ios);
 ci_options!(Ios);
 
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct Profile {
-    entitlements: Entitlements,
-    team_identifier: Vec<String>,
-    application_identifier_prefix: Vec<String>,
-    #[serde(default)]
-    provisioned_devices: Vec<String>,
-    #[serde(default)]
-    provisions_all_devices: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-struct Entitlements {
-    application_identifier: String,
-    #[serde(default)]
-    get_task_allow: bool,
-    #[serde(default)]
-    beta_reports_active: bool,
-}
-
 impl Platform for Ios {
     fn target(&self) -> Target {
         Target::Ios
@@ -195,42 +171,137 @@ impl Platform for Ios {
 
     fn job(&self, _config: &RougePublish) -> Job {
         let target = self.target();
-        let signing = |step| workflow::secrets(workflow::secrets(step, APPLE), &[IOS_PROFILE]);
-        let toolchain = &self.bundle.toolchain;
-        self.ci
-            .job(target, "macos-26", 90, workflow::checkout())
-            .step(workflow::rouge("Install signing tool", "setup", target).condition(PUBLISHING))
-            .step(signing(
-                workflow::rouge("Check signing setup", "doctor", target).condition(PUBLISHING),
-            ))
-            .step(signing(workflow::rouge(
-                "Build iOS device package",
-                "build",
-                target,
-            )))
-            .step(workflow::inspect(target, "*"))
-            .step(
-                Step::uses(RUBY)
-                    .condition(RELEASING)
-                    .with("ruby-version", &toolchain.ruby),
-            )
-            .step(
-                Step::run(format!(
-                    "gem install fastlane --no-document --version {}",
-                    toolchain.fastlane
-                ))
-                .name("Install Fastlane")
-                .condition(RELEASING),
-            )
-            .step(workflow::secrets(
-                workflow::rouge("Upload to App Store Connect", "publish", target)
-                    .condition(PUBLISHING),
-                APPLE_API,
-            ))
+        let mut job = self.ci.job(target, "macos-26", 90, workflow::checkout());
+        if self.ci.runner.is_none() {
+            job = job.env(
+                "DEVELOPER_DIR",
+                "/Applications/Xcode_26.6.app/Contents/Developer",
+            );
+        }
+        job.step(workflow::preview_secrets(
+            workflow::rouge("Build iOS device archive", "build", target)
+                .env(archive::TEAM_ID, "${{ vars.APPLE_TEAM_ID }}"),
+            APPLE_API,
+        ))
+        .step(workflow::inspect(target, "unsigned-app.zip"))
+        .step(workflow::artifact(
+            target,
+            "Save iOS crash symbols",
+            "dsyms",
+            "dSYMs.zip",
+            PREVIEWING,
+        ))
+        .step(workflow::preview_secrets(
+            workflow::rouge("Upload to App Store Connect", "publish", target).condition(PREVIEWING),
+            APPLE_API,
+        ))
     }
 
     fn guide(&self) -> &'static str {
         include_str!("guide.md")
+    }
+
+    fn files(&self, config: &RougePublish) -> Vec<(String, String)> {
+        let quoted = |value: &str| format!("{value:?}");
+        let families = self
+            .families()
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let executable = config.binary.as_ref().or(config.package.as_ref());
+        let mut settings = vec![
+            ("ALWAYS_SEARCH_USER_PATHS", "NO".to_owned()),
+            ("ASSETCATALOG_COMPILER_APPICON_NAME", "AppIcon".to_owned()),
+            ("CURRENT_PROJECT_VERSION", "1".to_owned()),
+            ("DEBUG_INFORMATION_FORMAT", "dwarf".to_owned()),
+            ("ENABLE_USER_SCRIPT_SANDBOXING", "NO".to_owned()),
+            ("INFOPLIST_FILE", "Info.plist".to_owned()),
+            ("IPHONEOS_DEPLOYMENT_TARGET", quoted(&self.minimum_os)),
+            ("MARKETING_VERSION", "1.0.0".to_owned()),
+            ("PRODUCT_BUNDLE_IDENTIFIER", quoted(&config.id)),
+            ("PRODUCT_NAME", "RougeApp".to_owned()),
+            (
+                "ROUGE_DISPLAY_NAME",
+                quoted(config.name.as_deref().unwrap_or("RougeApp")),
+            ),
+            ("SKIP_INSTALL", "NO".to_owned()),
+            ("STRIP_INSTALLED_PRODUCT", "NO".to_owned()),
+            ("TARGETED_DEVICE_FAMILY", quoted(&families)),
+        ];
+        if let Some(executable) = executable {
+            settings.push(("EXECUTABLE_NAME", quoted(executable)));
+        }
+        if !self.bundle.entitlements.is_empty() {
+            settings.push(("CODE_SIGN_ENTITLEMENTS", "App.entitlements".to_owned()));
+        }
+        let settings = settings
+            .iter()
+            .map(|(key, value)| format!("                {key} = {value};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let privacy = self
+            .privacy_manifest
+            .as_ref()
+            .map_or("PrivacyInfo.xcprivacy".to_owned(), |path| {
+                format!("../{}", path.display())
+            });
+        let package = config
+            .package
+            .as_ref()
+            .map_or(String::new(), |package| format!(" --package {package}"));
+        let author = json!({"author": "xcode", "version": 1});
+        let icon = json!({
+            "images": [{"filename": "icon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"}],
+            "info": author,
+        });
+        let plist = |value: &Value| {
+            let mut xml = Vec::new();
+            plist::to_writer_xml(&mut xml, value)
+                .ok()
+                .and_then(|()| String::from_utf8(xml).ok())
+                .unwrap_or_default()
+        };
+        let mut files = vec![
+            (
+                format!("{PROJECT}/project.pbxproj"),
+                include_str!("xcode/project.pbxproj")
+                    .replace("@@SETTINGS@@", &settings)
+                    .replace("@@PRIVACY@@", &quoted(&privacy)),
+            ),
+            (
+                format!("{PROJECT}/xcshareddata/xcschemes/RougeApp.xcscheme"),
+                include_str!("xcode/RougeApp.xcscheme").to_owned(),
+            ),
+            (
+                "ios/cargo.sh".to_owned(),
+                include_str!("xcode/cargo.sh")
+                    .replace("@@PACKAGE@@", &package)
+                    .replace("@@ICON@@", config.icon.as_deref().unwrap_or_default()),
+            ),
+            ("ios/Info.plist".to_owned(), plist(&self.info_plist())),
+            (
+                "ios/Assets.xcassets/Contents.json".to_owned(),
+                json!({"info": author}).to_string(),
+            ),
+            (
+                "ios/Assets.xcassets/AppIcon.appiconset/Contents.json".to_owned(),
+                icon.to_string(),
+            ),
+        ];
+        if self.privacy_manifest.is_none() {
+            files.push(("ios/PrivacyInfo.xcprivacy".to_owned(), plist(&json!({}))));
+        }
+        if !self.bundle.entitlements.is_empty() {
+            let mut entitlements = json!({});
+            apple::extend(&mut entitlements, &self.bundle.entitlements);
+            files.push(("ios/App.entitlements".to_owned(), plist(&entitlements)));
+        }
+        files
+    }
+
+    fn ignored(&self) -> &'static str {
+        "/ios/Assets.xcassets/AppIcon.appiconset/icon.png\n/ios/RougeApp.xcodeproj/project.xcworkspace/\n/ios/RougeApp.xcodeproj/xcuserdata/\n"
     }
 
     fn validate(&self, config: &RougePublish) -> Result<(), String> {
@@ -238,7 +309,18 @@ impl Platform for Ios {
             app_store_id,
             invite_url,
         } = &self.destination;
-        self.bundle.toolchain.validate()?;
+        if self.privacy_manifest.as_ref().is_some_and(|path| {
+            path.file_name()
+                .is_none_or(|name| name != "PrivacyInfo.xcprivacy")
+                || !path
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+        }) {
+            return Err(
+                "Ios::privacy_manifest expects a repository-relative PrivacyInfo.xcprivacy path"
+                    .into(),
+            );
+        }
         if config.icon.is_none() {
             return Err(ICON_REQUIREMENT.into());
         }
@@ -270,31 +352,27 @@ impl Platform for Ios {
     }
 
     fn setup(&self, build: &Build) -> Result<()> {
-        self.bundle.toolchain.signer(build).map(drop)
+        archive::check_xcode(build)?;
+        let sh = &build.sh;
+        build
+            .isolated(cmd!(sh, "rustup target add {DEVICE}"))
+            .run()?;
+        Ok(())
     }
 
     fn doctor(&self, build: &Build) -> Result<()> {
-        apple::doctor(build)?;
+        archive::check_xcode(build)?;
+        check_icon(build)?;
         if build.publishing() {
-            secret(IOS_PROFILE)?;
+            secrets::require(APPLE_API)?;
+            secret(archive::TEAM_ID)?;
         }
-        check_icon(build, DEVICE)
+        Ok(())
     }
 
     fn build(&self, build: &Build) -> Result<()> {
         self.doctor(build)?;
-        let scratch = secrets::scratch()?;
-        let bundle = scratch
-            .path()
-            .join(format!("Payload/{}.app", build.app.target));
-
-        self.assemble_bundle(build, scratch.path(), &bundle, DEVICE)?;
-        if build.publishing() {
-            self.sign_bundle(build, scratch.path(), &bundle)?;
-            package_ipa(build, scratch.path())
-        } else {
-            package_unsigned_app(build, &bundle)
-        }
+        archive::build(build)
     }
 
     fn run_local(&self, build: &Build, device: Option<&str>) -> Result<()> {
@@ -302,188 +380,47 @@ impl Platform for Ios {
     }
 
     fn publish(&self, build: &Build) -> Result<()> {
-        let (sh, app) = (&build.sh, &build.app);
-        let scratch = secrets::scratch()?;
-        let key = apple::api_key(build, scratch.path())?;
-        let (id, issuer, version) = (&key.id, &key.issuer, app.version.to_string());
-        let package = build.out.join("app.ipa");
         let connect = format!(
             "https://appstoreconnect.apple.com/apps/{}",
             self.destination.app_store_id
         );
-        if build.channel == Channel::Preview {
-            cmd!(
-                sh,
-                "xcrun altool --upload-app --type ios --file {package} --apiKey {id} --apiIssuer {issuer}"
-            )
-            .env("API_PRIVATE_KEYS_DIR", &key.directory)
-            .run()?;
-            let invite = self
-                .destination
-                .invite_url
-                .clone()
-                .unwrap_or_else(|| format!("{connect}/testflight"));
-            return build.summarize(&format!(
-                "[TestFlight (once Apple finishes processing)]({invite})"
-            ));
-        }
-        need("fastlane")?;
-        let credentials = scratch.path().join("key.json");
-        let bundle_id = &app.id;
-        secrets::write(
-            &credentials,
-            json!({"key_id": id, "issuer_id": issuer, "key": key.contents}).to_string(),
+        ensure(
+            build.channel == Channel::Preview,
+            "Promote the tested TestFlight build to production in App Store Connect; see PUBLISHING.md",
         )?;
-        cmd!(sh, "fastlane deliver --api_key_path {credentials} --ipa {package} --app_identifier {bundle_id} --app_version {version} --skip_metadata true --skip_screenshots true --precheck_include_in_app_purchases false --submit_for_review true --automatic_release false --force true")
-            .run()?;
-        build.summarize(&format!("[Check App Review status]({connect})"))
+        archive::upload(build)?;
+        let invite = self
+            .destination
+            .invite_url
+            .clone()
+            .unwrap_or_else(|| format!("{connect}/testflight"));
+        build.summarize_mobile(&format!("Uploaded to App Store Connect; [TestFlight]({invite}) availability depends on Apple processing and tester setup."))
     }
 }
 
-impl Ios {
-    fn assemble_bundle(
-        &self,
-        build: &Build,
-        scratch: &Path,
-        bundle: &Path,
-        sdk: Sdk,
-    ) -> Result<()> {
-        self.compile_bundle_binary(build, bundle, sdk)?;
-        let assets = self.compile_assets(build, scratch, bundle, sdk)?;
-        self.write_bundle_info(build, bundle, &assets, sdk)
-    }
-
-    fn compile_bundle_binary(&self, build: &Build, bundle: &Path, sdk: Sdk) -> Result<()> {
-        let sh = &build.sh;
-        let binary = &build.app.target;
-        let triple = sdk.triple;
-        build
-            .isolated(cmd!(sh, "rustup target add {triple}"))
-            .run()?;
-        let compiled = {
-            let _deployment = sh.push_env("IPHONEOS_DEPLOYMENT_TARGET", &self.minimum_os);
-            let _sdk = sh.push_env("SDKROOT", sdk.query(build, "--show-sdk-path")?);
-            build.compile(triple, sdk.release)?
-        };
-        build.copy(compiled.join(binary), bundle.join(binary))
-    }
-
-    fn compile_assets(
-        &self,
-        build: &Build,
-        scratch: &Path,
-        bundle: &Path,
-        sdk: Sdk,
-    ) -> Result<PathBuf> {
-        let (sh, sdk) = (&build.sh, sdk.name);
-        let catalog = scratch.join("Assets.xcassets");
-        let icons = catalog.join("AppIcon.appiconset");
-        let assets = scratch.join("assets.plist");
-        let minimum = &self.minimum_os;
-        let devices = self.devices.iter().flat_map(|device| {
-            let name = if *device == Device::Phone {
-                "iphone"
-            } else {
-                "ipad"
-            };
-            ["--target-device", name]
-        });
-        build.copy(icon(build)?, icons.join("icon.png"))?;
-        let author = json!({"author": "xcode", "version": 1});
-        sh.write_file(
-            catalog.join("Contents.json"),
-            json!({"info": author}).to_string(),
-        )?;
-        sh.write_file(
-            icons.join("Contents.json"),
-            json!({
-                "images": [{"filename": "icon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"}],
-                "info": author,
-            })
-            .to_string(),
-        )?;
-        build.isolated(cmd!(sh, "xcrun --sdk {sdk} actool {catalog} --compile {bundle} --platform {sdk} --app-icon AppIcon {devices...} --minimum-deployment-target {minimum} --output-partial-info-plist {assets}"))
-            .ignore_stdout()
-            .run()?;
-        Ok(assets)
-    }
-
-    fn write_bundle_info(
-        &self,
-        build: &Build,
-        bundle: &Path,
-        assets: &Path,
-        sdk: Sdk,
-    ) -> Result<()> {
-        let sh = &build.sh;
-        let sdk_version = sdk.query(build, "--show-sdk-version")?;
-        let sdk_build = sdk.query(build, "--show-sdk-build-version")?;
-        let xcode = build.isolated(cmd!(sh, "xcodebuild -version")).read()?;
-        let mut info = json!({});
-        if !sdk.release {
-            apple::extend(&mut info, &self.bundle.info);
-        }
-        merge(&mut info, apple::info(build));
-        merge(&mut info, self.device_info(sdk));
-        merge(&mut info, plist::from_file(assets)?);
-        merge(
-            &mut info,
-            json!({
-                "DTPlatformName": sdk.name,
-                "DTPlatformVersion": sdk_version,
-                "DTSDKName": format!("{}{sdk_version}", sdk.name),
-                "DTPlatformBuild": sdk_build,
-                "DTSDKBuild": sdk_build,
-                "DTXcodeBuild": xcode.rsplit(' ').next(),
-            }),
-        );
-        if sdk.release {
-            apple::extend(&mut info, &self.bundle.info);
-        }
-        plist::to_file_xml(bundle.join("Info.plist"), &info)?;
-        Ok(())
-    }
-
-    fn sign_bundle(&self, build: &Build, scratch: &Path, bundle: &Path) -> Result<()> {
-        let sh = &build.sh;
-        let embedded = bundle.join("embedded.mobileprovision");
-        let decoded = scratch.join("profile.plist");
-        let entitlements = scratch.join("entitlements.plist");
-        let signer = self.bundle.toolchain.signer(build)?;
-        secrets::write(&embedded, secrets::decoded(IOS_PROFILE)?)?;
-        cmd!(sh, "security cms -D -i {embedded} -o {decoded}").run()?;
-        let mut granted = self::entitlements(&plist::from_file(&decoded)?, &build.app.id)?;
-        apple::extend(&mut granted, &self.bundle.entitlements);
-        plist::to_file_xml(&entitlements, &granted)?;
-        let entitled = [Path::new("--entitlements-xml-file"), &entitlements];
-        apple::sign(build, scratch, &signer, &entitled, bundle)
-    }
+fn xcodebuild<'a>(build: &'a Build, derived: &Path) -> Result<Cmd<'a>> {
+    let (sh, app) = (&build.sh, &build.app);
+    let project = build.root.join(PROJECT);
+    ensure(
+        project.is_dir(),
+        "Run `cargo framer` to generate the ios/ Xcode project",
+    )?;
+    let settings = [
+        format!("EXECUTABLE_NAME={}", app.target),
+        format!("ROUGE_DISPLAY_NAME={}", app.name),
+        format!(
+            "MARKETING_VERSION={}.{}.{}",
+            app.version.major, app.version.minor, app.version.patch
+        ),
+        format!("CURRENT_PROJECT_VERSION={}", build.number),
+        format!("CARGO_TARGET_DIR={}", build.cargo_target.display()),
+    ];
+    Ok(build.isolated(cmd!(sh, "xcodebuild -quiet -project {project} -scheme RougeApp -derivedDataPath {derived} {settings...}")))
 }
 
-fn package_ipa(build: &Build, scratch: &Path) -> Result<()> {
-    let (sh, out) = (&build.sh, &build.out);
-    let _payload = sh.push_dir(scratch);
-    cmd!(sh, "/usr/bin/zip -q -r {out}/app.ipa Payload").run()?;
-    Ok(())
-}
-
-fn package_unsigned_app(build: &Build, bundle: &Path) -> Result<()> {
-    let (sh, out) = (&build.sh, &build.out);
-    cmd!(
-        sh,
-        "ditto -c -k --keepParent {bundle} {out}/unsigned-app.zip"
-    )
-    .run()?;
-    Ok(())
-}
-
-fn check_icon(build: &Build, sdk: Sdk) -> Result<()> {
-    let (sh, sdk) = (&build.sh, sdk.name);
+fn check_icon(build: &Build) -> Result<()> {
+    let sh = &build.sh;
     let icon = icon(build)?;
-    build
-        .isolated(cmd!(sh, "xcrun --sdk {sdk} --find actool"))
-        .ignore_stdout()
-        .run()?;
     let properties = build
         .isolated(cmd!(
             sh,
@@ -503,37 +440,4 @@ fn icon(build: &Build) -> Result<&Path> {
         Some(icon) => Ok(icon),
         None => invalid(ICON_REQUIREMENT),
     }
-}
-
-fn merge(info: &mut Value, extra: Value) {
-    if let (Some(info), Value::Object(extra)) = (info.as_object_mut(), extra) {
-        info.extend(extra);
-    }
-}
-
-fn entitlements(profile: &Profile, id: &str) -> Result<Value> {
-    let granted = &profile.entitlements;
-    let (Some(team), Some(prefix)) = (
-        profile.team_identifier.first(),
-        profile.application_identifier_prefix.first(),
-    ) else {
-        return invalid(PROFILE_REQUIREMENT);
-    };
-    let application = format!("{prefix}.{id}");
-    ensure(
-        granted.application_identifier == application
-            && !granted.get_task_allow
-            && profile.provisioned_devices.is_empty()
-            && !profile.provisions_all_devices,
-        PROFILE_REQUIREMENT,
-    )?;
-    let mut entitlements = json!({
-        "application-identifier": application,
-        "com.apple.developer.team-identifier": team,
-        "get-task-allow": false,
-    });
-    if granted.beta_reports_active {
-        entitlements["beta-reports-active"] = true.into();
-    }
-    Ok(entitlements)
 }

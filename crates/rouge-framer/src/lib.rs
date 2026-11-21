@@ -38,8 +38,7 @@ struct Cli {
     build_number: u32,
     #[arg(
         long,
-        env = "ROUGE_IOS_DEVICE",
-        help = "iOS simulator name or UDID for run"
+        help = "iOS simulator name/UDID or Android device serial for run"
     )]
     device: Option<String>,
 }
@@ -60,11 +59,13 @@ pub fn run(project: &Project) -> ExitCode {
             let packager = Packager::new(config.clone(), root)
                 .channel(cli.channel)
                 .build_number(cli.build_number);
+            let simulator = (cli.target == Target::Ios)
+                .then(|| env::var("ROUGE_IOS_DEVICE").ok())
+                .flatten();
             cli.device
+                .or(simulator)
                 .into_iter()
-                .fold(packager, |packager, device| {
-                    packager.simulator_device(device)
-                })
+                .fold(packager, Packager::device)
                 .run(cli.action, cli.target)
         });
     match packaged {
@@ -227,11 +228,14 @@ impl Component for RougePublish {
     fn synthesize(&self, output: &mut Output) -> Result<()> {
         self.validate()?;
         output.toml(".cargo/config.toml", "alias.rouge", value(ALIAS))?;
-        output.block(
-            ".gitignore",
-            "rouge/publishing",
-            "/.rouge/out/\n/.framer/target/\n",
-        )?;
+        let mut ignored = String::from("/.rouge/out/\n/.framer/target/\n");
+        for platform in self.platforms() {
+            ignored.push_str(platform.ignored());
+            for (path, contents) in platform.files(self) {
+                output.managed(path, contents)?;
+            }
+        }
+        output.block(".gitignore", "rouge/publishing", ignored)?;
         output.managed(
             ".github/workflows/rouge-publish.yml",
             workflow::render(self),

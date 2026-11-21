@@ -2,10 +2,11 @@ use framer::github::Step;
 use framer::testing::render_preset;
 use framer::{DiskFs, Mode, Project};
 use rouge_framer::{
-    Action, Android, AndroidToolchain, AppleToolchain, Channel, Device, GitHubPages,
-    GitHubReleases, Ios, Linux, Macos, Orientation, Packager, PlayInternal, PublishError,
-    RougePublish, Target, TestFlight, Web,
+    Action, Android, AndroidToolchain, Channel, Device, GitHubPages, GitHubReleases, Ios, Linux,
+    Macos, Orientation, Packager, PlayInternal, PublishError, RougePublish, Target, TestFlight,
+    Web,
 };
+use serde_json::{Value, json};
 use std::fs;
 use std::io::Error;
 use tempfile::tempdir;
@@ -49,16 +50,65 @@ fn renders_a_full_default_branch_workflow() -> Result<(), Box<dyn std::error::Er
         workflow
             .matches("github.event.repository.default_branch")
             .count(),
-        5
+        6
     );
-    assert!(workflow.contains("${{ secrets.IOS_PROFILE_BASE64 }}"));
-    assert!(workflow.contains("${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}"));
-    assert!(workflow.contains("packageName: com.example.app"));
-    for target in ["web", "linux", "macos", "ios", "android"] {
-        assert!(workflow.contains(&format!("run: cargo rouge build {target}")));
-        assert!(workflow.contains(&format!("inputs.target == '{target}'")));
+    assert!(workflow.contains("ROUGE_CHANNEL: ${{ inputs.channel }}"));
+    assert!(
+        workflow.contains("ROUGE_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}")
+    );
+    assert!(workflow.contains("permissions:\n  contents: read"));
+    assert_eq!(workflow.matches("id-token: write").count(), 2);
+    for target in ["web", "linux", "macos"] {
+        let job = workflow_job(workflow, target)?;
+        assert!(job.contains(&format!("run: cargo rouge build {target}")));
+        assert!(job.contains(&format!("run: cargo rouge publish {target}")));
+        assert_eq!(job.contains("id-token: write"), target == "web");
+        assert!(!job.contains("include-hidden-files"));
     }
-    assert!(!workflow.contains("run: |"));
+    for (target, secret) in [
+        ("ios", "APPLE_API_KEY"),
+        ("android", "ANDROID_UPLOAD_KEYSTORE_BASE64"),
+    ] {
+        let job = workflow_job(workflow, target)?;
+        for expected in [
+            "inputs.channel != 'production'",
+            &format!("inputs.target == '{target}'"),
+            &format!("inputs.channel == 'preview' && secrets.{secret} || ''"),
+            "include-hidden-files",
+        ] {
+            assert!(job.contains(expected), "missing {expected} in {job}");
+        }
+        assert_eq!(
+            job.matches(&format!("run: cargo rouge build {target}"))
+                .count(),
+            1
+        );
+        assert!(!job.contains("id-token: write"));
+        for line in job.lines().filter(|line| line.contains("secrets.")) {
+            assert!(line.contains("inputs.channel == 'preview'"), "{line}");
+        }
+    }
+    let preview = workflow_job(workflow, "android-preview")?;
+    for expected in [
+        "inputs.channel == 'preview'",
+        "rouge-android-preview",
+        "id-token: write",
+        "google-github-actions/auth@",
+        "vars.GOOGLE_PLAY_WORKLOAD_IDENTITY_PROVIDER",
+        "vars.GOOGLE_PLAY_SERVICE_ACCOUNT",
+        "steps.auth.outputs.credentials_file_path",
+        "r0adkll/upload-google-play@",
+        "packageName: com.example.app",
+    ] {
+        assert!(
+            preview.contains(expected),
+            "missing {expected} in {preview}"
+        );
+    }
+    assert!(!preview.contains("secrets."));
+    assert!(!preview.contains("github.run_attempt"));
+    assert!(!workflow.contains("secrets.IOS_PROFILE_BASE64"));
+    assert!(!workflow.contains("PLAY_SERVICE_ACCOUNT_JSON"));
     if let Some(path) = std::env::var_os("ROUGE_TEST_WORKFLOW") {
         std::fs::write(path, workflow).map_err(|source| framer::FramerError::Io {
             path: WORKFLOW.into(),
@@ -208,13 +258,13 @@ fn platform_options_change_the_generated_workflow_and_checklist()
             .macos(Macos::new(GitHubReleases).runner("macos-15"))
             .ios(
                 Ios::new(TestFlight::new("12345"))
-                    .toolchain(AppleToolchain::new().fastlane("2.300.0").ruby("3.5"))
+                    .runner("macos-26-xlarge")
                     .setup(Step::run("brew install just").name("Install just")),
             )
             .android(
                 Android::new(PlayInternal).target_sdk(37).toolchain(
                     AndroidToolchain::new()
-                        .gradle("9.0")
+                        .gradle("9.5", "b".repeat(64))
                         .java("21")
                         .ndk("29.0.1"),
                 ),
@@ -228,15 +278,13 @@ fn platform_options_change_the_generated_workflow_and_checklist()
         "timeout-minutes: 20",
         "apt-get install -y libfontconfig1-dev libasound2-dev",
         "runs-on: macos-15",
-        "gem install fastlane --no-document --version 2.300.0",
-        "ruby-version: \"3.5\"",
+        "runs-on: macos-26-xlarge",
         "name: Install just",
-        "gradle-version: \"9.0\"",
         "java-version: \"21\"",
     ] {
         assert!(workflow.contains(expected), "missing {expected}");
     }
-    assert!(checklist.contains("JDK 21, Gradle 9.0, SDK platform 37"));
+    assert!(checklist.contains("JDK 21, Gradle Wrapper 9.5, compile SDK 37, target SDK 37"));
     assert!(checklist.contains("NDK `29.0.1`"));
     assert!(checklist.contains("`libfontconfig1-dev`, `libasound2-dev`"));
     Ok(())
@@ -253,6 +301,17 @@ fn rejects_platform_options_rouge_cannot_build() {
         (
             RougePublish::new(APP_ID).android(Android::new(PlayInternal).target_sdk(27)),
             "target_sdk",
+        ),
+        (
+            RougePublish::new(APP_ID).android(Android::new(PlayInternal).compile_sdk(35)),
+            "compile_sdk",
+        ),
+        (
+            RougePublish::new(APP_ID).android(
+                Android::new(PlayInternal)
+                    .toolchain(AndroidToolchain::new().gradle("9.5", "not-a-digest")),
+            ),
+            "AndroidToolchain::gradle",
         ),
         (
             RougePublish::new(APP_ID)
@@ -297,17 +356,103 @@ fn rejects_platform_options_rouge_cannot_build() {
 }
 
 #[test]
-fn accepts_typed_ios_options() -> Result<(), Box<dyn std::error::Error>> {
-    render_preset(
-        RougePublish::new(APP_ID).icon("icon.png").ios(
-            Ios::new(TestFlight::new("12345"))
-                .minimum_os("17.0")
-                .devices([Device::Phone])
-                .orientations([Orientation::Portrait])
-                .info("NSCameraUsageDescription", "Scan receipts")
-                .entitlement("aps-environment", "production"),
-        ),
+fn generates_an_xcode_project_from_typed_ios_options() -> Result<(), Box<dyn std::error::Error>> {
+    let fs = render_preset(
+        RougePublish::new(APP_ID)
+            .name("Fixture")
+            .icon("icon.png")
+            .ios(
+                Ios::new(TestFlight::new("12345"))
+                    .minimum_os("17.2.1")
+                    .devices([Device::Phone])
+                    .orientations([Orientation::Portrait])
+                    .info("NSCameraUsageDescription", "Scan receipts")
+                    .info("CFBundleSupportedPlatforms", "iPhoneOS")
+                    .info("DTSDKName", "iphoneos")
+                    .entitlement("aps-environment", "production"),
+            ),
     )?;
+    let file = |path: &'static str| fs.get(path).ok_or_else(|| missing(path));
+    let project = file("ios/RougeApp.xcodeproj/project.pbxproj")?;
+    assert!(!project.contains("@@"));
+    for setting in [
+        "IPHONEOS_DEPLOYMENT_TARGET = \"17.2.1\";",
+        "TARGETED_DEVICE_FAMILY = \"1\";",
+        "PRODUCT_BUNDLE_IDENTIFIER = \"com.example.app\";",
+        "ROUGE_DISPLAY_NAME = \"Fixture\";",
+        "CODE_SIGN_ENTITLEMENTS = App.entitlements;",
+        "path = \"PrivacyInfo.xcprivacy\";",
+    ] {
+        assert_eq!(project.matches(setting).count().min(1), 1, "{setting}");
+    }
+    let info: Value = plist::from_bytes(file("ios/Info.plist")?.as_bytes())?;
+    assert!(
+        info.as_object()
+            .is_some_and(|keys| keys.keys().all(|key| !key.starts_with("DT")))
+    );
+    for (key, value) in [
+        ("CFBundleIdentifier", json!("$(PRODUCT_BUNDLE_IDENTIFIER)")),
+        ("CFBundleDisplayName", json!("$(ROUGE_DISPLAY_NAME)")),
+        ("CFBundleExecutable", json!("$(EXECUTABLE_NAME)")),
+        ("CFBundleVersion", json!("$(CURRENT_PROJECT_VERSION)")),
+        ("CFBundleSupportedPlatforms", Value::Null),
+        (
+            "UISupportedInterfaceOrientations",
+            json!(["UIInterfaceOrientationPortrait"]),
+        ),
+        ("NSCameraUsageDescription", json!("Scan receipts")),
+    ] {
+        assert_eq!(info[key], value, "{key}");
+    }
+    let entitlements: Value = plist::from_bytes(file("ios/App.entitlements")?.as_bytes())?;
+    assert_eq!(entitlements["aps-environment"], "production");
+    let _: Value = plist::from_bytes(file("ios/PrivacyInfo.xcprivacy")?.as_bytes())?;
+    assert!(file("ios/cargo.sh")?.contains("cp \"icon.png\""));
+    assert!(file(".gitignore")?.contains("/ios/Assets.xcassets/AppIcon.appiconset/icon.png"));
+    Ok(())
+}
+
+#[test]
+fn generates_a_gradle_project_that_builds_the_rust_library()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fs = render_preset(
+        RougePublish::new(APP_ID)
+            .name("It's an app")
+            .icon("icon.png")
+            .package("fixture-app")
+            .android(Android::new(PlayInternal).permission("android.permission.INTERNET")),
+    )?;
+    let file = |path: &'static str| fs.get(path).ok_or_else(|| missing(path));
+    let gradle = file("android/build.gradle")?;
+    assert!(!gradle.contains("@@"));
+    for expected in [
+        "id 'com.android.application' version '9.5.1'",
+        "namespace 'com.example.app'",
+        "compileSdk { version = release(37) }",
+        "ndkVersion '28.2.13676358'",
+        "minSdk 28",
+        "targetSdk 36",
+        "env('APP_NAME', 'It\\'s an app')",
+        "env('APP_TARGET', 'fixture-app')",
+        "'cargo', 'ndk', '-t', 'arm64-v8a', '-P', '28'",
+        "'--lib', '--package', 'fixture-app']",
+        "from '../icon.png'",
+    ] {
+        assert!(gradle.contains(expected), "missing {expected} in {gradle}");
+    }
+    let manifest = file("android/src/main/AndroidManifest.xml")?;
+    assert!(manifest.contains("<uses-permission android:name=\"android.permission.INTERNET\" />"));
+    assert!(manifest.contains("android:icon=\"@drawable/rouge_icon\""));
+    assert!(
+        file("android/gradle/wrapper/gradle-wrapper.properties")?.contains("gradle-9.6.0-bin.zip")
+    );
+    assert!(file("android/settings.gradle")?.contains("rootProject.name = 'RougeApp'"));
+    assert!(file(".gitignore")?.contains("/android/src/*/jniLibs/"));
+    let web = render_preset(RougePublish::new(APP_ID).web(GitHubPages))?;
+    assert!(
+        web.paths()
+            .all(|path| !path.starts_with("ios") && !path.starts_with("android"))
+    );
     Ok(())
 }
 
@@ -326,4 +471,16 @@ fn all_targets() -> RougePublish {
 
 fn missing(path: &str) -> Error {
     Error::other(format!("Missing generated {path}"))
+}
+
+fn workflow_job<'a>(workflow: &'a str, id: &str) -> Result<&'a str, Error> {
+    let (_, job) = workflow
+        .split_once(&format!("\n  {id}:\n"))
+        .ok_or_else(|| missing(id))?;
+    let len = job
+        .split_inclusive('\n')
+        .take_while(|line| line.starts_with("    "))
+        .map(str::len)
+        .sum();
+    Ok(&job[..len])
 }

@@ -35,6 +35,12 @@ pub enum Channel {
     Production,
 }
 
+impl Target {
+    pub(crate) fn mobile(self) -> bool {
+        matches!(self, Self::Ios | Self::Android)
+    }
+}
+
 impl Display for Target {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&format!("{self:?}").to_lowercase())
@@ -53,7 +59,7 @@ pub struct Packager {
     root: PathBuf,
     channel: Channel,
     build_number: u32,
-    simulator_device: Option<String>,
+    device: Option<String>,
 }
 
 pub(crate) struct Build {
@@ -64,7 +70,7 @@ pub(crate) struct Build {
     pub(crate) number: u32,
     pub(crate) root: PathBuf,
     pub(crate) out: PathBuf,
-    cargo_target: PathBuf,
+    pub(crate) cargo_target: PathBuf,
 }
 
 impl Packager {
@@ -74,7 +80,7 @@ impl Packager {
             root: root.into(),
             channel: Channel::default(),
             build_number: 1,
-            simulator_device: None,
+            device: None,
         }
     }
 
@@ -88,17 +94,17 @@ impl Packager {
         self
     }
 
-    pub fn simulator_device(mut self, device: impl Into<String>) -> Self {
-        self.simulator_device = Some(device.into());
+    pub fn device(mut self, device: impl Into<String>) -> Self {
+        self.device = Some(device.into());
         self
     }
 
     pub fn run(&self, action: Action, target: Target) -> Result<()> {
         self.config.validate()?;
-        let simulator = action == Action::Run;
+        let local = action == Action::Run;
         ensure(
-            !simulator || target == Target::Ios,
-            "run is only supported for iOS",
+            !local || target.mobile(),
+            "run is only supported for iOS and Android",
         )?;
         let Some(platform) = self.config.platform(target) else {
             return invalid(format!(
@@ -109,14 +115,14 @@ impl Packager {
             !matches!(action, Action::Stage | Action::Publish) || self.channel != Channel::Check,
             "Set ROUGE_CHANNEL to preview or production before publishing",
         )?;
-        let build = self.prepare(target, simulator)?;
+        let build = self.prepare(target, local)?;
         match action {
             Action::Setup => platform.setup(&build),
             Action::Doctor => platform.doctor(&build),
             Action::Stage => platform.stage(&build),
             Action::Publish => platform.publish(&build),
             Action::Link => platform.link(&build),
-            Action::Run => platform.run_local(&build, self.simulator_device.as_deref()),
+            Action::Run => platform.run_local(&build, self.device.as_deref()),
             Action::Build => {
                 build.sh.remove_path(&build.out)?;
                 build.sh.create_dir(&build.out)?;
@@ -127,7 +133,7 @@ impl Packager {
         }
     }
 
-    fn prepare(&self, target: Target, simulator: bool) -> Result<Build> {
+    fn prepare(&self, target: Target, local: bool) -> Result<Build> {
         let sh = Shell::new()?;
         let root = path::absolute(sh.current_dir().join(&self.root)).unwrap_or(self.root.clone());
         sh.change_dir(&root);
@@ -136,15 +142,11 @@ impl Packager {
             sh,
             app: App::resolve(&self.config, &root, target)?,
             target,
-            channel: if simulator {
-                Channel::Check
-            } else {
-                self.channel
-            },
-            number: if simulator { 1 } else { self.build_number },
+            channel: if local { Channel::Check } else { self.channel },
+            number: if local { 1 } else { self.build_number },
             cargo_target: env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(|| out.join("cargo"), PathBuf::from),
-            out: if simulator {
+            out: if local && target == Target::Ios {
                 out.join("ios-sim")
             } else {
                 out.join(target.to_string())
@@ -209,6 +211,19 @@ impl Build {
             self.sh.create_dir(parent)?;
         }
         Ok(self.sh.copy_file(from, to)?)
+    }
+
+    pub(crate) fn summarize_mobile(&self, status: &str) -> Result<()> {
+        let sh = &self.sh;
+        let commit = self
+            .isolated(cmd!(sh, "git rev-parse --verify HEAD"))
+            .quiet()
+            .read()
+            .unwrap_or_else(|_| "unknown".into());
+        let (id, version, number) = (&self.app.id, &self.app.version, self.number);
+        self.summarize(&format!(
+            "`{id}` · version `{version}` · build `{number}` · checkout `{commit}` — {status}"
+        ))
     }
 
     pub(crate) fn summarize(&self, line: &str) -> Result<()> {

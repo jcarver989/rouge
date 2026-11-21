@@ -3,6 +3,7 @@ use framer::github::{Job, Step, Triggers, Workflow};
 use framer::yaml::Yaml;
 use std::fmt::Write;
 
+pub(crate) const PREVIEWING: &str = "${{ inputs.channel == 'preview' }}";
 pub(crate) const CHECKING: &str = "${{ inputs.channel == 'check' }}";
 pub(crate) const PUBLISHING: &str = "${{ inputs.channel != 'check' }}";
 pub(crate) const CHECKOUT: &str = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803";
@@ -56,17 +57,48 @@ pub(crate) fn rouge(name: &str, action: &str, target: Target) -> Step {
 }
 
 pub(crate) fn inspect(target: Target, path: &str) -> Step {
-    Step::uses(ARTIFACT)
-        .name("Save package for inspection")
-        .condition(CHECKING)
-        .with("name", format!("rouge-{target}-check"))
+    artifact(
+        target,
+        "Save package for inspection",
+        "check",
+        path,
+        CHECKING,
+    )
+}
+
+pub(crate) fn artifact(
+    target: Target,
+    title: &str,
+    name: &str,
+    path: &str,
+    condition: &str,
+) -> Step {
+    let step = Step::uses(ARTIFACT)
+        .name(title)
+        .condition(condition)
+        .with("name", format!("rouge-{target}-{name}"))
         .with("path", format!(".rouge/out/{target}/{path}"))
-        .with("if-no-files-found", "error")
+        .with("if-no-files-found", "error");
+    if target.mobile() {
+        step.with("overwrite", "true")
+            .with("include-hidden-files", "true")
+    } else {
+        step
+    }
 }
 
 pub(crate) fn secrets(step: Step, names: &[&str]) -> Step {
     names.iter().fold(step, |step, name| {
         step.env(*name, format!("${{{{ secrets.{name} }}}}"))
+    })
+}
+
+pub(crate) fn preview_secrets(step: Step, names: &[&str]) -> Step {
+    names.iter().fold(step, |step, name| {
+        step.env(
+            *name,
+            format!("${{{{ inputs.channel == 'preview' && secrets.{name} || '' }}}}"),
+        )
     })
 }
 
@@ -81,28 +113,42 @@ pub(crate) fn render(config: &RougePublish) -> String {
             "${{ inputs.build_number || github.run_number }}",
         )
         .permission("contents", "read");
+    let mut jobs = Vec::new();
     for platform in config.platforms() {
+        let target = platform.target();
+        let name = target.to_string();
+        let branch = format!(
+            "github.ref == format('refs/heads/{{0}}', github.event.repository.default_branch) && (inputs.target == 'all' || inputs.target == '{name}')"
+        );
+        let condition = |extra: &str| format!("${{{{ {branch}{extra} }}}}");
+        let channels = if target.mobile() {
+            " && inputs.channel != 'production'"
+        } else {
+            ""
+        };
         workflow = workflow.job(platform.job(config));
-        targets.push(platform.target().to_string());
+        jobs.push((name.clone(), condition(channels), platform.environment()));
+        if let Some(preview) = platform.preview_job(config) {
+            jobs.push((
+                preview.id().to_owned(),
+                condition(" && inputs.channel == 'preview'"),
+                format!("rouge-{name}-preview").into(),
+            ));
+            workflow = workflow.job(preview);
+        }
+        targets.push(name);
     }
     let mut document = workflow.to_yaml();
     if let Some(dispatch) = child(&mut document, "on").and_then(|on| child(on, "workflow_dispatch"))
     {
         *dispatch = Yaml::map().with("inputs", inputs(targets));
     }
-    for platform in config.platforms() {
-        let run_if = format!(
-            "${{{{ github.ref == format('refs/heads/{{0}}', github.event.repository.default_branch) && (inputs.target == 'all' || inputs.target == '{}') }}}}",
-            platform.target()
-        );
-        let job = child(&mut document, "jobs")
-            .and_then(|jobs| child(jobs, &platform.target().to_string()));
-        if let Some(Yaml::Map(entries)) = job {
+    for (id, run_if, environment) in jobs {
+        if let Some(Yaml::Map(entries)) =
+            child(&mut document, "jobs").and_then(|jobs| child(jobs, &id))
+        {
             entries.insert(0, ("if".into(), run_if.into()));
-            entries.insert(
-                entries.len() - 1,
-                ("environment".into(), platform.environment()),
-            );
+            entries.insert(entries.len() - 1, ("environment".into(), environment));
         }
     }
     document.to_yaml_string()

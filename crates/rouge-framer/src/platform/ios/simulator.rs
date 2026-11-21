@@ -1,10 +1,9 @@
-use super::{Device, Ios, SIMULATOR, check_icon};
+use super::{Device, Ios, SIMULATOR, check_icon, xcodebuild};
 use crate::error::{PublishError, Result, ensure, invalid};
 use crate::packager::{Build, need};
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
-use tempfile::tempdir;
 use xshell::cmd;
 
 #[derive(Deserialize)]
@@ -62,14 +61,17 @@ pub(super) fn run(ios: &Ios, build: &Build, selector: Option<&str>) -> Result<()
     let (udid, name, id) = (&device.udid, &device.name, &build.app.id);
     println!("Building for {name} ({udid})");
 
-    check_icon(build, SIMULATOR)?;
-    let scratch = tempdir()?;
-    let bundle = build.out.join(format!("{}.app", build.app.target));
-    sh.remove_path(&bundle)?;
-    ios.assemble_bundle(build, scratch.path(), &bundle, SIMULATOR)?;
+    check_icon(build)?;
     build
-        .isolated(cmd!(sh, "codesign --sign - {bundle}"))
+        .isolated(cmd!(sh, "rustup target add {SIMULATOR}"))
         .run()?;
+    let derived = build.out.join("DerivedData");
+    let destination = format!("id={udid}");
+    xcodebuild(build, &derived)?
+        .args(["-configuration", "Debug", "-destination", &destination])
+        .arg("build")
+        .run()?;
+    let bundle = derived.join("Build/Products/Debug-iphonesimulator/RougeApp.app");
     build
         .isolated(cmd!(sh, "xcrun simctl bootstatus {udid} -b"))
         .run()?;

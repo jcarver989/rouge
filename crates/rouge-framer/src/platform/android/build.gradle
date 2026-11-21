@@ -1,21 +1,49 @@
+plugins { id 'com.android.application' version '@@PLUGIN@@' }
+
+def env = { name, fallback -> System.getenv(name) ?: fallback }
+def uploadKey = System.getenv('ROUGE_KEYSTORE')
+
 android {
-    namespace System.getenv('APP_ID')
-    compileSdk System.getenv('ROUGE_TARGET_SDK').toInteger()
+    namespace '@@ID@@'
+    compileSdk { version = release(@@COMPILE_SDK@@) }
+    buildToolsVersion '@@BUILD_TOOLS@@'
+    ndkVersion '@@NDK@@'
     defaultConfig {
-        applicationId System.getenv('APP_ID')
-        minSdk System.getenv('ROUGE_MIN_SDK').toInteger()
-        targetSdk System.getenv('ROUGE_TARGET_SDK').toInteger()
-        versionCode System.getenv('ROUGE_BUILD_NUMBER').toInteger()
-        versionName System.getenv('APP_VERSION')
-        manifestPlaceholders = [appName: System.getenv('APP_NAME'), rustLibrary: System.getenv('APP_TARGET').replace('-', '_')]
+        applicationId '@@ID@@'
+        minSdk @@MIN_SDK@@
+        targetSdk @@TARGET_SDK@@
+        versionCode env('ROUGE_BUILD_NUMBER', '1').toInteger()
+        versionName env('APP_VERSION', '0.0.0')
+        manifestPlaceholders = [appName: env('APP_NAME', '@@NAME@@'), rustLibrary: env('APP_TARGET', '@@LIBRARY@@').replace('-', '_')]
     }
-    signingConfigs {
-        upload {
-            storeFile file(System.getenv('ROUGE_KEYSTORE'))
-            storePassword System.getenv('ANDROID_UPLOAD_STORE_PASSWORD')
-            keyAlias System.getenv('ANDROID_UPLOAD_KEY_ALIAS')
-            keyPassword System.getenv('ANDROID_UPLOAD_KEY_PASSWORD')
+    if (uploadKey) {
+        signingConfigs {
+            upload {
+                storeFile file(uploadKey)
+                storePassword System.getenv('ANDROID_UPLOAD_STORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_UPLOAD_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_UPLOAD_KEY_PASSWORD')
+            }
         }
     }
-    buildTypes { release { signingConfig signingConfigs.upload } }
+    buildTypes {
+        release {
+            if (uploadKey) signingConfig signingConfigs.upload
+            ndk { debugSymbolLevel = 'SYMBOL_TABLE' }
+        }
+    }
+    packaging { jniLibs { useLegacyPackaging = false } }
 }
+
+['Debug', 'Release'].each { variant ->
+    def cargo = tasks.register("cargo$variant", Exec) {
+        workingDir '..'
+        environment 'ANDROID_NDK_HOME', "${androidComponents.sdkComponents.sdkDirectory.get().asFile}/ndk/@@NDK@@"
+        environment 'CARGO_NDK_NO_PANIC_HOOK', '1'
+        environment 'CARGO_PROFILE_RELEASE_DEBUG', 'line-tables-only'
+        environment 'CARGO_PROFILE_RELEASE_STRIP', 'none'
+        commandLine(['cargo', 'ndk', '-t', 'arm64-v8a', '-P', '@@MIN_SDK@@', '-o', file("src/${variant.toLowerCase()}/jniLibs"), 'build', '--locked', '--lib'@@PACKAGE@@] + (variant == 'Release' ? ['--release'] : []))
+    }
+    tasks.matching { it.name == "pre${variant}Build" }.configureEach { dependsOn cargo }
+}
+@@ICON@@

@@ -24,6 +24,10 @@ pub(crate) trait Platform {
 
     fn job(&self, config: &RougePublish) -> Job;
 
+    fn preview_job(&self, _config: &RougePublish) -> Option<Job> {
+        None
+    }
+
     fn environment(&self) -> Yaml {
         format!(
             "${{{{ inputs.channel == 'check' && 'rouge-package-check' || format('rouge-{}-{{0}}', inputs.channel) }}}}",
@@ -33,6 +37,14 @@ pub(crate) trait Platform {
     }
 
     fn guide(&self) -> &'static str;
+
+    fn files(&self, _config: &RougePublish) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    fn ignored(&self) -> &'static str {
+        ""
+    }
 
     fn requirements(&self) -> String {
         String::new()
@@ -53,7 +65,7 @@ pub(crate) trait Platform {
     fn build(&self, build: &Build) -> Result<()>;
 
     fn run_local(&self, _build: &Build, _device: Option<&str>) -> Result<()> {
-        invalid("run is only supported for iOS")
+        invalid("run is only supported for iOS and Android")
     }
 
     fn stage(&self, _build: &Build) -> Result<()> {

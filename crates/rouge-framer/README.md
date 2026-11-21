@@ -24,7 +24,7 @@ fn main() -> ExitCode {
 }
 ```
 
-Run `cargo framer` from the repository root and commit the generated files. Follow `PUBLISHING.md` to test and publish on GitHub. To build locally, run `cargo rouge build web` or replace `web` with another enabled target. Run `cargo framer --check` in CI to catch stale generated files.
+Run `cargo framer` from the repository root and commit the generated files. For mobile targets these include native projects in `ios/` and `android/` whose builds call cargo, so Xcode, Android Studio and Gradle work on them directly. Follow `PUBLISHING.md` to test and publish on GitHub. The `check` channel builds without release credentials; mobile store setup, signing gates, and which upload/promotion steps remain manual are documented in `PUBLISHING.md` under iOS and Android. To build locally, run `cargo rouge build web` or replace `web` with another enabled target. Run `cargo framer --check` in CI to catch stale generated files.
 
 ## Targets
 
@@ -52,4 +52,21 @@ ROUGE_IOS_DEVICE="iPhone 17 Pro" just ios-sim
 cargo rouge run ios --device "iPhone 17 Pro"  # without Just
 ```
 
-The command builds a debug `.app` in `.rouge/out/ios-sim/`, opens Simulator, then installs and launches the app. By default it prefers a compatible booted simulator, then the newest compatible runtime. Use a name or UDID to override the selection; use a UDID if the name is ambiguous (`xcrun simctl list devices available`). No Apple account, valid App Store Connect ID, or distribution signing is needed. `cargo rouge build ios` still builds a separate device package.
+The command builds the `ios/` project for the simulator with `xcodebuild` (output in `.rouge/out/ios-sim/`), opens Simulator, then installs and launches the app. By default it prefers a compatible booted simulator, then the newest compatible runtime. Use a name or UDID to override the selection; use a UDID if the name is ambiguous (`xcrun simctl list devices available`). No Apple account, valid App Store Connect ID, or distribution signing is needed. `cargo rouge build ios` still builds a separate device package.
+
+## Run on Android
+
+Set `ANDROID_HOME`, install the Android SDK command-line tools and JDK, and connect an arm64 device or emulator with debugging enabled.
+
+```sh
+cargo rouge setup android
+cargo rouge run android --device <adb-serial>
+```
+
+You can omit `--device` when exactly one device is online, or set `ANDROID_SERIAL`. This runs the `android/` project's `assembleDebug`, then installs and launches the debug APK; it does not sign or publish a Play release.
+
+## Promote a tested mobile build
+
+`preview` uploads a signed build to App Store Connect or Play internal testing. Wait for store processing and test that build, then select the same build in the store console to submit and release it. The mobile jobs do not run for `production`, so nothing is rebuilt or uploaded twice. Desktop and web publishing are unchanged.
+
+When upgrading an existing preset, regenerate with `cargo framer` and read the new `PUBLISHING.md` before enabling the workflow. Verify Apple automatic signing/export and Google Play federation on dedicated canary app records before switching your publishing workflows.

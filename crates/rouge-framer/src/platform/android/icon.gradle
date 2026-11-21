@@ -1,0 +1,7 @@
+
+def icon = tasks.register('rougeIcon', Copy) {
+    from '../@@ICON_PATH@@'
+    into 'src/main/res/drawable-nodpi'
+    rename { 'rouge_icon.png' }
+}
+tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn icon }
