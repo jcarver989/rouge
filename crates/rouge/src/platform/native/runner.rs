@@ -35,7 +35,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, SmolStr};
-use winit::window::{Window, WindowId};
+use winit::window::{Icon, Window, WindowId};
 
 pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
     let bar = !app.menus.is_empty();
@@ -63,6 +63,8 @@ pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
         next_window: 0,
         closing: Vec::new(),
         pending: app.windows,
+        pending_icon: app.icon,
+        window_icon: None,
         menus,
         bar,
         fonts: app.fonts,
@@ -91,6 +93,8 @@ struct Runner {
     next_window: u64,
     closing: Vec<(LinkWindow, Arc<Window>)>,
     pending: Vec<(WindowOptions, RootFn)>,
+    pending_icon: Option<Cow<'static, [u8]>>,
+    window_icon: Option<Icon>,
     menus: Vec<Menu>,
     bar: bool,
     fonts: Vec<Cow<'static, [u8]>>,
@@ -111,7 +115,8 @@ impl Runner {
             .with_title(options.title.clone())
             .with_maximized(options.maximized)
             .with_decorations(options.decorations == Decorations::Server)
-            .with_resizable(options.resizable);
+            .with_resizable(options.resizable)
+            .with_window_icon(self.window_icon.clone());
         if !Current::MOBILE {
             attributes = attributes
                 .with_inner_size(LogicalSize::new(options.size.width, options.size.height));
@@ -262,6 +267,9 @@ impl ApplicationHandler for Runner {
             self.error = Some(error);
             event_loop.exit();
             return;
+        }
+        if let Some(png) = self.pending_icon.take() {
+            self.window_icon = Current::app_icon(&png);
         }
         for (options, root) in take(&mut self.pending) {
             if let Err(error) = self.open(event_loop, options, root) {

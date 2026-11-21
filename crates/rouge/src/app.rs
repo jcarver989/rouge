@@ -104,6 +104,8 @@ pub(crate) type RootFn = Box<dyn FnOnce() -> AnyView>;
 pub struct App {
     pub(crate) windows: Vec<(WindowOptions, RootFn)>,
     pub(crate) menus: Vec<Menu>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) icon: Option<Cow<'static, [u8]>>,
     pub(crate) fonts: Vec<Cow<'static, [u8]>>,
     #[cfg(feature = "tokio-rt")]
     pub(crate) tokio: Option<Handle>,
@@ -115,6 +117,8 @@ impl Default for App {
         App {
             windows: Vec::new(),
             menus: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            icon: None,
             fonts: bundled_fonts().map(Cow::Borrowed).collect(),
             #[cfg(feature = "tokio-rt")]
             tokio: None,
@@ -131,6 +135,13 @@ impl App {
 
     pub fn new() -> App {
         App::default()
+    }
+
+    /// Sets the app icon from PNG bytes on supported desktop platforms.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn icon(mut self, png: impl Into<Cow<'static, [u8]>>) -> Self {
+        self.icon = Some(png.into());
+        self
     }
 
     pub fn fonts<T: Into<Cow<'static, [u8]>>>(

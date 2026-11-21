@@ -20,7 +20,7 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{KeyEvent, MouseButton, MouseScrollDelta, TouchPhase};
 use winit::event_loop::{EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
-use winit::window::{CursorIcon, ResizeDirection, Theme, Window};
+use winit::window::{CursorIcon, Icon, ResizeDirection, Theme, Window};
 
 pub(crate) trait WinitPlatform: Platform + Sized {
     const SURFACE_LOST_ON_SUSPEND: bool = false;
@@ -28,6 +28,10 @@ pub(crate) trait WinitPlatform: Platform + Sized {
     fn new(menus: &[Menu], waker: &EventLoopProxy<()>) -> Result<Self, AppError>;
 
     fn clipboard() -> impl Clipboard + 'static;
+
+    fn app_icon(_png: &[u8]) -> Option<Icon> {
+        None
+    }
 
     #[cfg(feature = "persist")]
     fn default_config_dir(name: &str) -> Option<PathBuf>;

@@ -6,6 +6,9 @@ use muda::accelerator::{Key as NativeKey, KeyAccelerator, Modifiers};
 use muda::{
     Menu as NativeMenu, MenuEvent, MenuId, MenuItem as NativeItem, PredefinedMenuItem, Submenu,
 };
+use objc2::{AnyThread, MainThreadMarker};
+use objc2_app_kit::{NSApplication, NSImage};
+use objc2_foundation::NSData;
 use rouge_core::{Chord, Clipboard, Key, Menu, MenuItem, Ui};
 use std::collections::HashMap;
 #[cfg(feature = "persist")]
@@ -20,6 +23,7 @@ use winit::event::KeyEvent;
 use winit::event_loop::EventLoopProxy;
 use winit::keyboard::Key as WinitKey;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+use winit::window::Icon;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -58,6 +62,19 @@ impl WinitPlatform for MacOs {
 
     fn clipboard() -> impl Clipboard + 'static {
         DesktopClipboard::new()
+    }
+
+    #[allow(unsafe_code)]
+    fn app_icon(png: &[u8]) -> Option<Icon> {
+        let mtm = MainThreadMarker::new()?;
+        let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(png)) else {
+            Self::warn("invalid app icon");
+            return None;
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        // SAFETY: AppKit requires a non-null image and the main thread.
+        unsafe { app.setApplicationIconImage(Some(&image)) };
+        None
     }
 
     #[cfg(feature = "persist")]

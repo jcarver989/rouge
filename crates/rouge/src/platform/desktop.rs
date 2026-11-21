@@ -2,6 +2,8 @@ use super::Platform;
 use super::native::clipboard::DesktopClipboard;
 use super::native::{WinitPlatform, run};
 use crate::app::{App, AppError};
+use image::imageops::FilterType;
+use image::{ImageFormat, load_from_memory_with_format};
 use rouge_core::{Clipboard, Menu};
 #[cfg(feature = "persist")]
 use std::env::{home_dir, var_os};
@@ -14,6 +16,7 @@ use winit::event::KeyEvent;
 use winit::event_loop::EventLoopProxy;
 use winit::keyboard::Key;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+use winit::window::Icon;
 
 #[derive(Debug, Error)]
 pub enum Error {}
@@ -45,6 +48,15 @@ impl WinitPlatform for Desktop {
 
     fn clipboard() -> impl Clipboard + 'static {
         DesktopClipboard::new()
+    }
+
+    fn app_icon(png: &[u8]) -> Option<Icon> {
+        let image = load_from_memory_with_format(png, ImageFormat::Png)
+            .inspect_err(|error| Self::warn(&format!("invalid app icon: {error}")))
+            .ok()?;
+        let image = image.resize(128, 128, FilterType::Lanczos3).into_rgba8();
+        let (width, height) = image.dimensions();
+        Icon::from_rgba(image.into_raw(), width, height).ok()
     }
 
     #[cfg(feature = "persist")]
