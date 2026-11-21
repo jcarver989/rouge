@@ -15,7 +15,7 @@ publish = false
 dhat = ["dep:dhat"]
 
 [dependencies]
-rouge = { path = "../rouge", version = "0.2.0", features = ["markdown"] }
+rouge = { path = "../rouge", version = "0.3.0", features = ["markdown"] }
 dhat = { version = "0.3", optional = true }
 rustc-demangle = "0.1"
 serde_json.workspace = true

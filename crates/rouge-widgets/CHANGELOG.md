@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.2.0...rouge-widgets-v0.3.0) - 2026-11-21
+
+### Added
+
+- *(framer)* [**breaking**] stop generating PUBLISHING.md
+- *(widgets)* snap the picker highlight to a hovered row
+- *(widgets)* adapt toasts and side panels to handhelds
+- *(widgets)* add mobile navigation, lists, pickers and bottom chrome
+- *(widgets)* size controls for touch and open context menus by long press
+- *(widgets)* [**breaking**] add a Stop control for busy composers
+- *(framer)* add Rouge app publishing preset
+
+### Fixed
+
+- *(widgets)* show Stop only when the composer can cancel
+
+### Other
+
+- migrate workspace tasks from Just to Mise
+- describe mobile preview publishing and store promotion
+- *(widgets)* replace the spinner helpers with one Spinner view
+- show and describe the mobile widgets
+- *(widgets)* share drag and overlay helpers
+
 ## [0.2.0](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.1.2...rouge-widgets-v0.2.0) - 2026-11-19
 
 ### Added
