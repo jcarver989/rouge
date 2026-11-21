@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/jcarver989/rouge/compare/rouge-v0.2.0...rouge-v0.3.0) - 2026-11-21
+
+### Added
+
+- *(core)* expose the keyboard inset and the window scope
+- *(widgets)* [**breaking**] add a Stop control for busy composers
+- *(framer)* add Rouge app publishing preset
+
+### Fixed
+
+- *(ios)* follow the system appearance
+
+### Other
+
+- describe mobile preview publishing and store promotion
+- show and describe the mobile widgets
+
 ## [0.2.0](https://github.com/jcarver989/rouge/compare/rouge-v0.1.2...rouge-v0.2.0) - 2026-11-19
 
 ### Added
