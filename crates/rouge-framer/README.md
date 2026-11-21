@@ -5,7 +5,7 @@
 ## Setup
 
 1. Install Framer with `cargo install cargo-framer`. If your repository has no `.framer/` directory, run `cargo framer init` from the root.
-2. In `.framer/Cargo.toml`, set `framer = "0.1.3"` and add `rouge-framer` under `[dependencies]`. Do not add it to your app's manifest.
+2. In `.framer/Cargo.toml`, set `framer = "0.1.4"` and add `rouge-framer` under `[dependencies]`. Do not add it to your app's manifest.
 3. Apply `RougePublish` in `.framer/src/main.rs`. Call `rouge_framer::run(&project)` instead of `project.synth()` so the entry point can also handle `cargo rouge` commands.
 
 ```rust,no_run
@@ -44,12 +44,12 @@ Pass a platform builder to change its defaults. For example, `.linux(Linux::new(
 
 ## Run on the iOS Simulator
 
-Apps with `.ios(...)` get a `just ios-sim` recipe after Framer synthesis. Use an Apple Silicon Mac with full Xcode selected and a compatible iOS simulator runtime installed in Xcode.
+Apps with `.ios(...)` get a `mise run ios-sim` task after Framer synthesis. Install [Mise](https://mise.jdx.dev) and run `mise trust` from your app’s checkout to use the task. Use an Apple Silicon Mac with full Xcode selected and a compatible iOS simulator runtime installed in Xcode.
 
 ```sh
-just ios-sim
-ROUGE_IOS_DEVICE="iPhone 17 Pro" just ios-sim
-cargo rouge run ios --device "iPhone 17 Pro"  # without Just
+mise run ios-sim
+ROUGE_IOS_DEVICE="iPhone 17 Pro" mise run ios-sim
+cargo rouge run ios --device "iPhone 17 Pro"  # without Mise
 ```
 
 The command builds the `ios/` project for the simulator with `xcodebuild` (output in `.rouge/out/ios-sim/`), opens Simulator, then installs and launches the app. By default it prefers a compatible booted simulator, then the newest compatible runtime. Use a name or UDID to override the selection; use a UDID if the name is ambiguous (`xcrun simctl list devices available`). No Apple account, valid App Store Connect ID, or distribution signing is needed. `cargo rouge build ios` still builds a separate device package.

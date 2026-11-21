@@ -34,7 +34,7 @@ fn only_generates_enabled_targets() -> Result<(), Box<dyn std::error::Error>> {
         (_, remaining) = remaining.split_once(step).ok_or_else(|| missing(step))?;
     }
     assert!(!workflow.contains("cargo rouge build ios"));
-    assert!(fs.get("justfile").is_none());
+    assert!(fs.get("mise.toml").is_none());
     assert!(fs.paths().all(|path| !path.starts_with(".rouge")));
     Ok(())
 }
@@ -181,21 +181,22 @@ fn generated_files_pass_framer_check() -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[test]
-fn adds_and_removes_only_the_simulator_recipe() -> Result<(), Box<dyn std::error::Error>> {
+fn adds_and_removes_only_the_simulator_task() -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;
     let mut fs = DiskFs::new(root.path());
-    let justfile = root.path().join("justfile");
-    let existing = "set quiet\n\nhello:\n    echo hello\n";
-    fs::write(&justfile, existing)?;
+    let mise_config = root.path().join("mise.toml");
+    let existing = "[tasks.hello]\nrun = \"echo hello\"\n";
+    fs::write(&mise_config, existing)?;
     let config = RougePublish::new(APP_ID).web(GitHubPages).icon("icon.png");
     let mut project = Project::new();
     project.apply(config.clone().ios(TestFlight::new("0")));
     project.synth_with(&mut fs, Mode::Write)?;
 
-    let generated = fs::read_to_string(&justfile)?;
+    let generated = fs::read_to_string(&mise_config)?;
     assert!(generated.starts_with(existing));
-    assert!(generated.contains("# framer:begin rouge/ios-sim"));
-    assert!(generated.contains("ios-sim:\n    cargo rouge run ios\n"));
+    assert!(generated.contains("[tasks.ios-sim]"));
+    assert!(generated.contains("run = \"cargo rouge run ios\""));
+    assert!(!root.path().join("justfile").exists());
     let workflow = fs::read_to_string(root.path().join(WORKFLOW))?;
     assert!(workflow.contains("run: cargo rouge build ios"));
     assert!(!workflow.contains("ios-sim"));
@@ -208,10 +209,7 @@ fn adds_and_removes_only_the_simulator_recipe() -> Result<(), Box<dyn std::error
     let report = project.synth_with(&mut fs, Mode::Check)?;
     assert!(!report.is_clean());
     project.synth_with(&mut fs, Mode::Write)?;
-    assert_eq!(
-        fs::read_to_string(&justfile)?.trim_end(),
-        existing.trim_end()
-    );
+    assert_eq!(fs::read_to_string(&mise_config)?, existing);
     let report = project.synth_with(&mut fs, Mode::Check)?;
     assert!(report.is_clean(), "{}", report.diff());
     Ok(())
@@ -259,7 +257,7 @@ fn platform_options_change_the_generated_workflow_and_checklist()
             .ios(
                 Ios::new(TestFlight::new("12345"))
                     .runner("macos-26-xlarge")
-                    .setup(Step::run("brew install just").name("Install just")),
+                    .setup(Step::run("brew install xcbeautify").name("Install xcbeautify")),
             )
             .android(
                 Android::new(PlayInternal).target_sdk(37).toolchain(
@@ -279,7 +277,7 @@ fn platform_options_change_the_generated_workflow_and_checklist()
         "apt-get install -y libfontconfig1-dev libasound2-dev",
         "runs-on: macos-15",
         "runs-on: macos-26-xlarge",
-        "name: Install just",
+        "name: Install xcbeautify",
         "java-version: \"21\"",
     ] {
         assert!(workflow.contains(expected), "missing {expected}");

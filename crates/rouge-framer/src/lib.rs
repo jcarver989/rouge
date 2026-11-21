@@ -9,8 +9,7 @@ mod workflow;
 
 use clap::{Parser, value_parser};
 pub use error::PublishError;
-use framer::just::{Justfile, Recipe};
-use framer::toml_edit::value;
+use framer::toml_edit::{Item, Table, value};
 use framer::{Component, FramerError, Output, Preset, Project, Result};
 pub use packager::{Action, Channel, Packager, Target};
 use platform::Platform;
@@ -242,13 +241,14 @@ impl Component for RougePublish {
         )?;
         output.managed("PUBLISHING.md", workflow::checklist(self))?;
         if self.ios.is_some() {
-            Justfile::new("rouge/ios-sim")
-                .recipe(
-                    Recipe::new("ios-sim")
-                        .doc("Build and launch the app in the iOS Simulator")
-                        .line("cargo rouge run ios"),
-                )
-                .synthesize(output)?;
+            let mut task = Table::new();
+            task.insert(
+                "description",
+                value("Build and launch the app in the iOS Simulator"),
+            );
+            task.insert("run", value("cargo rouge run ios"));
+            task.insert("raw", value(true));
+            output.toml("mise.toml", "tasks.ios-sim", Item::Table(task))?;
         }
         Ok(())
     }
