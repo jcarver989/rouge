@@ -4,7 +4,6 @@
 /.github/
 /android/
 /ios/
-/PUBLISHING.md
 /justfile
 
 # framer:begin framer

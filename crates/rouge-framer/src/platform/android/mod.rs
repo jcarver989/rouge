@@ -237,10 +237,6 @@ impl Platform for Android {
         )
     }
 
-    fn guide(&self) -> &'static str {
-        include_str!("guide.md")
-    }
-
     fn files(&self, config: &RougePublish) -> Vec<(String, String)> {
         let quoted = |value: &str| value.replace('\\', "\\\\").replace('\'', "\\'");
         let toolchain = &self.toolchain;
@@ -303,21 +299,6 @@ impl Platform for Android {
 
     fn ignored(&self) -> &'static str {
         "/android/.gradle/\n/android/build/\n/android/gradle/wrapper/gradle-wrapper.jar\n/android/src/*/jniLibs/\n/android/src/main/res/drawable-nodpi/rouge_icon.png\n/gha-creds-*.json\n"
-    }
-
-    fn requirements(&self) -> String {
-        let AndroidToolchain {
-            ndk,
-            build_tools,
-            cargo_ndk,
-            gradle,
-            java,
-            ..
-        } = &self.toolchain;
-        format!(
-            " Needs JDK {java}, Gradle Wrapper {gradle}, compile SDK {}, target SDK {}, minimum SDK {}, build-tools {build_tools}, NDK `{ndk}`, `cargo-ndk` {cargo_ndk}, and `ANDROID_HOME` set to the SDK; `cargo rouge setup android` installs the SDK packages and `cargo-ndk`.",
-            self.compile_sdk, self.target_sdk, self.min_sdk
-        )
     }
 
     fn validate(&self, _config: &RougePublish) -> Result<(), String> {
@@ -591,6 +572,6 @@ impl Keystore {
 fn sdk() -> Result<PathBuf> {
     match env::var_os("ANDROID_HOME") {
         Some(home) if !home.is_empty() => Ok(home.into()),
-        _ => invalid("Set ANDROID_HOME to the Android SDK, then see PUBLISHING.md"),
+        _ => invalid("Set ANDROID_HOME to the Android SDK directory"),
     }
 }

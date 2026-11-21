@@ -68,10 +68,6 @@ impl Platform for Macos {
         )
     }
 
-    fn guide(&self) -> &'static str {
-        include_str!("guide.md")
-    }
-
     fn validate(&self, _config: &RougePublish) -> Result<(), String> {
         self.bundle.toolchain.validate()?;
         match &self.minimum_os {

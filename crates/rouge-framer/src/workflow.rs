@@ -1,7 +1,6 @@
 use crate::{RougePublish, Target};
 use framer::github::{Job, Step, Triggers, Workflow};
 use framer::yaml::Yaml;
-use std::fmt::Write;
 
 pub(crate) const PREVIEWING: &str = "${{ inputs.channel == 'preview' }}";
 pub(crate) const CHECKING: &str = "${{ inputs.channel == 'check' }}";
@@ -152,20 +151,6 @@ pub(crate) fn render(config: &RougePublish) -> String {
         }
     }
     document.to_yaml_string()
-}
-
-pub(crate) fn checklist(config: &RougePublish) -> String {
-    let mut doc = String::from(include_str!("checklist.md"));
-    for platform in config.platforms() {
-        let _ = writeln!(
-            doc,
-            "\n{}\nLocal build: `cargo rouge build {}`.{}",
-            platform.guide(),
-            platform.target(),
-            platform.requirements()
-        );
-    }
-    doc
 }
 
 fn inputs(targets: Vec<String>) -> Yaml {

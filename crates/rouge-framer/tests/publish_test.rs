@@ -15,14 +15,10 @@ use tempfile::tempdir;
 fn only_generates_enabled_targets() -> Result<(), Box<dyn std::error::Error>> {
     let fs = render_preset(RougePublish::new(APP_ID).web(GitHubPages))?;
     let workflow = fs.get(WORKFLOW).ok_or_else(|| missing(WORKFLOW))?;
-    let checklist = fs
-        .get("PUBLISHING.md")
-        .ok_or_else(|| missing("PUBLISHING.md"))?;
+    assert!(fs.get("PUBLISHING.md").is_none());
     assert!(workflow.contains("options: [all, web]"));
     assert!(workflow.contains("actions/deploy-pages@"));
     assert!(!workflow.contains("secrets."));
-    assert!(checklist.contains("/preview/"));
-    assert!(!checklist.contains("TestFlight"));
     let steps = [
         "run: cargo rouge stage web",
         "actions/upload-pages-artifact@",
@@ -246,8 +242,7 @@ fn only_publishes_preview_and_production_channels() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn platform_options_change_the_generated_workflow_and_checklist()
--> Result<(), Box<dyn std::error::Error>> {
+fn platform_options_change_the_generated_workflow() -> Result<(), Box<dyn std::error::Error>> {
     let fs = render_preset(
         RougePublish::new(APP_ID)
             .icon("assets/icon.png")
@@ -269,9 +264,6 @@ fn platform_options_change_the_generated_workflow_and_checklist()
             ),
     )?;
     let workflow = fs.get(WORKFLOW).ok_or_else(|| missing(WORKFLOW))?;
-    let checklist = fs
-        .get("PUBLISHING.md")
-        .ok_or_else(|| missing("PUBLISHING.md"))?;
     for expected in [
         "timeout-minutes: 20",
         "apt-get install -y libfontconfig1-dev libasound2-dev",
@@ -282,9 +274,6 @@ fn platform_options_change_the_generated_workflow_and_checklist()
     ] {
         assert!(workflow.contains(expected), "missing {expected}");
     }
-    assert!(checklist.contains("JDK 21, Gradle Wrapper 9.5, compile SDK 37, target SDK 37"));
-    assert!(checklist.contains("NDK `29.0.1`"));
-    assert!(checklist.contains("`libfontconfig1-dev`, `libasound2-dev`"));
     Ok(())
 }
 

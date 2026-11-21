@@ -92,10 +92,6 @@ impl Platform for Web {
             .with("url", PAGE_URL)
     }
 
-    fn guide(&self) -> &'static str {
-        include_str!("guide.md")
-    }
-
     fn doctor(&self, build: &Build) -> Result<()> {
         if !build.publishing() {
             return Ok(());

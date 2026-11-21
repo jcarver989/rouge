@@ -1,6 +1,6 @@
 # rouge-framer
 
-`rouge-framer` generates a GitHub Actions publishing workflow, a `cargo rouge` command for running and packaging your app, and a `PUBLISHING.md` setup guide.
+`rouge-framer` generates a GitHub Actions publishing workflow and a `cargo rouge` command for running and packaging your app.
 
 ## Setup
 
@@ -24,7 +24,7 @@ fn main() -> ExitCode {
 }
 ```
 
-Run `cargo framer` from the repository root and commit the generated files. For mobile targets these include native projects in `ios/` and `android/` whose builds call cargo, so Xcode, Android Studio and Gradle work on them directly. Follow `PUBLISHING.md` to test and publish on GitHub. The `check` channel builds without release credentials; mobile store setup, signing gates, and which upload/promotion steps remain manual are documented in `PUBLISHING.md` under iOS and Android. To build locally, run `cargo rouge build web` or replace `web` with another enabled target. Run `cargo framer --check` in CI to catch stale generated files.
+Run `cargo framer` from the repository root and commit the generated files. For mobile targets these include native projects in `ios/` and `android/` whose builds call cargo, so Xcode, Android Studio and Gradle work on them directly. Run the workflow with the `check` channel to build without release credentials. To build locally, run `cargo rouge build web` or replace `web` with another enabled target. Run `cargo framer --check` in CI to catch stale generated files.
 
 ## Targets
 
@@ -68,5 +68,3 @@ You can omit `--device` when exactly one device is online, or set `ANDROID_SERIA
 ## Promote a tested mobile build
 
 `preview` uploads a signed build to App Store Connect or Play internal testing. Wait for store processing and test that build, then select the same build in the store console to submit and release it. The mobile jobs do not run for `production`, so nothing is rebuilt or uploaded twice. Desktop and web publishing are unchanged.
-
-When upgrading an existing preset, regenerate with `cargo framer` and read the new `PUBLISHING.md` before enabling the workflow. Verify Apple automatic signing/export and Google Play federation on dedicated canary app records before switching your publishing workflows.

@@ -41,9 +41,7 @@ pub(crate) fn all() -> impl Iterator<Item = &'static str> {
 pub(crate) fn secret(name: &str) -> Result<String> {
     match env::var(name) {
         Ok(value) if !value.is_empty() => Ok(value),
-        _ => invalid(format!(
-            "Missing {name}; see PUBLISHING.md for where to set it"
-        )),
+        _ => invalid(format!("Set the {name} environment variable")),
     }
 }
 

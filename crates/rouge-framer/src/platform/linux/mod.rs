@@ -56,17 +56,6 @@ impl Platform for Linux {
         )
     }
 
-    fn guide(&self) -> &'static str {
-        include_str!("guide.md")
-    }
-
-    fn requirements(&self) -> String {
-        format!(
-            " Needs the development packages `{}`.",
-            self.apt_packages.join("`, `")
-        )
-    }
-
     fn validate(&self, _config: &RougePublish) -> Result<(), String> {
         let named = |package: &&String| {
             !package.is_empty()

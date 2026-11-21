@@ -239,7 +239,6 @@ impl Component for RougePublish {
             ".github/workflows/rouge-publish.yml",
             workflow::render(self),
         )?;
-        output.managed("PUBLISHING.md", workflow::checklist(self))?;
         if self.ios.is_some() {
             let mut task = Table::new();
             task.insert(

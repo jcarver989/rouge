@@ -36,18 +36,12 @@ pub(crate) trait Platform {
         .into()
     }
 
-    fn guide(&self) -> &'static str;
-
     fn files(&self, _config: &RougePublish) -> Vec<(String, String)> {
         Vec::new()
     }
 
     fn ignored(&self) -> &'static str {
         ""
-    }
-
-    fn requirements(&self) -> String {
-        String::new()
     }
 
     fn validate(&self, _config: &RougePublish) -> Result<(), String> {

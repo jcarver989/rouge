@@ -197,10 +197,6 @@ impl Platform for Ios {
         ))
     }
 
-    fn guide(&self) -> &'static str {
-        include_str!("guide.md")
-    }
-
     fn files(&self, config: &RougePublish) -> Vec<(String, String)> {
         let quoted = |value: &str| format!("{value:?}");
         let families = self
@@ -386,7 +382,7 @@ impl Platform for Ios {
         );
         ensure(
             build.channel == Channel::Preview,
-            "Promote the tested TestFlight build to production in App Store Connect; see PUBLISHING.md",
+            "Promote the tested TestFlight build to production in App Store Connect",
         )?;
         archive::upload(build)?;
         let invite = self
