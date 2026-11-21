@@ -7,7 +7,7 @@ use crate::typography::UiStyles;
 use rouge_core::view;
 use rouge_core::{
     Color, Cursor, Div, Editable, Fill, FocusHandle, LayoutTransition, Prop, Rect, Role, Styled,
-    Theme, View, div, dynamic, editable, motion, presentation,
+    Theme, Tween, View, div, dynamic, editable, motion, presentation,
 };
 use rouge_reactive::{Memo, Signal, effect, memo, signal, spawn, use_context};
 use rouge_theme::NoticeTone;
@@ -137,8 +137,12 @@ pub(crate) fn focus_frame(root: Div) -> Div {
 pub(crate) fn follower(
     container: Signal<Rect>,
     target: impl Fn() -> Option<Rect> + 'static,
+    snap: impl Fn() -> bool + 'static,
     decorate: impl FnOnce(Div) -> Div + 'static,
 ) -> impl View {
+    let glide = LayoutTransition::new(Pace::Move).size();
+    let still = LayoutTransition::new(Tween::new(0.0)).size();
+    let pace = Rc::new(move || if snap() { still } else { glide });
     let target = memo(move || target().filter(|at| at.size.width > 0.0));
     let placed = signal(None::<Rect>);
     effect(move || {
@@ -159,11 +163,12 @@ pub(crate) fn follower(
         <dynamic>
             {
                 let decorate = ready.get().then(|| pending.take()).flatten()?;
+                let pace = pace.clone();
                 let geometry = move |f: fn(Rect) -> f32| move || placed.get().map_or(0.0, f);
                 let layer = view! {
                     <div absolute left=geometry(|at| at.origin.x) top=geometry(|at| at.origin.y)
                          w=geometry(|at| at.size.width) h=geometry(|at| at.size.height)
-                         layout_transition=LayoutTransition::new(Pace::Move).size()
+                         layout_transition={move || pace()}
                          when=(move || target.with(Option::is_none), Styled::invisible)/>
                 };
                 Some(decorate(layer))
@@ -204,11 +209,16 @@ impl Spot {
         item.track_bounds(bounds)
     }
 
-    pub(crate) fn follower(self, decorate: impl FnOnce(Div) -> Div + 'static) -> impl View {
+    pub(crate) fn follower(
+        self,
+        snap: impl Fn() -> bool + 'static,
+        decorate: impl FnOnce(Div) -> Div + 'static,
+    ) -> impl View {
         let held = self.held;
         follower(
             self.container,
             move || held.get().map(|(_, at)| at),
+            snap,
             decorate,
         )
     }

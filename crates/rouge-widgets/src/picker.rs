@@ -211,6 +211,10 @@ impl View for PickerList {
         let picker = PickerState::new(items).unfiltered();
         let highlighted = Rc::new(highlighted);
         let spot = Spot::new();
+        let (pointed, snap) = pointer_led({
+            let highlighted = highlighted.clone();
+            move || highlighted.get()
+        });
         let list = if picker.options().is_empty() {
             view! { <div><muted_text>{empty.unwrap_or_else(|| "No results".into())}</muted_text></div> }
         } else {
@@ -224,10 +228,13 @@ impl View for PickerList {
                     move || highlighted.get() == Some(index),
                     spot,
                     Callback::from(move || on_choose.call(index)),
-                    Callback::from(move || on_hover.call(index)),
+                    Callback::from(move || {
+                        pointed.set(Some(index));
+                        on_hover.call(index);
+                    }),
                 )
             });
-            view! { <div relative flex col>{spotlight(spot)}{..rows}</div> }
+            view! { <div relative flex col>{spotlight(spot, snap)}{..rows}</div> }
         };
         let root = view! {
             <scroll test_id?=test_id max_h=px(tokens::PICKER_LIST_HEIGHT) scroll_state=state>
@@ -302,9 +309,27 @@ fn entry(
     .into_any()
 }
 
-fn spotlight(spot: Spot) -> Div {
+fn pointer_led(
+    highlight: impl Fn() -> Option<usize> + Clone + 'static,
+) -> (Signal<Option<usize>>, impl Fn() -> bool + 'static) {
+    let pointed = signal(None::<usize>);
+    let current = highlight.clone();
+    effect(move || {
+        if current() != pointed.get_untracked() {
+            pointed.set(None);
+        }
+    });
+    let snap = move || {
+        pointed
+            .get()
+            .is_some_and(|index| highlight() == Some(index))
+    };
+    (pointed, snap)
+}
+
+fn spotlight(spot: Spot, snap: impl Fn() -> bool + 'static) -> Div {
     let layer = view! { <div absolute inset=0.0 pass_through/> };
-    spot.contain(layer).child(spot.follower(|layer| {
+    spot.contain(layer).child(spot.follower(snap, |layer| {
         layer
             .test_id("picker-highlight")
             .material(Material::Pigment)
@@ -681,6 +706,7 @@ fn results(
     let columns = memo(move || model.with(|model| Columns::new(model.options())));
     let list = virtual_list_handle();
     let spot = Spot::new();
+    let (pointed, snap) = pointer_led(move || highlight.get());
     effect(move || {
         let target = highlight.get();
         let row = entries.with(|rows| {
@@ -694,7 +720,7 @@ fn results(
     let rows = view! {
         <virtual_list count={move || entries.with(Vec::len)} row_height=tokens::ROW_HEIGHT let:position
              row_identity={move |position| RowKey::new(entries.with(|rows| rows[position]), revision.get())}
-             measure_rows={|| 0} underlay=spotlight(spot) handle=list max_h=list_height>
+             measure_rows={|| 0} underlay=spotlight(spot, snap) handle=list max_h=list_height>
             {
                 let row = entries.with_untracked(|rows| rows[position]);
                 let index = row.index();
@@ -702,7 +728,10 @@ fn results(
                     handle.highlight(index);
                     handle.choose();
                 });
-                let hover = Callback::from(move || handle.highlight(index));
+                let hover = Callback::from(move || {
+                    pointed.set(Some(index));
+                    handle.highlight(index);
+                });
                 let highlighted = move || highlight.get() == Some(index);
                 columns.with_untracked(|columns| {
                     model.with_untracked(|model| {

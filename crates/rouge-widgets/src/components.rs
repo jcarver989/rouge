@@ -699,7 +699,10 @@ impl View for SegmentedControl {
     fn build(self, cx: &mut BuildCx<'_>) {
         let spot = Spot::new();
         let (style, id) = (self.indicator, self.test_id.part("indicator"));
-        let indicator = spot.follower(move |layer| style.apply(layer).when_some(id, Div::test_id));
+        let indicator = spot.follower(
+            || false,
+            move |layer| style.apply(layer).when_some(id, Div::test_id),
+        );
         spot.contain(self.root)
             .when_some(self.test_id, Div::test_id)
             .provide(SegmentIndicator(spot))

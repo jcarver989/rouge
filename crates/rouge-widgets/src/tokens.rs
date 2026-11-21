@@ -1,4 +1,4 @@
-use rouge_core::{Corners, Ease, Length, PropFrom, Spring, Timing, Tween};
+use rouge_core::{Corners, Ease, LayoutTransition, Length, PropFrom, Spring, Timing, Tween};
 use rouge_reactive::{Signal, provide_context, signal, use_context};
 
 pub const UNIT: f32 = 4.0;
@@ -161,6 +161,12 @@ impl From<Pace> for Timing {
             MotionScale::Full => pace.spring().into(),
             MotionScale::None => Tween::new(0.0).into(),
         }
+    }
+}
+
+impl PropFrom<Pace> for LayoutTransition {
+    fn prop_from(pace: Pace) -> Self {
+        Timing::from(pace).into()
     }
 }
 

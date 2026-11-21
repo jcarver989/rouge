@@ -192,6 +192,7 @@ impl Rail {
                     ))
                 }
             },
+            || false,
             {
                 let id = self.test_id.part("indicator");
                 move |layer| {
@@ -293,6 +294,7 @@ impl Rail {
         follower(
             container,
             move || Some(spots.get(selected.get())?.get()),
+            || false,
             move |layer| {
                 layer
                     .pass_through()

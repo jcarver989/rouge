@@ -356,6 +356,45 @@ fn one_highlight_layer_slides_between_rows_and_scrolls_with_them() -> TestResult
     Ok(())
 }
 
+#[test]
+fn the_highlight_snaps_to_a_hovered_row_and_slides_for_the_keyboard() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, handle, _) = SearchPickerTest::new(
+        (0..8)
+            .map(|i| PickerItem::new(format!("option-{i}"), format!("Item {i}")))
+            .collect(),
+    )
+    .build();
+    ui.run(0.5);
+    let accent = UiPalette::light().map(Color::from).accent.to_rgba8();
+    for row in ["option-3", "option-6", "option-5"] {
+        let at = ui.rect_of(row)?;
+        ui.pointer_moved(at.center());
+        ui.advance(0.0);
+        assert!(covers(&mut ui, row)?);
+        let (x, top, bottom) = (
+            at.origin.x as u32 + 2,
+            at.origin.y as u32 + 2,
+            at.max().y as u32 - 2,
+        );
+        assert_near(ui.pixel(x, top)?, accent, "the fill is already at the top");
+        assert_near(ui.pixel(x, bottom)?, accent, "and at the bottom");
+        assert!(!ui.is_animating(), "{row} is highlighted without a slide");
+    }
+    handle.move_highlight(-2);
+    ui.advance(0.0);
+    assert!(ui.is_animating(), "keyboard moves still slide");
+    ui.run(0.5);
+    assert!(covers(&mut ui, "option-3")?);
+    handle.move_highlight(2);
+    ui.advance(0.0);
+    assert!(
+        ui.is_animating(),
+        "returning to the row under a resting pointer slides too"
+    );
+    Ok(())
+}
+
 struct SearchPickerTest {
     items: Vec<PickerItem>,
     unfiltered: bool,
