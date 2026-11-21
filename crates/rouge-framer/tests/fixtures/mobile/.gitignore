@@ -1,0 +1,26 @@
+/.rouge/
+/.framer/
+/.cargo/
+/.github/
+/android/
+/ios/
+/PUBLISHING.md
+/justfile
+
+# framer:begin framer
+/.framer/target/
+# framer:end framer
+
+# framer:begin rouge/publishing
+/.rouge/out/
+/.framer/target/
+/ios/Assets.xcassets/AppIcon.appiconset/icon.png
+/ios/RougeApp.xcodeproj/project.xcworkspace/
+/ios/RougeApp.xcodeproj/xcuserdata/
+/android/.gradle/
+/android/build/
+/android/gradle/wrapper/gradle-wrapper.jar
+/android/src/*/jniLibs/
+/android/src/main/res/drawable-nodpi/rouge_icon.png
+/gha-creds-*.json
+# framer:end rouge/publishing
