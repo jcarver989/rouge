@@ -3,7 +3,7 @@ use crate::{
     icon::{Icon, IconName},
     material::{Material, MaterialExt},
     popover::{Hint, POPPED, Placement, Tooltip, dismiss_layer},
-    progress::spinning_ring,
+    progress::spinner,
     sheet::{Detent, Presenter},
     tokens::{self, Hold, MotionScale, Pace, Space},
     tree::indent,
@@ -205,7 +205,7 @@ impl View for Button {
         let spinner = view! {
             <show when=busy.clone() enter=(POPPED, Pace::Enter) exit=(POPPED, Pace::Exit)>
                 <div test_id?={spinner_id.clone()} absolute inset=0.0 flex items_center justify_center pass_through>
-                    {spinning_ring(tokens::ICON_SIZE, ink(InteractionState::Rest, false), ring_arc)}
+                    {spinner().size(tokens::ICON_SIZE).track(ink(InteractionState::Rest, false)).arc(ring_arc)}
                 </div>
             </show>
         };

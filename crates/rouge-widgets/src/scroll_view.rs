@@ -1,7 +1,7 @@
 use crate::icon::{Icon, IconName};
 use crate::material::{Material, MaterialExt};
 use crate::popover::POPPED;
-use crate::progress::spinning;
+use crate::progress::spinner;
 use crate::tokens::{
     GROUP_HEIGHT, ICON_SIZE, Pace, Radius, SCROLLBAR_MIN_THUMB_HEIGHT, SCROLLBAR_WIDTH, UNIT,
 };
@@ -92,7 +92,8 @@ fn refresher(state: Signal<ScrollState>, refreshing: Signal<bool>) -> impl View 
         let mark = view! {
             <dynamic>
                 {if refreshing.get() {
-                    spinning(ICON_SIZE, Role::Accent)
+                    spinner()
+                        .size(ICON_SIZE)
                         .test_id("refresh-spinner")
                         .into_any()
                 } else {

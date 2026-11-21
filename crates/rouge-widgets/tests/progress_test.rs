@@ -5,6 +5,7 @@ use rouge_core::Role;
 use rouge_core::testing::{TestResult, assert_near};
 use rouge_core::{Color, Rect, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
+use rouge_widgets::tokens::MotionScale;
 use rouge_widgets::{progress, progress_ring, separator, spinner};
 
 #[test]
@@ -123,5 +124,39 @@ fn spinner_animates_in_the_compositor_without_layout_or_paint() -> TestResult {
     let second = ui.render()?;
     let moved = (10..30).any(|y| (10..30).any(|x| first.pixel(x, y) != second.pixel(x, y)));
     assert!(moved, "the arc rotated");
+    Ok(())
+}
+
+#[test]
+fn a_spinner_is_a_ring_as_large_as_its_box_in_the_colours_it_is_given() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = builder().scale(2.0).build(|| {
+        MotionScale::None.provide();
+        div().size_full().p(10.0).child(
+            spinner()
+                .size(40.0)
+                .track(Role::Warning)
+                .arc(Role::Destructive)
+                .test_id("busy"),
+        )
+    });
+    let palette = UiPalette::light().map(Color::from);
+    assert_eq!(ui.rect_of("busy")?, Rect::new(10.0, 10.0, 40.0, 40.0));
+    let img = ui.render()?;
+    assert_near(
+        img.pixel(87, 32),
+        palette.destructive.to_rgba8(),
+        "the arc runs clockwise from the top",
+    );
+    assert_eq!(
+        img.pixel(60, 60),
+        Color::WHITE.to_rgba8(),
+        "the middle is left clear for a glyph"
+    );
+    assert_ne!(
+        img.pixel(60, 98),
+        Color::WHITE.to_rgba8(),
+        "a faint track closes the ring"
+    );
     Ok(())
 }

@@ -1,7 +1,7 @@
 use crate::input::text_input;
 use crate::markdown::markdown;
 use crate::material::{Material, MaterialExt};
-use crate::progress::spinning_ring;
+use crate::progress::spinner;
 use crate::tokens::{DISABLED_OPACITY, PRESS_SCALE, Pace, ROW_HEIGHT, Radius, Space};
 use crate::typography::UiStyles;
 use crate::util::{TestId, chrome, focus_ring};
@@ -197,7 +197,7 @@ impl View for Composer {
         let indicator = view! {
             <show when=working enter=(MORPH_HIDDEN, Pace::Enter) exit=(MORPH_HIDDEN, Pace::Exit)>
                 <div test_id?={spinner_id.clone()} absolute inset=0.0 flex items_center justify_center pass_through>
-                    {spinning_ring(STOP_DIAMETER, Role::Text, Role::Accent)}
+                    {spinner().size(STOP_DIAMETER)}
                     {can_stop.then(|| view! {
                         <div test_id?={stop_id.clone()} absolute size=STOP_GLYPH rounded=Radius::Inner bg=Role::Text/>
                     })}

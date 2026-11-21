@@ -1,9 +1,9 @@
-use crate::icon::{Icon, IconName};
-use crate::tokens::{ICON_SIZE, MotionScale, Radius};
+use crate::tokens::{ICON_SIZE, ICON_SIZE_LARGE, MotionScale, Radius};
+use crate::util::chrome;
 use rouge_core::Role;
 use rouge_core::{
-    BuildCx, DelegateStyle, Div, Ease, Fill, IntoProp, Keyframes, Path, Point, StyleDelta, Styled,
-    Theme, View, auto, canvas, component, div, pct, view,
+    BuildCx, DelegateStyle, Div, Ease, Fill, IntoProp, Keyframes, Path, Point, Prop, StyleDelta,
+    Styled, Theme, View, auto, canvas, component, div, pct, view,
 };
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -109,59 +109,67 @@ const ORBIT_SHARE: f32 = 0.25;
 const ORBIT_TRACK_ALPHA: f32 = 0.18;
 const ORBIT_SECONDS: f32 = 1.2;
 
-#[component]
-pub fn spinner() -> Div {
-    spinning(20.0, Role::Accent)
+pub struct Spinner {
+    track: Prop<Fill>,
+    arc: Prop<Fill>,
+    test_id: Option<String>,
+    style: StyleDelta,
 }
 
-pub(crate) fn spinning<T>(size: f32, color: impl IntoProp<Fill, T>) -> Div {
-    let spin = Keyframes::new()
-        .at(0.0, |pose| pose.rotate(0.0))
-        .at(1.0, |pose| pose.rotate(360.0))
-        .duration(0.8)
-        .ease(Ease::Linear)
-        .repeat();
-    let rotor = view! {
-        <div flex_none size=size>
-            {Icon::new(IconName::LoaderCircle, color).size(size)}
-        </div>
-    };
-    if MotionScale::current() == MotionScale::Full {
-        rotor.animate(spin)
-    } else {
-        rotor
+#[component]
+pub fn spinner() -> Spinner {
+    Spinner {
+        track: Prop::Static(Fill::Role(Role::Text)),
+        arc: Prop::Static(Fill::Role(Role::Accent)),
+        test_id: None,
+        style: StyleDelta::default(),
     }
 }
 
-pub(crate) fn spinning_ring<T, U>(
-    size: f32,
-    track: impl IntoProp<Fill, T>,
-    arc_color: impl IntoProp<Fill, U>,
-) -> Div {
-    let (track, arc_color, theme) = (track.into_prop(), arc_color.into_prop(), Theme::current());
-    let ring = canvas(move |painter| {
-        let bounds = painter.size();
-        let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
-        let radius = (bounds.width.min(bounds.height) - ORBIT_STROKE) / 2.0;
-        let track = theme.resolve(track.get()).with_alpha(ORBIT_TRACK_ALPHA);
-        painter.stroke(&arc(center, radius, 1.0), ORBIT_STROKE, track);
-        painter.stroke_round(
-            &arc(center, radius, ORBIT_SHARE),
-            ORBIT_STROKE,
-            theme.resolve(arc_color.get()),
-        );
-    })
-    .size_full();
-    let spin = Keyframes::new()
-        .at(0.0, |pose| pose.rotate(0.0))
-        .at(1.0, |pose| pose.rotate(360.0))
-        .duration(ORBIT_SECONDS)
-        .ease(Ease::Linear)
-        .repeat();
-    let rotor = view! { <div flex_none size=size>{ring}</div> };
-    if MotionScale::current() == MotionScale::Full {
-        rotor.animate(spin)
-    } else {
-        rotor
+impl Spinner {
+    pub fn track<T>(mut self, track: impl IntoProp<Fill, T>) -> Self {
+        self.track = track.into_prop();
+        self
+    }
+
+    pub fn arc<T>(mut self, arc: impl IntoProp<Fill, T>) -> Self {
+        self.arc = arc.into_prop();
+        self
+    }
+}
+
+chrome!(Spinner);
+
+impl View for Spinner {
+    fn build(self, cx: &mut BuildCx<'_>) {
+        let (track, arc_color, theme) = (self.track, self.arc, Theme::current());
+        let ring = canvas(move |painter| {
+            let bounds = painter.size();
+            let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
+            let radius = (bounds.width.min(bounds.height) - ORBIT_STROKE) / 2.0;
+            let track = theme.resolve(track.get()).with_alpha(ORBIT_TRACK_ALPHA);
+            painter.stroke(&arc(center, radius, 1.0), ORBIT_STROKE, track);
+            painter.stroke_round(
+                &arc(center, radius, ORBIT_SHARE),
+                ORBIT_STROKE,
+                theme.resolve(arc_color.get()),
+            );
+        })
+        .size_full();
+        let spin = Keyframes::new()
+            .at(0.0, |pose| pose.rotate(0.0))
+            .at(1.0, |pose| pose.rotate(360.0))
+            .duration(ORBIT_SECONDS)
+            .ease(Ease::Linear)
+            .repeat();
+        let rotor = view! {
+            <div flex_none size=ICON_SIZE_LARGE test_id?=self.test_id>{ring}</div>
+        };
+        let rotor = self.style.apply(rotor);
+        if MotionScale::current() == MotionScale::Full {
+            rotor.animate(spin).build(cx);
+        } else {
+            rotor.build(cx);
+        }
     }
 }
