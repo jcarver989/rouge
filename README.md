@@ -208,7 +208,7 @@ extern "Rust" fn android_main(android: AndroidApp) {
 
 ## Publish an app
 
-Add the [`rouge-framer`](crates/rouge-framer) preset to your app's `.framer/` project and run `cargo framer`. It generates the GitHub Actions publishing workflow, a `cargo rouge` packaging command and a setup checklist for the destinations you enable: GitHub Pages, Linux and macOS downloads, TestFlight/App Store and Google Play. Start with the workflow's `check` channel to build without publishing or providing store credentials.
+Add the [`rouge-framer`](crates/rouge-framer) preset to your app's `.framer/` project and run `cargo framer`. It generates the GitHub Actions publishing workflow, a `cargo rouge` packaging command and a setup checklist for the destinations you enable: GitHub Pages, Linux and macOS downloads, TestFlight/App Store and Google Play. Start with the workflow's `check` channel to validate builds without publishing or providing store credentials. Mobile `preview` uploads to TestFlight or Play internal testing. Mobile jobs do not run for `production`; promote the tested preview build in App Store Connect or Play Console. Downstream preset users can also deploy debug builds with `cargo rouge run ios` or `cargo rouge run android`. Those commands are separate from this repository’s `just run` example launchers. See the generated `PUBLISHING.md` for setup and cutover checks.
 
 See the [`rouge-framer` setup examples](crates/rouge-framer/README.md) for configuring a downstream app.
 
