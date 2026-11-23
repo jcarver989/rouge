@@ -1,5 +1,5 @@
 use super::Platform;
-use super::native::{WinitPlatform, run};
+use super::native::{UserEvent, WinitPlatform, run};
 use crate::app::{App, AppError};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -44,7 +44,7 @@ impl Platform for Ios {
 }
 
 impl WinitPlatform for Ios {
-    fn new(_menus: &[Menu], _waker: &EventLoopProxy<()>) -> Result<Self, AppError> {
+    fn new(_menus: &[Menu], _waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         Ok(Ios)
     }
 

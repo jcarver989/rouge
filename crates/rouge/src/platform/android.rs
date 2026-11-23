@@ -1,7 +1,7 @@
 pub use winit::platform::android::activity::AndroidApp;
 
 use super::Platform;
-use super::native::{WinitPlatform, run};
+use super::native::{UserEvent, WinitPlatform, run};
 use crate::app::{App, AppError};
 use jni::errors::Error as JniError;
 use jni::objects::{JObject, JString, JValue};
@@ -91,7 +91,7 @@ impl Platform for Android {
 impl WinitPlatform for Android {
     const SURFACE_LOST_ON_SUSPEND: bool = true;
 
-    fn new(_menus: &[Menu], _waker: &EventLoopProxy<()>) -> Result<Self, AppError> {
+    fn new(_menus: &[Menu], _waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         Ok(Android)
     }
 
@@ -105,10 +105,10 @@ impl WinitPlatform for Android {
         Some(dir.join(name.to_lowercase()))
     }
 
-    fn event_loop(options: Self::Options) -> Result<EventLoop<()>, AppError> {
+    fn event_loop(options: Self::Options) -> Result<EventLoop<UserEvent>, AppError> {
         let android = options.ok_or(Error::NoActivity)?;
         let _ = APP.set(android.clone());
-        Ok(EventLoop::builder().with_android_app(android).build()?)
+        Ok(EventLoop::with_user_event().with_android_app(android).build()?)
     }
 
     fn safe_area(window: &Window) -> Edges {

@@ -1,6 +1,6 @@
 use super::Platform;
 use super::native::clipboard::DesktopClipboard;
-use super::native::{WinitPlatform, run};
+use super::native::{UserEvent, WinitPlatform, run};
 use crate::app::{App, AppError};
 use muda::accelerator::{Key as NativeKey, KeyAccelerator, Modifiers};
 use muda::{
@@ -55,7 +55,7 @@ impl Platform for MacOs {
 }
 
 impl WinitPlatform for MacOs {
-    fn new(menus: &[Menu], waker: &EventLoopProxy<()>) -> Result<Self, AppError> {
+    fn new(menus: &[Menu], waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         let menus = NativeMenus::new(menus.to_vec(), waker.clone()).map_err(Error::Menu)?;
         Ok(MacOs { menus })
     }
@@ -99,7 +99,7 @@ struct NativeMenus {
 }
 
 impl NativeMenus {
-    fn new(menus: Vec<Menu>, proxy: EventLoopProxy<()>) -> Result<Self, muda::Error> {
+    fn new(menus: Vec<Menu>, proxy: EventLoopProxy<UserEvent>) -> Result<Self, muda::Error> {
         let menu = NativeMenu::new();
         let app = Submenu::new("Application", true);
         app.append(&PredefinedMenuItem::about(None, None))?;
@@ -123,7 +123,7 @@ impl NativeMenus {
         let (sender, events) = unbounded_channel();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             let _ = sender.send(event.id);
-            let _ = proxy.send_event(());
+            let _ = proxy.send_event(None);
         }));
         Ok(Self {
             _menu: menu,

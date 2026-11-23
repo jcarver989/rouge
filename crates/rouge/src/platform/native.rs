@@ -22,10 +22,12 @@ use winit::event_loop::{EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Icon, ResizeDirection, Theme, Window};
 
+pub(crate) type UserEvent = Option<accesskit_winit::Event>;
+
 pub(crate) trait WinitPlatform: Platform + Sized {
     const SURFACE_LOST_ON_SUSPEND: bool = false;
 
-    fn new(menus: &[Menu], waker: &EventLoopProxy<()>) -> Result<Self, AppError>;
+    fn new(menus: &[Menu], waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError>;
 
     fn clipboard() -> impl Clipboard + 'static;
 
@@ -45,8 +47,8 @@ pub(crate) trait WinitPlatform: Platform + Sized {
             .or_else(|| Self::default_config_dir(name))
     }
 
-    fn event_loop(_options: Self::Options) -> Result<EventLoop<()>, AppError> {
-        Ok(EventLoop::new()?)
+    fn event_loop(_options: Self::Options) -> Result<EventLoop<UserEvent>, AppError> {
+        Ok(EventLoop::with_user_event().build()?)
     }
 
     fn surface_size(window: &Window) -> PhysicalSize<u32> {

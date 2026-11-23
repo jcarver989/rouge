@@ -1,6 +1,6 @@
 use super::Platform;
 use super::native::clipboard::DesktopClipboard;
-use super::native::{WinitPlatform, run};
+use super::native::{UserEvent, WinitPlatform, run};
 use crate::app::{App, AppError};
 use image::imageops::FilterType;
 use image::{ImageFormat, load_from_memory_with_format};
@@ -42,7 +42,7 @@ impl Platform for Desktop {
 }
 
 impl WinitPlatform for Desktop {
-    fn new(_menus: &[Menu], _waker: &EventLoopProxy<()>) -> Result<Self, AppError> {
+    fn new(_menus: &[Menu], _waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         Ok(Desktop)
     }
 

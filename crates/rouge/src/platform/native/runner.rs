@@ -1,11 +1,12 @@
 use super::{
-    PrimaryTouch, Wheel, WheelGesture, WinitPlatform, appearance, cursor_icon, logical_point,
-    modifiers, named_key, pointer_button, window_command,
+    PrimaryTouch, UserEvent, Wheel, WheelGesture, WinitPlatform, appearance, cursor_icon,
+    logical_point, modifiers, named_key, pointer_button, window_command,
 };
 use crate::app::{App, AppError, RootFn, WindowOptions};
 use crate::driver::{Driver, Inline, Setup, TextInput, connect};
 use crate::platform::{Current, Options, Platform, default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
+use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
 use pollster::block_on;
 use rouge_core::{
     CompositorEvent, Decorations, Events, FileDropPhase, ImeEvent, InputKind, Key, KeyEvent, Menu,
@@ -45,7 +46,7 @@ pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
     let platform = Current::new(&menus, &waker)?;
     let proxy = waker.clone();
     let runtime = Runtime::with_waker(move || {
-        let _ = proxy.send_event(());
+        let _ = proxy.send_event(None);
     });
     let _entered = runtime.enter();
     #[cfg(feature = "tokio-rt")]
@@ -87,7 +88,7 @@ pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
 struct Runner {
     platform: Current,
     _trace: Option<FlushGuard>,
-    waker: EventLoopProxy<()>,
+    waker: EventLoopProxy<UserEvent>,
     gpu: Option<(Instance, Gpu)>,
     compositor: Option<Compositing>,
     next_window: u64,
@@ -112,6 +113,7 @@ impl Runner {
         root: RootFn,
     ) -> Result<(), AppError> {
         let mut attributes = Window::default_attributes()
+            .with_visible(false)
             .with_title(options.title.clone())
             .with_maximized(options.maximized)
             .with_decorations(options.decorations == Decorations::Server)
@@ -126,6 +128,8 @@ impl Runner {
             }
         }
         let window = Arc::new(event_loop.create_window(attributes)?);
+        let access = Adapter::with_event_loop_proxy(event_loop, &window, self.waker.clone());
+        window.set_visible(true);
         let instance = async {
             let display = Box::new(event_loop.owned_display_handle());
             Instance::new(InstanceDescriptor::new_with_display_handle_from_env(
@@ -176,6 +180,7 @@ impl Runner {
         self.windows.push(WindowState {
             window,
             driver,
+            access,
             occluded: false,
             wheel: Wheel::default(),
             touch: PrimaryTouch::default(),
@@ -259,7 +264,7 @@ impl Runner {
     }
 }
 
-impl ApplicationHandler for Runner {
+impl ApplicationHandler<UserEvent> for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if Current::SURFACE_LOST_ON_SUSPEND
             && let Err(error) = self.reattach()
@@ -315,7 +320,15 @@ impl ApplicationHandler for Runner {
         self.process_window_commands(event_loop, None);
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        if let Some(event) = event
+            && let Some(state) = self
+                .windows
+                .iter_mut()
+                .find(|s| s.window.id() == event.window_id)
+        {
+            state.assist(event.window_event);
+        }
         let ui = self
             .windows
             .iter_mut()
@@ -336,6 +349,7 @@ impl ApplicationHandler for Runner {
             return;
         };
         let _event = trace_span!("event", ?event).entered();
+        state.access.process_event(&state.window, &event);
         match event {
             WindowEvent::CloseRequested => {
                 state.close(&mut self.closing);
@@ -343,7 +357,7 @@ impl ApplicationHandler for Runner {
             }
             WindowEvent::RedrawRequested => {
                 if !state.occluded {
-                    state.driver.step();
+                    state.step();
                 }
                 if state.driver.finished() {
                     self.windows.clear();
@@ -375,6 +389,7 @@ impl ApplicationHandler for Runner {
 struct WindowState {
     window: Arc<Window>,
     driver: Driver,
+    access: Adapter,
     occluded: bool,
     wheel: Wheel,
     touch: PrimaryTouch,
@@ -500,9 +515,37 @@ impl WindowState {
             .driver
             .resize((physical.width, physical.height), scale as f32);
         if resized.is_some() && !self.occluded {
-            self.driver.step();
+            self.step();
         }
         self.window.request_redraw();
+    }
+
+    fn step(&mut self) {
+        self.driver.step();
+        self.publish_access();
+    }
+
+    fn publish_access(&mut self) {
+        if let Some(update) = self.driver.ui().accessibility_update() {
+            self.access.update_if_active(|| update);
+        }
+    }
+
+    fn assist(&mut self, request: AccessEvent) {
+        let ui = self.driver.ui();
+        match request {
+            AccessEvent::InitialTreeRequested => {
+                self.access.update_if_active(|| ui.accessibility_tree());
+            }
+            AccessEvent::ActionRequested(request) => {
+                ui.accessibility_action(request);
+            }
+            AccessEvent::AccessibilityDeactivated => ui.stop_accessibility(),
+        }
+        if self.occluded {
+            ui.update();
+            self.publish_access();
+        }
     }
 
     fn sync_environment(&mut self) {
@@ -545,9 +588,9 @@ struct Compositing {
 }
 
 impl Compositing {
-    fn open(gpu: &Gpu, waker: EventLoopProxy<()>) -> Result<Self, AppError> {
+    fn open(gpu: &Gpu, waker: EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         let wake = move || {
-            let _ = waker.send_event(());
+            let _ = waker.send_event(None);
         };
         let (messages, mailbox, events) = mailbox();
         let epoch = Instant::now();
