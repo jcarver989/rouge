@@ -1,3 +1,4 @@
+use crate::access::{Action, ActionData, ActionRequest, NodeId, Role, Toggled, TreeId};
 use crate::animation::{Ease, Tween};
 use crate::compositor::{CompositorActor, Message, WindowConfig, WindowId};
 use crate::event::{FileDropPhase, KeyEvent, PointerButton, TouchPhase};
@@ -6,12 +7,14 @@ use crate::theme::{Palette, Theme};
 use crate::ui::Ui;
 use crate::view::View;
 use crate::window::{Menu, WindowCommand};
+use accesskit_consumer::{NodeRef, Tree as AccessTree, TreeChangeHandler, common_filter};
 use rouge_render::headless::{Image, headless_gpu};
 use rouge_render::{
     Color, Command, GpuError, Point, Rect, RenderMemory, RenderStats, Size, Surfaces, Target,
 };
 use rouge_theme::UiPalette;
 use std::borrow::Cow;
+use std::iter::from_fn;
 use std::mem::take;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -32,6 +35,8 @@ pub enum TestError {
     NoTestId(String),
     #[error("no text containing {0:?}")]
     NoText(String),
+    #[error("no accessible {role:?} named {name:?}")]
+    NoAccessNode { role: Role, name: String },
     #[error("{0:?} never scrolled into view")]
     NotScrolledIntoView(String),
     #[error("the test window is closed")]
@@ -150,6 +155,7 @@ impl TestUiBuilder {
             actor: None,
             clock: 0.0,
             commands: Vec::new(),
+            access: None,
         };
         ui.advance(0.0);
         (ui, extra.expect("the root view was built"))
@@ -165,6 +171,24 @@ pub struct TestUi {
     actor: Option<CompositorActor>,
     clock: f64,
     commands: Vec<WindowCommand>,
+    access: Option<AccessTree>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessNode {
+    pub role: Role,
+    pub name: String,
+    pub value: Option<String>,
+    pub description: Option<String>,
+    pub bounds: Rect,
+    pub focused: bool,
+    pub disabled: bool,
+    pub toggled: Option<Toggled>,
+    pub selected: Option<bool>,
+    pub expanded: Option<bool>,
+    pub numeric_value: Option<f64>,
+    pub actions: Vec<Action>,
+    id: NodeId,
 }
 
 impl TestUi {
@@ -509,6 +533,76 @@ impl TestUi {
         self.advance(0.0);
     }
 
+    pub fn access_nodes(&mut self) -> Vec<AccessNode> {
+        self.access_snapshots().collect()
+    }
+
+    fn access_snapshots(&mut self) -> impl Iterator<Item = AccessNode> + '_ {
+        self.advance(0.0);
+        let scale = self.ui.scale();
+        let root = self.access_tree().state().root();
+        let mut pending: Vec<_> = root.filtered_children(common_filter).rev().collect();
+        from_fn(move || {
+            let node = pending.pop()?;
+            pending.extend(node.filtered_children(common_filter).rev());
+            Some(access_node(&node, scale))
+        })
+    }
+
+    pub fn access_node(&mut self, role: Role, name: &str) -> Result<AccessNode, TestError> {
+        self.access_snapshots()
+            .find(|node| node.role == role && node.name == name)
+            .ok_or_else(|| TestError::NoAccessNode {
+                role,
+                name: name.to_owned(),
+            })
+    }
+
+    pub fn perform(&mut self, role: Role, name: &str, action: Action) -> Result<bool, TestError> {
+        self.request(role, name, action, None)
+    }
+
+    pub fn perform_with(
+        &mut self,
+        role: Role,
+        name: &str,
+        action: Action,
+        data: ActionData,
+    ) -> Result<bool, TestError> {
+        self.request(role, name, action, Some(data))
+    }
+
+    fn request(
+        &mut self,
+        role: Role,
+        name: &str,
+        action: Action,
+        data: Option<ActionData>,
+    ) -> Result<bool, TestError> {
+        let node = self.access_node(role, name)?;
+        let handled = self.ui.accessibility_action(ActionRequest {
+            action,
+            target_tree: TreeId::ROOT,
+            target_node: node.id,
+            data,
+        });
+        self.advance(0.0);
+        Ok(handled)
+    }
+
+    fn access_tree(&mut self) -> &AccessTree {
+        let ui = &mut self.ui;
+        match &mut self.access {
+            Some(tree) => {
+                if let Some(update) = ui.accessibility_update() {
+                    tree.update_and_process_changes(update, &mut Unobserved);
+                }
+                tree
+            }
+            access => access.insert(AccessTree::new(ui.accessibility_tree(), true)),
+        }
+    }
+
     fn press_pointer(&mut self, point: Point, button: PointerButton) {
         self.advance(CLICK_PAUSE);
         self.settle_pointer(point);
@@ -547,4 +641,57 @@ fn steps(from: Point, to: Point) -> impl Iterator<Item = Point> {
             from.y + (to.y - from.y) * progress,
         )
     })
+}
+
+const ACTIONS: [Action; 7] = [
+    Action::Click,
+    Action::Focus,
+    Action::Increment,
+    Action::Decrement,
+    Action::SetValue,
+    Action::ReplaceSelectedText,
+    Action::ScrollIntoView,
+];
+
+struct Unobserved;
+
+impl TreeChangeHandler for Unobserved {
+    fn node_added(&mut self, _node: &NodeRef<'_>) {}
+
+    fn node_updated(&mut self, _old: &NodeRef<'_>, _new: &NodeRef<'_>) {}
+
+    fn focus_moved(&mut self, _old: Option<&NodeRef<'_>>, _new: Option<&NodeRef<'_>>) {}
+
+    fn node_removed(&mut self, _node: &NodeRef<'_>) {}
+}
+
+fn access_node(node: &NodeRef<'_>, scale: f32) -> AccessNode {
+    let (id, _) = node.locate();
+    let bounds = node.bounding_box().map_or(Rect::ZERO, |bounds| {
+        Rect::new(
+            bounds.x0 as f32 / scale,
+            bounds.y0 as f32 / scale,
+            (bounds.x1 - bounds.x0) as f32 / scale,
+            (bounds.y1 - bounds.y0) as f32 / scale,
+        )
+    });
+    let data = node.data();
+    AccessNode {
+        role: node.role(),
+        name: node.label().unwrap_or_default(),
+        value: node.value(),
+        description: node.description(),
+        bounds,
+        focused: node.is_focused(),
+        disabled: node.is_disabled(),
+        toggled: node.toggled(),
+        selected: node.is_selected(),
+        expanded: data.is_expanded(),
+        numeric_value: node.numeric_value(),
+        actions: ACTIONS
+            .into_iter()
+            .filter(|action| data.supports_action(*action))
+            .collect(),
+        id,
+    }
 }
