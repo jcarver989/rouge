@@ -159,12 +159,12 @@ mise run examples            # list examples and supported platforms
 mise run run todomvc         # desktop
 mise run run todomvc web     # browser
 mise run run todomvc ios     # iOS simulator
-mise run run todomvc android # connected arm64 Android device or emulator
+mise run run smoke android   # connected arm64 Android device or emulator
 ```
 
 | Example | What it shows | Platforms |
 |---|---|---|
-| `todomvc` | A full TodoMVC app with routes and saved data | Desktop, web, iOS, Android |
+| `todomvc` | A full TodoMVC app with routes and saved data | Desktop, web, iOS |
 | `gallery` | All of the widgets | Desktop, web, iOS |
 | `counter` | The counter | Desktop |
 | `glass` | Liquid glass | Desktop |
@@ -173,8 +173,9 @@ mise run run todomvc android # connected arm64 Android device or emulator
 | `diff` | A sample diff with syntax highlighting | Desktop |
 | `settings` | A settings screen | Desktop |
 | `surface` | GPU content from a different thread, shown with no copy | Desktop |
+| `smoke` | A form with two text fields, a sheet and a list, packaged by `rouge-framer` | Android |
 
-Use `mise tasks` to list workspace tasks, including the `platform:web:*`, `platform:ios:*`, and `platform:android:*` build and check tasks and the `perf:*` benchmark and profiling tasks. The platform-specific `build` tasks take Cargo example names (such as `android_todomvc`); `mise run run` takes the IDs in the table above.
+Use `mise tasks` to list workspace tasks, including the `platform:web:*`, `platform:ios:*`, and `platform:android:*` build and check tasks and the `perf:*` benchmark and profiling tasks. The web and iOS `build` tasks take Cargo example names (such as `component_gallery`); `mise run run` takes the IDs in the table above.
 
 ### In the browser
 
@@ -186,7 +187,7 @@ On an Apple Silicon Mac, select the full Xcode installation with `xcode-select`,
 
 ### On Android
 
-Android support is experimental. Install the Android SDK (`ANDROID_HOME`, including build-tools, platform-tools and a platform), a JDK (`keytool` and `java` on `PATH`), the Android NDK (`ANDROID_NDK_HOME`), [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk), and the `aarch64-linux-android` Rust target. Put `adb` on `PATH`, then run `mise run run todomvc android` with an arm64 device or emulator connected. If more than one is connected, set `ANDROID_SERIAL` to the serial shown by `adb devices`.
+Android support is experimental and needs API level 30 or later. Rouge runs inside a small generated `GameActivity`, so an Android app is packaged with Gradle through [`rouge-framer`](crates/rouge-framer). Install the Android SDK (`ANDROID_HOME`), a JDK (`java` and `keytool` on `PATH`), [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk), and the `aarch64-linux-android` Rust target, then run `cargo rouge setup android` once in `crates/rouge-framer/tests/fixtures/mobile` to install the pinned NDK, platform and build tools. `mise run run smoke android` builds, installs and starts the smoke app on a connected arm64 device or emulator and streams its log.
 
 An Android app is a `cdylib` that exports `android_main` and gives the activity to Rouge:
 
@@ -234,9 +235,9 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 ## Limits
 
 - Rouge does not support Windows.
-- On Android, text comes from key events only. Input methods that compose text, autocorrect and swipe typing do not work yet.
+- On Android, the soft keyboard edits a field through GameTextInput, which holds at most 64 KiB of text; a longer field takes committed text and key events only, without composition or autocorrect. Soft-keyboard composition on iOS has not been verified on hardware yet.
 - Rouge draws all widgets itself. The widgets do not look like the native widgets of the platform.
-- Accessibility is at an early stage. On macOS and Linux a screen reader can read the element tree and operate the widgets, which declare roles, names and states. Text fields report their value but not the caret. The browser and Android have no accessibility.
+- The macOS and Linux hosts expose widget roles, names and states through AccessKit. Plain-text fields expose their text, caret and selection, and accept selection and replacement requests. Native macOS range read/write has been verified; [VoiceOver listening checks](design.md#accessible-plain-text-editing) and Linux screen-reader verification are still pending. Android attaches `accesskit_android` to the activity's surface; TalkBack editing has not been verified on hardware. The browser has no accessibility bridge.
 - Color emoji are not available yet.
 
 For the full design and the list of planned work, read [design.md](design.md).
