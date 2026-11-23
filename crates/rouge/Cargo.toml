@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["r
 web-time.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+accesskit_winit = { version = "0.34", default-features = false, features = ["rwh_06", "accesskit_unix", "async-io"] }
 winit.workspace = true
 pollster.workspace = true
 tracing-chrome = "0.7"
