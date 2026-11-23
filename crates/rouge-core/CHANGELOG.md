@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/jcarver989/rouge/compare/rouge-core-v0.3.0...rouge-core-v0.4.0) - 2026-11-23
+
+### Added
+
+- *(android)* run on a GameActivity host with IME text input and accessibility
+- *(core)* expose editable text, caret and selection to assistive technology
+- *(core)* expose the focused editor and atomic edit transactions
+- *(testing)* query accessible nodes and dispatch assistive actions
+- *(core)* project element semantics into incremental AccessKit updates
+
+### Other
+
+- describe the mobile hosts, the editor contract and accessible text editing
+- *(core)* key virtual list rows by model identity without enumerating keys
+- describe accessibility support and remaining platform gaps
+- add AccessKit dependencies for tree consumers and native hosts
+
 ## [0.3.0](https://github.com/jcarver989/rouge/compare/rouge-core-v0.2.0...rouge-core-v0.3.0) - 2026-11-21
 
 ### Added
