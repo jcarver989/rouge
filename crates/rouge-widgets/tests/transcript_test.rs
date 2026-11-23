@@ -2,7 +2,7 @@
 
 use rouge_core::testing::{TestResult, assert_near, counter};
 use rouge_core::view;
-use rouge_core::{Color, Styled, UiPalette, div};
+use rouge_core::{Color, Point, Styled, UiPalette, div};
 use rouge_markdown::MarkdownStream;
 use rouge_reactive::{Runtime, keyed_list, signal};
 use rouge_widgets::testing::component_test;
@@ -66,6 +66,40 @@ fn a_transcript_draws_bubbles_and_follows_a_growing_reply_to_the_end() -> TestRe
         "the top scrolled away"
     );
     assert_eq!(ui.compositor_frames(1.0)?, 0, "nothing animates at rest");
+    Ok(())
+}
+
+#[test]
+fn prepending_history_keeps_the_visible_message_in_place() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let thread = keyed_list(|(id, _): &(usize, Message)| *id);
+    thread.extend((0..500).map(|id| (id, Message::user(format!("message {id}")))));
+    let following = signal(true);
+    let mut ui = component_test().size(400.0, 200.0).build(move || {
+        view! {
+            <div size_full flex col>
+                <transcript messages=thread message={|(_, message)| message.clone()}
+                    following=following test_id="thread" flex_1/>
+            </div>
+        }
+    });
+    ui.run(0.3);
+    ui.pointer_moved(Point::new(200.0, 100.0));
+    ui.scroll(Point::new(0.0, 300.0));
+    ui.run(0.3);
+    assert!(!following.get());
+    let (id, anchor) = (0..500)
+        .rev()
+        .find_map(|id| {
+            let bounds = ui.bounds_of(&format!("thread-message-{id}"))?;
+            (bounds.origin.y >= 0.0 && bounds.max().y <= 200.0).then_some((id, bounds))
+        })
+        .ok_or("a message is fully visible")?;
+    thread.prepend((500, Message::user("older history")));
+    ui.run(0.3);
+    assert!(!following.get());
+    assert_eq!(ui.rect_of(&format!("thread-message-{}", id + 1))?, anchor);
+    assert!(ui.text_bounds(&format!("message {id}")).is_some());
     Ok(())
 }
 

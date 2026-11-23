@@ -6,6 +6,7 @@ use crate::tokens::{
 use crate::typography::UiStyles;
 use rouge_core::access::{Decrement, Increment};
 use rouge_core::view;
+use rouge_core::virtual_row_index;
 use rouge_core::{
     Color, Cursor, Div, Editable, Fill, FocusHandle, LayoutTransition, Prop, Rect, Role, Styled,
     Theme, Tween, View, div, dynamic, editable, motion, presentation,
@@ -90,11 +91,18 @@ pub(crate) fn tone_icon(tone: NoticeTone) -> IconName {
 
 pub(crate) trait TestId {
     fn part(&self, name: impl Display) -> Option<String>;
+
+    fn row(&self, name: &'static str) -> Option<impl Fn() -> String + 'static>;
 }
 
 impl TestId for Option<String> {
     fn part(&self, name: impl Display) -> Option<String> {
         self.as_ref().map(|id| format!("{id}-{name}"))
+    }
+
+    fn row(&self, name: &'static str) -> Option<impl Fn() -> String + 'static> {
+        let (id, position) = (self.clone()?, virtual_row_index());
+        Some(move || format!("{id}-{name}-{}", position.get()))
     }
 }
 

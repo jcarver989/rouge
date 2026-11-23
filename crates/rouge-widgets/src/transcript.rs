@@ -6,8 +6,8 @@ use crate::tokens::{DISABLED_OPACITY, PRESS_SCALE, Pace, ROW_HEIGHT, Radius, Spa
 use crate::typography::UiStyles;
 use crate::util::{TestId, chrome, focus_ring};
 use rouge_core::{
-    BuildCx, Color, Cursor, DelegateStyle, FocusPolicy, IntoProp, LayoutTransition, Pose, Prop,
-    Role, RowKey, StyleDelta, Styled, Theme, View, component, div, pct, show, text, view,
+    Apply, BuildCx, Color, Cursor, DelegateStyle, Div, FocusPolicy, IntoProp, LayoutTransition,
+    Pose, Prop, Role, StyleDelta, Styled, Theme, View, component, div, pct, show, text, view,
     virtual_list,
 };
 use rouge_markdown::MarkdownStream;
@@ -66,11 +66,10 @@ impl<T: Eq + Hash + Clone + 'static, U: 'static> View for Transcript<T, U> {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (messages, read, id) = (self.messages, self.message, self.test_id);
         let following = self.following.unwrap_or_else(|| signal(true));
-        let keys = messages.keys();
+        let keys = messages.order();
         let row_id = id.clone();
         let list = view! {
-            <virtual_list count={move || keys.with(Vec::len)} row_height=ROW_HEIGHT let:index
-                 row_identity={move |index| RowKey::new(keys.with(|keys| keys.get(index).cloned()), 0)}
+            <virtual_list count=messages row_height=ROW_HEIGHT let:index
                  measure_rows={|| 0} follow_end=following flex_1 min_h=0.0>
                 {
                     let message = keys
@@ -92,8 +91,8 @@ impl<T: Eq + Hash + Clone + 'static, U: 'static> View for Transcript<T, U> {
                         None => view! { <div/> },
                     };
                     view! {
-                        <div py=Space::X1 test_id?=row_id.part(format_args!("message-{index}"))>{bubble}</div>
-                    }
+                        <div py=Space::X1>{bubble}</div>
+                    }.when_some(row_id.row("message"), Div::test_id)
                 }
             </virtual_list>
         };

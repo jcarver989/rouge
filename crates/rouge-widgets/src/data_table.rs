@@ -5,8 +5,8 @@ use crate::util::{Name, TestId, chrome, focus_ring, labelled};
 use rouge_core::access;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, Apply, BuildCx, Cursor, DelegateStyle, Div, DragPhase, Key, Prop, Role, RowKey,
-    StyleDelta, Styled, View, div, text, view, virtual_list, virtual_list_handle,
+    AnyView, Apply, BuildCx, Cursor, DelegateStyle, Div, DragPhase, Key, Prop, Role, StyleDelta,
+    Styled, View, VirtualRows, div, text, view, virtual_list, virtual_list_handle,
 };
 use rouge_reactive::{Callback, KeyedList, Signal, signal, untrack};
 use std::hash::Hash;
@@ -17,6 +17,8 @@ pub trait TableRows<T>: Clone + 'static {
     type Key: Clone + Eq + Hash + 'static;
 
     fn count(&self) -> usize;
+
+    fn virtual_rows(&self) -> VirtualRows<Self::Key>;
 
     fn key(&self, index: usize) -> Option<Self::Key>;
 
@@ -29,21 +31,24 @@ impl<T: Eq + Hash + Clone + 'static, U: 'static> TableRows<U> for KeyedList<T, U
     type Key = T;
 
     fn count(&self) -> usize {
-        self.keys().with(Vec::len)
+        self.len()
+    }
+
+    fn virtual_rows(&self) -> VirtualRows<T> {
+        (*self).into()
     }
 
     fn key(&self, index: usize) -> Option<T> {
-        self.keys().with(|keys| keys.get(index).cloned())
+        self.order().with(|keys| keys.get(index).cloned())
     }
 
     fn index_of(&self, key: &T) -> Option<usize> {
-        self.keys()
-            .with_untracked(|keys| keys.iter().position(|other| other == key))
+        self.order().with_untracked(|order| order.index_of(key))
     }
 
     fn with<V>(&self, index: usize, f: impl FnOnce(&U) -> V) -> Option<V> {
         let key = self
-            .keys()
+            .order()
             .with_untracked(|keys| keys.get(index).cloned())?;
         KeyedList::with(self, &key, f)
     }
@@ -78,6 +83,11 @@ impl<T: 'static> TableRows<T> for IndexedRows<T> {
 
     fn count(&self) -> usize {
         (self.count)()
+    }
+
+    fn virtual_rows(&self) -> VirtualRows<usize> {
+        let count = self.count.clone();
+        (move || count()).into()
     }
 
     fn key(&self, index: usize) -> Option<usize> {
@@ -225,10 +235,7 @@ impl<T: 'static, U: TableRows<T>> View for DataTable<T, U> {
             let (rows, columns, id) = (rows.clone(), columns.clone(), id.clone());
             view! {
                 <virtual_list
-                     count={{
-                         let rows = rows.clone();
-                         move || rows.count()
-                     }}
+                     count={rows.virtual_rows()}
                      row_height=ROW_HEIGHT let:index>
                     {
                         let key = untrack(|| rows.key(index));
@@ -262,21 +269,12 @@ impl<T: 'static, U: TableRows<T>> View for DataTable<T, U> {
                                     .text_color(Role::AccentForeground)
                             },
                         )
-                        .when_some(
-                            id.part(format_args!("row-{index}")),
-                            Div::test_id,
-                        )
+                        .when_some(id.row("row"), Div::test_id)
                     }
                 </virtual_list>
             }
         };
-        let body = {
-            let rows = rows.clone();
-            body.row_identity(move |index| RowKey::new(rows.key(index), 0))
-                .handle(scroller)
-                .flex_1()
-                .min_h(0.0)
-        };
+        let body = body.handle(scroller).flex_1().min_h(0.0);
         let step = {
             let rows = rows.clone();
             move |to: &dyn Fn(Option<usize>, usize) -> usize| {

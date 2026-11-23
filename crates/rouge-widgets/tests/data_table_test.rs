@@ -45,7 +45,11 @@ fn rows_select_by_pointer_and_keyboard_and_open_on_enter() -> TestResult {
 fn a_sortable_header_writes_the_sort_signal_and_a_keyed_list_reorders_in_place() -> TestResult {
     let _entered = Runtime::new().enter();
     let Tracks {
-        mut ui, sort, list, ..
+        mut ui,
+        sort,
+        list,
+        selection,
+        ..
     } = tracks();
     let sorted = |descending| {
         Some(Sort {
@@ -68,6 +72,8 @@ fn a_sortable_header_writes_the_sort_signal_and_a_keyed_list_reorders_in_place()
     ui.run(0.3);
     let top = ui.text_bounds("Low Tide").ok_or("the moved row is drawn")?;
     assert!(first.contains(top.center()), "rows follow the list's order");
+    ui.click_on("tracks-row-0")?;
+    assert_eq!(selection.get(), Some("Low Tide"));
     Ok(())
 }
 
