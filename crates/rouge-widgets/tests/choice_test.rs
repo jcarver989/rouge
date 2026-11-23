@@ -1,11 +1,45 @@
 mod common;
 
 use common::builder;
+use rouge_core::access::{Action, Role, Toggled};
 use rouge_core::testing::{TestResult, assert_near};
 use rouge_core::view;
 use rouge_core::{Color, PointerButton, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::{radio, toggle};
+
+#[test]
+fn a_toggle_is_a_switch_and_radios_report_the_chosen_one() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (on, picked) = (signal(false), signal(1));
+    let mut ui = builder().build(move || {
+        div()
+            .child(toggle(on).access_label("Wifi"))
+            .child(radio(picked, 1).label("High"))
+            .child(radio(picked, 2).label("Low"))
+    });
+    assert_eq!(
+        ui.access_node(Role::Switch, "Wifi")?.toggled,
+        Some(Toggled::False)
+    );
+    ui.perform(Role::Switch, "Wifi", Action::Click)?;
+    assert!(on.get());
+    assert_eq!(
+        ui.access_node(Role::Switch, "Wifi")?.toggled,
+        Some(Toggled::True)
+    );
+    assert_eq!(
+        ui.access_node(Role::RadioButton, "High")?.toggled,
+        Some(Toggled::True)
+    );
+    ui.perform(Role::RadioButton, "Low", Action::Click)?;
+    assert_eq!(picked.get(), 2);
+    assert_eq!(
+        ui.access_node(Role::RadioButton, "High")?.toggled,
+        Some(Toggled::False)
+    );
+    Ok(())
+}
 
 #[test]
 fn toggle_flips_its_signal_by_pointer_and_keyboard() -> TestResult {

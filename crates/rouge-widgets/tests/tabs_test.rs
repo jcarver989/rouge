@@ -1,6 +1,7 @@
 mod common;
 
 use common::{builder, handheld_test};
+use rouge_core::access::{Action, Role};
 use rouge_core::testing::{TestResult, TestUi, assert_near};
 use rouge_core::view;
 use rouge_core::{Color, InputKind, Size, Styled, UiPalette, div};
@@ -9,6 +10,19 @@ use rouge_widgets::testing::component_test;
 use rouge_widgets::{IconName, tabs};
 use std::cell::RefCell;
 use std::rc::Rc;
+
+#[test]
+fn tab_headers_are_tabs_that_report_and_change_the_selection() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, selected) = three_tabs();
+    ui.run(0.5);
+    assert_eq!(ui.access_node(Role::Tab, "Tracks")?.selected, Some(true));
+    assert_eq!(ui.access_node(Role::Tab, "Notes")?.selected, Some(false));
+    assert!(ui.perform(Role::Tab, "Notes", Action::Click)?);
+    assert_eq!(selected.get(), 2);
+    assert_eq!(ui.access_node(Role::Tab, "Notes")?.selected, Some(true));
+    Ok(())
+}
 
 #[test]
 fn tabs_mount_only_the_selected_panel_and_switch_by_click_and_arrows() -> TestResult {

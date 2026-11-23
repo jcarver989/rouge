@@ -6,11 +6,12 @@ use crate::popover::{Placement, popup};
 use crate::roving::RovingFocus;
 use crate::tokens::{ICON_SIZE_SMALL, MENU_WIDTH, Radius, Space};
 use crate::typography::UiStyles;
-use crate::util::{field_height, focus_ring, is_touch, long_press};
+use crate::util::{Name, field_height, field_name, focus_ring, is_touch, labelled, long_press};
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::{
-    BuildCx, DelegateStyle, Div, Key, Menu, Point, PointerButton, Rect, Styled, View, component,
-    div, pct, text, view,
+    Apply, BuildCx, DelegateStyle, Div, Key, Menu, Point, PointerButton, Rect, Styled, View,
+    component, div, pct, text, view,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
@@ -52,7 +53,9 @@ fn trigger(
         }
     });
     let row = view! {
-        <div test_id={format!("menu-{}", menu.title)} preserve_focus track_bounds=anchor px=Space::X3
+        <div test_id={format!("menu-{}", menu.title)} role=access::Role::MenuItem
+             access_label={menu.title.clone()} expanded={move || open.get()}
+             preserve_focus track_bounds=anchor px=Space::X3
              py=Space::X1 hover={|style| style.bg(hover)}
              on_click={move |event| {
                  event.stop_propagation();
@@ -126,7 +129,7 @@ fn render_items(
                     .as_ref()
                     .map(|chord| view! { <kbd>{chord.display()}</kbd> });
                 let row = view! {
-                    <list_row test_id=id on_click={move || clicked()}>
+                    <list_row test_id=id role=access::Role::MenuItem on_click={move || clicked()}>
                         {icon}
                         <text label no_wrap color=fg flex_1>{title.clone()}</text>
                         {shortcut}
@@ -160,7 +163,7 @@ fn render_items(
         row
     });
     focus
-        .apply(view! { <div/> })
+        .apply(view! { <div role=access::Role::Menu/> })
         .flex()
         .col()
         .p(Space::X1)
@@ -179,6 +182,8 @@ pub struct ContextMenu {
     items: Rc<[MenuItem]>,
     focus: MenuFocus,
     dropdown: bool,
+    role: access::Role,
+    name: Name,
 }
 
 #[component]
@@ -188,8 +193,12 @@ pub fn context_menu(children: impl View, items: impl IntoIterator<Item = MenuIte
         items: items.into_iter().collect(),
         focus: MenuFocus::Take,
         dropdown: false,
+        role: access::Role::Button,
+        name: None,
     }
 }
+
+labelled!(ContextMenu);
 
 impl ContextMenu {
     pub fn focus_policy(mut self, focus: MenuFocus) -> Self {
@@ -226,9 +235,16 @@ impl View for ContextMenu {
                     .top(move || at.get().y)
             }
         };
+        let name = if dropdown {
+            field_name(self.name, None)
+        } else {
+            self.name
+        };
+        let root = self.root.when_some(name, Div::access_label);
         let root = if dropdown {
-            self.root
-                .track_bounds(anchor)
+            root.track_bounds(anchor)
+                .role(self.role)
+                .expanded(move || open.get())
                 .focusable()
                 .on_click(move |event| {
                     event.stop_propagation();
@@ -241,7 +257,7 @@ impl View for ContextMenu {
                     }
                 })
         } else {
-            let root = self.root.on_pointer_down(move |event| {
+            let root = root.on_pointer_down(move |event| {
                 at.set(event.position);
                 if event.button == PointerButton::Secondary {
                     open.set(true);
@@ -278,6 +294,7 @@ pub fn select<T: Clone + PartialEq + 'static>(
             value.set_if_changed(option.clone());
         })
     });
+    let spoken = current.clone();
     let label = view! {
         <div flex flex_1 items_center justify_between gap=Space::X2>
             <text body primary no_wrap>{current}</text>
@@ -285,7 +302,9 @@ pub fn select<T: Clone + PartialEq + 'static>(
         </div>
     };
     let mut menu = context_menu(label, items).dropdown();
+    menu.role = access::Role::ComboBox;
     menu.root = focus_ring(menu.root)
+        .access_value(spoken)
         .flex()
         .items_center()
         .px(Space::X3)

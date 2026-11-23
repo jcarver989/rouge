@@ -5,6 +5,7 @@ use crate::{
     tokens::{ICON_SIZE, ROW_HEIGHT, TREE_INDENT},
     typography::UiStyles,
 };
+use rouge_core::access;
 use rouge_core::{
     AnyView, Apply, BuildCx, DelegateStyle, Div, Fill, FocusPolicy, IntoProp, Prop, Role,
     StyleDelta, Styled, View, component, div, text, view,
@@ -151,12 +152,15 @@ impl View for TreeRow {
                     .child(chevron(expanded))
                     .enabled(enabled);
                 activate(caret, on_toggle, FocusPolicy::Tab)
+                    .role(access::Role::Button)
+                    .access_label("Toggle")
             }
             None => slot(),
         };
         let icon = icon.map(|icon| Icon::new(icon, icon_color));
         let label_id = test_id.part("label");
         let row = list_row()
+            .role(access::Role::TreeItem)
             .depth(depth)
             .selection(move || selection.get())
             .on_click(on_click)

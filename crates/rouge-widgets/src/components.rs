@@ -9,11 +9,12 @@ use crate::{
     tree::indent,
     typography::UiStyles,
     util::{
-        Spot, TestId, by_touch, chrome, fade_when_disabled, focus_ring, hit_box, row_height,
-        tone_icon,
+        Name, Spot, TestId, by_touch, chrome, fade_when_disabled, focus_ring, hit_box, labelled,
+        row_height, tone_icon,
     },
 };
 use rouge_core::Role;
+use rouge_core::access::{self, Toggled};
 use rouge_core::{
     AnyView, Apply, BackdropBlur, BuildCx, Chord, Color, Cursor, DelegateStyle, Div, DragAxis,
     DragPhase, Fill, FocusPolicy, IntoChord, IntoProp, Key, Length, Path, Point, PointerButton,
@@ -301,6 +302,7 @@ fn confirming(root: Div, hold: Hold, action: Callback, focus: FocusPolicy) -> Di
     root.overflow_hidden()
         .track_bounds(bounds)
         .cursor(Cursor::Pointer)
+        .role(access::Role::Button)
         .focus_policy(focus)
         .on_press(move |down| if down { begin() } else { release() })
         .on_key_down(move |event| {
@@ -487,6 +489,8 @@ impl View for IconButton {
         };
         self.style
             .apply(root.when_some(self.test_id, Div::test_id))
+            .role(access::Role::Button)
+            .access_label(self.label.clone())
             .tooltip(self.label)
             .when_some(self.shortcut, Tooltip::shortcut)
             .build(cx);
@@ -531,6 +535,7 @@ pub struct Checkbox<T> {
     model: T,
     mark_color: Option<Color>,
     tooltip: Option<String>,
+    name: Name,
     disabled: Prop<bool>,
     test_id: Option<String>,
     style: StyleDelta,
@@ -542,6 +547,7 @@ pub fn checkbox<T: CheckModel>(checked: T) -> Checkbox<T> {
         model: checked,
         mark_color: None,
         tooltip: None,
+        name: None,
         disabled: Prop::Static(false),
         test_id: None,
         style: StyleDelta::default(),
@@ -566,6 +572,7 @@ impl<T> Checkbox<T> {
 }
 
 chrome!(impl[T] Checkbox<T>);
+labelled!(impl[T] Checkbox<T>);
 
 impl<T: CheckModel> View for Checkbox<T> {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -629,7 +636,15 @@ impl<T: CheckModel> View for Checkbox<T> {
         let root = fade_when_disabled(focus_ring(hit_box(root)), &disabled)
             .enabled(move || !disabled.get())
             .is_checked(move || model.state() == CheckState::Checked)
+            .role(access::Role::CheckBox)
+            .toggled(move || match model.state() {
+                CheckState::Unchecked => Toggled::False,
+                CheckState::Checked => Toggled::True,
+                CheckState::Indeterminate => Toggled::Mixed,
+            })
             .on_activate(move || model.toggle());
+        let name = self.name.or_else(|| self.tooltip.clone().map(Prop::Static));
+        let root = root.when_some(name, Div::access_label);
         let tooltip = self.tooltip;
         self.style
             .apply(root.when_some(self.test_id, Div::test_id))
@@ -704,6 +719,7 @@ impl View for SegmentedControl {
             move |layer| style.apply(layer).when_some(id, Div::test_id),
         );
         spot.contain(self.root)
+            .role(access::Role::RadioGroup)
             .when_some(self.test_id, Div::test_id)
             .provide(SegmentIndicator(spot))
             .child(indicator)
@@ -803,6 +819,7 @@ impl View for Segment {
             let detail_id = test_id.part("detail");
             view! { <div test_id?=detail_id><text small>{detail}</text></div> }
         });
+        let name = label.clone();
         let (caption, hint) = if icon.is_some() && !labelled {
             (None, Some(label))
         } else {
@@ -835,7 +852,13 @@ impl View for Segment {
             }
             None => root.selected(|style| style.bg(Role::SurfaceSelected)),
         }
-        .is_selected(move || selected.get());
+        .is_selected({
+            let selected = selected.clone();
+            move || selected.get()
+        })
+        .role(access::Role::RadioButton)
+        .access_label(name)
+        .toggled(move || Toggled::from(selected.get()));
         let disabled = Rc::new(disabled);
         let root = fade_when_disabled(root, &disabled).enabled(move || !disabled.get());
         let root = activate(root, on_click, FocusPolicy::Tab);
@@ -929,6 +952,8 @@ impl View for Disclosure {
             </div>
         };
         let header = activate(focus_ring(header), self.on_toggle, FocusPolicy::Tab)
+            .role(access::Role::Button)
+            .expanded(open.clone())
             .when_some(self.test_id, Div::test_id);
         let Some(body) = self.body else {
             return header.build(cx);
@@ -1122,6 +1147,7 @@ impl RowAction {
         focused: impl Fn(bool) + Clone + 'static,
     ) -> Div {
         let (on_select, blurred) = (self.on_select, focused.clone());
+        let name = self.label.clone();
         let icon = self.icon.map(|icon| Icon::new(icon, ink));
         let label = labelled.then(|| view! { <text label no_wrap>{self.label.clone()}</text> });
         let cell = view! {
@@ -1132,10 +1158,13 @@ impl RowAction {
                 {label}
             </div>
         };
-        focus_ring(cell).on_activate(move || {
-            on_select.call();
-            chosen();
-        })
+        focus_ring(cell)
+            .role(access::Role::Button)
+            .access_label(name)
+            .on_activate(move || {
+                on_select.call();
+                chosen();
+            })
     }
 
     fn chip(self, focused: impl Fn(bool) + Clone + 'static) -> AnyView {
@@ -1177,6 +1206,8 @@ pub struct ListRow {
     detail: Option<String>,
     trailing: Option<AnyView>,
     chevron: bool,
+    role: Option<access::Role>,
+    name: Name,
     test_id: Option<String>,
     style: StyleDelta,
     children: Vec<AnyView>,
@@ -1196,6 +1227,8 @@ pub fn list_row() -> ListRow {
         detail: None,
         trailing: None,
         chevron: false,
+        role: None,
+        name: None,
         test_id: None,
         style: StyleDelta::default(),
         children: Vec::new(),
@@ -1203,6 +1236,11 @@ pub fn list_row() -> ListRow {
 }
 
 impl ListRow {
+    pub fn role(mut self, role: access::Role) -> Self {
+        self.role = Some(role);
+        self
+    }
+
     pub fn action(mut self, action: RowAction) -> Self {
         self.actions.push(action);
         self
@@ -1257,6 +1295,7 @@ impl ListRow {
 }
 
 chrome!(ListRow);
+labelled!(ListRow);
 
 impl View for ListRow {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -1320,7 +1359,9 @@ impl View for ListRow {
         .selected(|style| style.bg(background.clone()))
         .is_selected(shown.clone())
         .enabled(move || selection.get() != SelectionState::Disabled)
+        .when_some(self.role, Div::role)
         .when_some(self.test_id, Div::test_id);
+        let root = root.when_some(self.name, Div::access_label);
         let resting = |trailing: AnyView| view! { <div flex flex_none items_center ml=auto()>{trailing}</div> };
         let root = if self.actions.is_empty() {
             activate(
@@ -1645,7 +1686,8 @@ impl View for Modal {
         }
         let backdrop_id = self.test_id.part("backdrop");
         let panel = view! {
-            <div test_id?=self.test_id flex col gap=Space::X2 p=Space::X4 w={modal_width(self.size)}
+            <div test_id?=self.test_id role=access::Role::Dialog access_label={self.title.clone()}
+                 flex col gap=Space::X2 p=Space::X4 w={modal_width(self.size)}
                  max_w=pct(100.0) h?=self.height overflow_hidden material=Material::Glass>
                 <text heading primary>{self.title}</text>
                 {self.hint.map(|hint| view! { <muted_text>{hint}</muted_text> })}

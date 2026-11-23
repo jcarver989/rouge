@@ -5,6 +5,7 @@ use crate::tokens::{BAR_HEIGHT, CONTROL_HEIGHT_LARGE, Pace, Radius, Space, TINT_
 use crate::typography::UiStyles;
 use crate::util::{TestId, focus_ring, follower};
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::{
     AnyView, Apply, BuildCx, Color, Cursor, DelegateStyle, Div, Fill, IntoProp, Key, Pose, Prop,
     Rect, Styled, Text, Theme, View, auto, component, div, each, keyboard_inset, pct, presentation,
@@ -131,7 +132,9 @@ impl Rail {
     fn header(&self, index: usize, spot: Signal<Rect>) -> Div {
         let (selected, count) = (self.selected, self.labels.len().max(1));
         view! {
-            <div test_id?=self.test_id.part(format_args!("tab-{index}")) relative border=1.0
+            <div test_id?=self.test_id.part(format_args!("tab-{index}")) role=access::Role::Tab
+                 access_label={self.labels[index].text.clone()} is_selected={move || selected.get() == index}
+                 relative border=1.0
                  border_color=Color::TRANSPARENT rounded=Radius::Inner focusable track_bounds=spot
                  cursor=Cursor::Pointer on_click={move |_| selected.set(index)}
                  on_key_down={move |event| {

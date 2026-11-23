@@ -1,11 +1,12 @@
 use crate::icon::{Icon, IconName};
 use crate::tokens::{ICON_SIZE_SMALL, Pace, ROW_HEIGHT, Radius, Space};
 use crate::typography::UiStyles;
-use crate::util::{TestId, chrome, focus_ring};
+use crate::util::{Name, TestId, chrome, focus_ring, labelled};
+use rouge_core::access;
 use rouge_core::component;
 use rouge_core::{
-    AnyView, Apply, BuildCx, Cursor, DelegateStyle, Div, DragPhase, Key, Role, RowKey, StyleDelta,
-    Styled, View, div, text, view, virtual_list, virtual_list_handle,
+    AnyView, Apply, BuildCx, Cursor, DelegateStyle, Div, DragPhase, Key, Prop, Role, RowKey,
+    StyleDelta, Styled, View, div, text, view, virtual_list, virtual_list_handle,
 };
 use rouge_reactive::{Callback, KeyedList, Signal, signal, untrack};
 use std::hash::Hash;
@@ -147,6 +148,7 @@ pub struct DataTable<T, U: TableRows<T>> {
     selection: Option<Signal<Option<U::Key>>>,
     sort: Option<Signal<Option<Sort>>>,
     on_open: Callback<(U::Key,)>,
+    name: Name,
     test_id: Option<String>,
     style: StyleDelta,
     row: PhantomData<T>,
@@ -160,6 +162,7 @@ pub fn data_table<T, U: TableRows<T>>(rows: U) -> DataTable<T, U> {
         selection: None,
         sort: None,
         on_open: Callback::default(),
+        name: None,
         test_id: None,
         style: StyleDelta::default(),
         row: PhantomData,
@@ -189,6 +192,7 @@ impl<T, U: TableRows<T>> DataTable<T, U> {
 }
 
 chrome!(impl[T, U: TableRows<T>] DataTable<T, U>);
+labelled!(impl[T, U: TableRows<T>] DataTable<T, U>);
 
 impl<T: 'static, U: TableRows<T>> View for DataTable<T, U> {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -235,8 +239,11 @@ impl<T: 'static, U: TableRows<T>> View for DataTable<T, U> {
                                 .collect::<Vec<_>>()
                         });
                         let (chosen, picked, opened) = (key.clone(), key.clone(), key);
+                        let marked = chosen.clone();
                         view! {
-                            <div flex items_center gap=Space::X2 h=ROW_HEIGHT px=Space::X2 text_color=Role::Text
+                            <div role=access::Role::Row
+                                 is_selected={move || marked.is_some() && selection.with(|held| *held == marked)}
+                                 flex items_center gap=Space::X2 h=ROW_HEIGHT px=Space::X2 text_color=Role::Text
                                  on_click={move |event| {
                                      selection.set(picked.clone());
                                      if let Some(key) = opened.clone().filter(|_| event.click_count == 2) {
@@ -303,6 +310,10 @@ impl<T: 'static, U: TableRows<T>> View for DataTable<T, U> {
                 {body}
             </div>
         };
+        let name = self
+            .name
+            .unwrap_or_else(|| Prop::Static("Table".to_owned()));
+        let root = root.access_label(name).role(access::Role::Table);
         self.style
             .apply(focus_ring(root).when_some(id, Div::test_id))
             .build(cx);
@@ -329,15 +340,18 @@ fn header<T>(column: &Column<T>, index: usize, sort: Signal<Option<Sort>>) -> Di
             {Icon::new(IconName::ArrowUp, Role::TextSecondary).size(ICON_SIZE_SMALL)}
         </div>
     };
-    heading.child(arrow).on_activate(move || {
-        sort.update(|sort| {
-            let descending = sort.is_some_and(|sort| sort.column == index && !sort.descending);
-            *sort = Some(Sort {
-                column: index,
-                descending,
+    heading
+        .child(arrow)
+        .role(access::Role::ColumnHeader)
+        .on_activate(move || {
+            sort.update(|sort| {
+                let descending = sort.is_some_and(|sort| sort.column == index && !sort.descending);
+                *sort = Some(Sort {
+                    column: index,
+                    descending,
+                });
             });
-        });
-    })
+        })
 }
 
 fn grip(width: Signal<f32>) -> Div {

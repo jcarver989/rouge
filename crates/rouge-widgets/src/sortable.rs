@@ -1,5 +1,6 @@
 use crate::tokens::{Pace, Radius};
 use crate::util::{chrome, focus_ring};
+use rouge_core::access;
 use rouge_core::component;
 use rouge_core::view;
 use rouge_core::{
@@ -130,7 +131,8 @@ impl<T: Eq + Hash + Clone + 'static, U: 'static> View for Sortable<T, U> {
                         </div>
                     };
                     let slot = view! {
-                        <div border=1.0 border_color=Color::TRANSPARENT rounded=Radius::Inner focusable
+                        <div role=access::Role::ListItem access_description="Alt and an arrow key moves this item"
+                             border=1.0 border_color=Color::TRANSPARENT rounded=Radius::Inner focusable
                              cursor=Cursor::Grab track_size=size translate_y=shift transition=Pace::Layout
                              layout_transition=Pace::Layout
                              on_drag={move |event| dragged(event.phase, event.translation.y)}

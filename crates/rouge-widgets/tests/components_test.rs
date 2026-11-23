@@ -1,6 +1,7 @@
 mod common;
 
 use common::handheld_test;
+use rouge_core::access::{Action, Role, Toggled};
 use rouge_core::testing::{TestError, TestResult, TestUi, assert_near, counter};
 use rouge_core::{
     Color, Cursor, Div, InputKind, Key, KeyEvent, Point, PointerButton, Rect, Styled, Theme,
@@ -10,6 +11,57 @@ use rouge_reactive::{Runtime, Signal, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::tokens::{Hold, ICON_BUTTON_SIZE, UNIT};
 use rouge_widgets::*;
+
+#[test]
+fn controls_expose_roles_names_and_states() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (saves, save) = counter();
+    let state = signal(CheckState::Indeterminate);
+    let open = signal(false);
+    let mut ui = component_test().size(400.0, 300.0).build(move || {
+        view! {
+            <div flex col gap=8.0>
+                <button label="Save" on_click=save/>
+                <icon_button icon=IconName::Copy label="Copy link" on_click={|| {}}/>
+                <checkbox checked=state access_label="Offline"/>
+                <segmented_control>
+                    <segment label="Day" selected=true on_click={|| {}}/>
+                    <segment label="Week" on_click={|| {}}/>
+                </segmented_control>
+                <disclosure expanded=open on_toggle={move || open.toggle()}><text>"Advanced"</text></disclosure>
+            </div>
+        }
+    });
+    assert!(ui.perform(Role::Button, "Save", Action::Click)?);
+    assert_eq!(saves.get(), 1);
+    ui.access_node(Role::Button, "Copy link")?;
+    assert_eq!(
+        ui.access_node(Role::CheckBox, "Offline")?.toggled,
+        Some(Toggled::Mixed)
+    );
+    ui.perform(Role::CheckBox, "Offline", Action::Click)?;
+    for (role, name, expected) in [
+        (Role::CheckBox, "Offline", Toggled::True),
+        (Role::RadioButton, "Day", Toggled::True),
+        (Role::RadioButton, "Week", Toggled::False),
+    ] {
+        assert_eq!(
+            ui.access_node(role, name)?.toggled,
+            Some(expected),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        ui.access_node(Role::Button, "Advanced")?.expanded,
+        Some(false)
+    );
+    ui.perform(Role::Button, "Advanced", Action::Click)?;
+    assert_eq!(
+        ui.access_node(Role::Button, "Advanced")?.expanded,
+        Some(true)
+    );
+    Ok(())
+}
 
 #[test]
 fn full_width_buttons_rows_and_segments_activate_only_enabled_choices() -> TestResult {

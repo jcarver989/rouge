@@ -1,12 +1,13 @@
 mod common;
 
 use common::{builder, handheld_test};
-use rouge_core::testing::TestResult;
+use rouge_core::access::{Action, Role};
+use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::{
     Chord, Div, EditAction, Key, Menu, MenuItem, Modifiers, Point, PointerButton, Styled, Theme,
     TouchPhase, WindowCommand, div, editable, focus_handle, view,
 };
-use rouge_reactive::{Runtime, signal};
+use rouge_reactive::{Runtime, Signal, signal};
 use rouge_theme::UiPalette;
 use rouge_widgets::testing::component_test;
 use rouge_widgets::{MenuFocus, button, context_menu, select};
@@ -14,20 +15,32 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[test]
+fn a_select_is_a_combo_box_whose_menu_items_choose() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, quality) = select_fixture();
+    let closed = ui.access_node(Role::ComboBox, "Quality")?;
+    assert_eq!(closed.value.as_deref(), Some("Two"));
+    assert_eq!(closed.expanded, Some(false));
+    ui.perform(Role::ComboBox, "Quality", Action::Click)?;
+    ui.run(0.5);
+    assert_eq!(
+        ui.access_node(Role::ComboBox, "Quality")?.expanded,
+        Some(true)
+    );
+    assert!(ui.perform(Role::MenuItem, "Three", Action::Click)?);
+    ui.run(0.5);
+    assert_eq!(quality.get(), 3);
+    assert_eq!(
+        ui.access_node(Role::ComboBox, "Quality")?.value.as_deref(),
+        Some("Three")
+    );
+    Ok(())
+}
+
+#[test]
 fn select_opens_a_menu_and_picks_by_click_or_keyboard() {
     let _entered = Runtime::new().enter();
-    let value = signal(2u32);
-    let mut ui = builder().build(move || {
-        let options = [
-            (1, "One".to_owned()),
-            (2, "Two".to_owned()),
-            (3, "Three".to_owned()),
-        ];
-        div()
-            .size_full()
-            .p(10.0)
-            .child(select(value, options).w(140.0))
-    });
+    let (mut ui, value) = select_fixture();
     let closed = ui.stats().elements;
     ui.click_at(30.0, 22.0);
     ui.run(0.6);
@@ -417,4 +430,20 @@ fn dropdown<const N: usize>(items: [MenuItem; N]) -> Div {
     view! {
         <div size_full><context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu></div>
     }
+}
+
+fn select_fixture() -> (TestUi, Signal<u32>) {
+    let value = signal(2u32);
+    let ui = builder().build(move || {
+        let options = [
+            (1, "One".to_owned()),
+            (2, "Two".to_owned()),
+            (3, "Three".to_owned()),
+        ];
+        div()
+            .size_full()
+            .p(10.0)
+            .child(select(value, options).access_label("Quality").w(140.0))
+    });
+    (ui, value)
 }

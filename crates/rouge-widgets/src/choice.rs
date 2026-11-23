@@ -2,8 +2,11 @@ use crate::tokens::{
     CHECKBOX_SIZE, CHECKBOX_SIZE_LARGE, CONTROL_HEIGHT_LARGE, Pace, Radius, Space,
 };
 use crate::typography::UiStyles;
-use crate::util::{TestId, by_touch, chrome, fade_when_disabled, focus_ring, hit_box};
+use crate::util::{
+    Name, TestId, by_touch, chrome, fade_when_disabled, focus_ring, hit_box, labelled,
+};
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::{
     Apply, BuildCx, Color, DelegateStyle, Div, IntoProp, LayoutTransition, Prop, StyleDelta,
     Styled, View, component, div, text, view,
@@ -13,6 +16,7 @@ use std::rc::Rc;
 
 pub struct Toggle {
     checked: Signal<bool>,
+    name: Name,
     disabled: Prop<bool>,
     test_id: Option<String>,
     style: StyleDelta,
@@ -22,6 +26,7 @@ pub struct Toggle {
 pub fn toggle(checked: Signal<bool>) -> Toggle {
     Toggle {
         checked,
+        name: None,
         disabled: Prop::Static(false),
         test_id: None,
         style: StyleDelta::default(),
@@ -36,6 +41,7 @@ impl Toggle {
 }
 
 chrome!(Toggle);
+labelled!(Toggle);
 
 impl View for Toggle {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -61,9 +67,11 @@ impl View for Toggle {
         let track = fade_when_disabled(focus_ring(hit_box(track)), &disabled)
             .enabled(move || !disabled.get())
             .on_press(move |down| pressed.set(down))
+            .role(access::Role::Switch)
             .on_activate(move || checked.toggle())
             .layer()
             .transition(Pace::Press);
+        let track = track.when_some(self.name, Div::access_label);
         self.style
             .apply(track.when_some(self.test_id, Div::test_id))
             .build(cx);
@@ -147,6 +155,8 @@ impl<T: Clone + PartialEq + 'static> View for Radio<T> {
         let disabled = Rc::new(disabled);
         let root = fade_when_disabled(focus_ring(root), &disabled)
             .enabled(move || !disabled.get())
+            .role(access::Role::RadioButton)
+            .is_checked(on)
             .on_activate(move || {
                 selected.set_if_changed(chosen.clone());
             });

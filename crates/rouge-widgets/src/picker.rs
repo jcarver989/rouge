@@ -10,6 +10,7 @@ use crate::{
     util::{Spot, TestId, chrome},
 };
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::{
     AnyView, BuildCx, Color, DelegateStyle, Div, Fill, IntoProp, Key, Length, Prop, RowKey,
     ScrollState, Scrollable, StyleDelta, Styled, View, component, div, dynamic, editable, pct, px,
@@ -389,7 +390,7 @@ fn item_row(
         slot().test_id(format!("{}-check", item.id)).child(icon)
     });
     view! {
-        <list_row test_id={item.id.clone()} on_click=on_click selection=state>
+        <list_row test_id={item.id.clone()} role=access::Role::ListBoxOption on_click=on_click selection=state>
             {marker}
             {item.icon.map(|icon| Icon::new(icon, ink(Role::TextSecondary)))}
             {prefix}
@@ -689,7 +690,8 @@ fn query_input(hint: String, handle: SearchPickerHandle) -> impl View {
     let query = handle.query;
     view! {
         <div h=tokens::GROUP_HEIGHT px=Space::X2 flex items_center material=Material::Surface rounded=tokens::Radius::Inner>
-            <editable value=query test_id="picker-query" autofocus body color=Role::Text w_full
+            <editable value=query test_id="picker-query" access_label={hint.clone()} autofocus body
+                      color=Role::Text w_full
                       placeholder=(hint, Role::TextMuted) on_submit={move |_| handle.choose()}/>
         </div>
     }
