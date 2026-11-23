@@ -3,6 +3,7 @@ use rouge::core::{AnyView, KeyEvent, View, Wake};
 use rouge::markdown::{MarkdownDocument, MarkdownStream};
 use rouge::prelude::*;
 use rouge::widgets::{button, column, data_table, markdown, table_rows};
+use std::collections::VecDeque;
 use std::fmt::Write;
 
 pub(crate) const SIZE: Size = Size::new(800.0, 600.0);
@@ -35,6 +36,11 @@ pub(crate) const SCENARIOS: &[Scenario] = &[
     ("glass_panels", || glass(4)),
     ("scroll_list", scroll_list),
     ("scroll_fling", scroll_fling),
+    ("keyed_prepend_1k", || keyed_prepend(1_000)),
+    ("keyed_prepend_100k", || keyed_prepend(100_000)),
+    ("row_identity_prepend_100k", || {
+        row_identity_prepend(100_000)
+    }),
     ("data_table_scroll", data_table_scroll),
     ("layout_flat", || relayout(false)),
     ("layout_nested", || relayout(true)),
@@ -193,6 +199,60 @@ fn scroll_list() -> Staged {
     };
     let view = virtual_list(|| 100_000, ROW_HEIGHT, row).size_full();
     scrolled(view, CENTER, 1000)
+}
+
+fn keyed_prepend(count: usize) -> Staged {
+    let model = keyed_list(|key: &usize| *key);
+    model.extend(0..count);
+    let handle = virtual_list_handle();
+    let key_at = move |index| {
+        model
+            .order()
+            .with_untracked(|order| order.get(index).copied())
+    };
+    let view = virtual_list(model, ROW_HEIGHT, move |index| {
+        let key = key_at(index).expect("mounted row has a key");
+        div().size_full().child(text(format!("Message {key}")))
+    })
+    .handle(handle)
+    .size_full();
+    staged(view, move |_, frame| {
+        if frame == 0 {
+            handle.scroll_to_row(count / 2, Align::Top);
+        }
+        let step = phase(frame, 100);
+        if step == Step::Measure {
+            assert_eq!(key_at(handle.top_row().get()), Some(count / 2));
+            model.prepend(count + frame as usize);
+        }
+        step
+    })
+}
+
+fn row_identity_prepend(count: usize) -> Staged {
+    let keys = signal((0..count).collect::<VecDeque<_>>());
+    let handle = virtual_list_handle();
+    let view = virtual_list(
+        move || keys.with(VecDeque::len),
+        ROW_HEIGHT,
+        move |index| {
+            let key = keys.with_untracked(|keys| keys[index]);
+            div().size_full().child(text(format!("Message {key}")))
+        },
+    )
+    .row_identity(move |index| RowKey::new(keys.with(|keys| keys[index]), 0))
+    .handle(handle)
+    .size_full();
+    staged(view, move |_, frame| {
+        if frame == 0 {
+            handle.scroll_to_row(count / 2, Align::Top);
+        }
+        let step = phase(frame, 100);
+        if step == Step::Measure {
+            keys.update(|keys| keys.push_front(count + frame as usize));
+        }
+        step
+    })
 }
 
 fn data_table_scroll() -> Staged {
