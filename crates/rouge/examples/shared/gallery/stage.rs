@@ -285,6 +285,7 @@ fn player(playing: Signal<usize>) -> Div {
     };
     let toggle = view! {
         <div flex flex_none items_center justify_center size=36.0 rounded=Radius::Full bg=Role::Accent
+             access_label={move || if paused.get() { "Play" } else { "Pause" }.to_owned()}
              test_id="play-pause">
             <dynamic>
                 {
@@ -309,9 +310,9 @@ fn player(playing: Signal<usize>) -> Div {
             <show when={move || !compact()}>
                 <div flex flex_1 items_center gap=12.0>
                     <div flex_none w=32.0><text small secondary>{time}</text></div>
-                    <slider value=position range={(0.0, TRACK_SECONDS)} step=1.0 flex_1/>
+                    <slider value=position access_label="Position" range={(0.0, TRACK_SECONDS)} step=1.0 flex_1/>
                     {Icon::new(IconName::AudioLines, Role::TextSecondary)}
-                    <slider value=volume range={(0.0, 100.0)} step=1.0 w=96.0/>
+                    <slider value=volume access_label="Volume" range={(0.0, 100.0)} step=1.0 w=96.0/>
                 </div>
             </show>
         </div>

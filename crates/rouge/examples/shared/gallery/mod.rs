@@ -136,7 +136,7 @@ fn header(dark: Signal<bool>, grid: Signal<bool>) -> impl View {
                 <div flex flex_wrap items_center gap=Space::X3>
                     <div flex items_center gap=Space::X2>
                         <text small secondary>"Grid"</text>
-                        <toggle checked=grid test_id="grid"/>
+                        <toggle checked=grid access_label="Grid" test_id="grid"/>
                     </div>
                     <segmented_control test_id="appearance">
                         <segment test_id="light" label="Light" selected={move || !dark.get()}

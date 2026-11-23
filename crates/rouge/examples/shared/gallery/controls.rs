@@ -159,9 +159,12 @@ fn toggles() -> Cell {
         <column gap=12.0>
             {labelled(
                 "Crossfade",
-                view! { <toggle checked=crossfade test_id="crossfade"/> }.into_any(),
+                view! { <toggle checked=crossfade access_label="Crossfade" test_id="crossfade"/> }.into_any(),
             )}
-            {labelled("Normalise volume", view! { <toggle checked=normalise/> }.into_any())}
+            {labelled(
+                "Normalise volume",
+                view! { <toggle checked=normalise access_label="Normalise volume"/> }.into_any(),
+            )}
         </column>
     };
     cell(
@@ -183,11 +186,12 @@ fn checkboxes() -> Cell {
             </div>
         }
     };
+    let (offline, some, lists) = ("Download for offline", "Albums", "Playlists");
     let content = view! {
         <column gap=12.0>
-            {option(view! { <checkbox checked=all/> }.into_any(), "Download for offline")}
-            <div pl=24.0>{option(view! { <checkbox checked=albums/> }.into_any(), "Albums")}</div>
-            <div pl=24.0>{option(view! { <checkbox checked=playlists/> }.into_any(), "Playlists")}</div>
+            {option(view! { <checkbox checked=all access_label=offline/> }.into_any(), offline)}
+            <div pl=24.0>{option(view! { <checkbox checked=albums access_label=some/> }.into_any(), some)}</div>
+            <div pl=24.0>{option(view! { <checkbox checked=playlists access_label=lists/> }.into_any(), lists)}</div>
         </column>
     };
     cell("checkbox", 1.0, "", content)
@@ -241,9 +245,9 @@ fn sliders() -> Cell {
     let (volume, balance) = (signal(64.0), signal(50.0));
     let content = view! {
         <column gap=16.0>
-            <slider value=volume test_id="volume" range={(0.0, 100.0)} step=1.0
+            <slider value=volume access_label="Volume" test_id="volume" range={(0.0, 100.0)} step=1.0
                  format={|value| format!("{value:.0}%")} w_full/>
-            <slider value=balance range={(0.0, 100.0)} step=1.0
+            <slider value=balance access_label="Gain" range={(0.0, 100.0)} step=1.0
                  format={|value| format!("{:+.1} dB", (value - 50.0) / 5.0)} w_full/>
         </column>
     };
@@ -267,9 +271,11 @@ fn inputs() -> Cell {
     };
     let content = view! {
         <column gap=12.0>
-            <field label="Playlist name">{view! { <text_input value=name w_full/> }.into_any()}</field>
+            <field label="Playlist name">
+                {view! { <text_input value=name access_label="Playlist name" w_full/> }.into_any()}
+            </field>
             <field label="Share link">
-                {view! { <text_input value=link placeholder="rouge.fm/late-night" w_full/> }
+                {view! { <text_input value=link access_label="Share link" placeholder="rouge.fm/late-night" w_full/> }
                     .into_any()}
             </field>
         </column>
@@ -285,8 +291,8 @@ fn selects() -> Cell {
         .map(|(value, label)| (value, label.to_owned()));
     let content = view! {
         <column gap=12.0>
-            <select value=sort options=sorts/>
-            <select value=quality options=qualities/>
+            <select value=sort options=sorts access_label="Sort by"/>
+            <select value=quality options=qualities access_label="Quality"/>
         </column>
     };
     cell(

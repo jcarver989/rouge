@@ -1,4 +1,5 @@
 use super::{COLUMN, Cell, band, cell, column, row, section};
+use rouge::core::access;
 use rouge::core::{
     Canvas, Color, Div, Ease, Fill, Glass, Path, Point, Rgba, Role, Spring, Styled, Theme, Timing,
     Tween, Typography, canvas, div, dynamic, text, view,
@@ -357,7 +358,7 @@ fn lab() -> Vec<Div> {
         view! {
             <div flex items_center gap=Space::X3 h=ROW_HEIGHT>
                 <div w=COLUMN flex_none><text body primary>{name}</text></div>
-                <slider value=value test_id={format!("glass-{}", name.to_lowercase())} range={(0.0, most)}
+                <slider value=value access_label=name test_id={format!("glass-{}", name.to_lowercase())} range={(0.0, most)}
                      step=step flex_1/>
                 <div flex justify_end w=40.0 flex_none>{shown}</div>
             </div>
@@ -461,7 +462,8 @@ fn paces() -> Cell {
         };
         view! {
             <div flex items_center h={BAR_HEIGHT + Space::X2.px()} border_t=1.0 border_color=Role::BorderSubtle
-                 test_id={format!("pace-{pace:?}").to_lowercase()} on_click={move |_| far.toggle()}>
+                 test_id={format!("pace-{pace:?}").to_lowercase()} role=access::Role::Button
+                 access_label={format!("Play Pace::{pace:?}")} on_click={move |_| far.toggle()}>
                 <div w=COLUMN flex_none><text small font=CODE_FONT primary no_wrap>{format!("Pace::{pace:?}")}</text></div>
                 <div w={CURVE.0 + GRID_GUTTER.px()} flex_none>{curve}</div>
                 <div w=COLUMN flex_none>
