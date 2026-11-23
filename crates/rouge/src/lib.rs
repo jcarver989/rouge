@@ -21,18 +21,19 @@ pub mod prelude {
     pub use crate::persist::{app_storage, persisted, provide_storage};
     pub use rouge_core::{
         Align, AnyView, Appearance, Apply, BackdropBlur, BlendMode, Blur, BoxShadow, Chord,
-        ClipboardMedia, Color, ColorMatrix, Corners, Cursor, Decay, Decorations, Div, DragEvent,
-        DragPhase, Ease, Edges, EditAction, Fill, Fit, FocusEvent, FocusHandle, FocusPolicy, Glass,
-        ImageData, ImageSource, ImeEvent, Inputs, IntoProp, Key, KeyEvent, Keyframes,
-        LayoutTransition, Length, Mask, Menu, MenuItem, Modifiers, Motion, Painter, Palette, Path,
-        Point, PointerButton, PointerEvent, Pose, Rect, ResizeEdge, Rgba, Role, RowKey,
-        ScrollEvent, ScrollState, Scrollable, ShaderEffect, Size, SpanStyle, Spring, StyleDelta,
-        Styled, Surface, SurfaceError, SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle,
-        Theme, Tween, Typography, UiPalette, Underline, View, VirtualListHandle, VirtualRows,
-        WindowHandle, appearance, auto, canvas, component, div, dynamic, each, editable,
-        focus_handle, icon, image, keyboard_inset, motion, overlay, pct, px, rich_text, route,
-        safe_area, scroll, show, surface, switch, text, use_binding, view, virtual_list,
-        virtual_list_handle, virtual_row_index, window_focused, window_handle, window_size, zoom,
+        ClipboardMedia, Color, ColorMatrix, ContentType, Corners, Cursor, Decay, Decorations, Div,
+        DragEvent, DragPhase, Ease, Edges, EditAction, EnterKey, Fill, Fit, FocusEvent,
+        FocusHandle, FocusPolicy, Glass, ImageData, ImageSource, ImeEvent, InputHints, Inputs,
+        IntoProp, Key, KeyEvent, Keyframes, LayoutTransition, Length, Mask, Menu, MenuItem,
+        Modifiers, Motion, Painter, Palette, Path, Point, PointerButton, PointerEvent, Pose, Rect,
+        ResizeEdge, Rgba, Role, RowKey, ScrollEvent, ScrollState, Scrollable, ShaderEffect, Size,
+        SpanStyle, Spring, StyleDelta, Styled, Surface, SurfaceError, SurfaceSource, SurfaceStatus,
+        Text, TextAlign, TextStyle, Theme, Tween, Typography, UiPalette, Underline, View,
+        VirtualListHandle, VirtualRows, WindowHandle, appearance, auto, canvas, component, div,
+        dynamic, each, editable, focus_handle, icon, image, keyboard_inset, motion, overlay, pct,
+        px, rich_text, route, safe_area, scroll, show, surface, switch, text, use_binding, view,
+        virtual_list, virtual_list_handle, virtual_row_index, window_focused, window_handle,
+        window_size, zoom,
     };
     #[cfg(not(target_arch = "wasm32"))]
     pub use rouge_reactive::spawn_blocking;

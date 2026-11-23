@@ -2,7 +2,7 @@ use crate::tokens::{HAIRLINE, Space};
 use crate::util::{Name, by_touch, chrome, entry, entry_frame, field_height, labelled};
 use rouge_core::Role;
 use rouge_core::{
-    Apply, BuildCx, DelegateStyle, Editable, StyleDelta, Styled, View, component, div,
+    Apply, BuildCx, DelegateStyle, Editable, InputHints, StyleDelta, Styled, View, component, div,
     focus_handle, view,
 };
 use rouge_reactive::{Callback, Signal};
@@ -17,6 +17,7 @@ pub struct TextInput {
     max_rows: Option<usize>,
     multiline: bool,
     submit_on_enter: bool,
+    hints: InputHints,
     on_submit: Callback<(String,)>,
     test_id: Option<String>,
     style: StyleDelta,
@@ -33,6 +34,7 @@ pub fn text_input(value: Signal<String>) -> TextInput {
         max_rows: None,
         multiline: false,
         submit_on_enter: false,
+        hints: InputHints::default(),
         on_submit: Callback::default(),
         test_id: None,
         style: StyleDelta::default(),
@@ -70,6 +72,11 @@ impl TextInput {
         self
     }
 
+    pub fn input_hints(mut self, hints: InputHints) -> Self {
+        self.hints = hints;
+        self
+    }
+
     pub fn on_submit(mut self, on_submit: impl Into<Callback<(String,)>>) -> Self {
         self.on_submit = on_submit.into();
         self
@@ -91,12 +98,14 @@ impl View for TextInput {
             max_rows,
             multiline,
             submit_on_enter,
+            hints,
             on_submit,
             test_id,
             style,
         } = self;
         let field = entry(value, focus, name, placeholder.as_deref())
             .submit_on_enter(submit_on_enter)
+            .input_hints(hints)
             .on_submit(move |text| on_submit.call(text.to_owned()))
             .when(multiline, Editable::multiline)
             .when_some(placeholder, |field, hint| {

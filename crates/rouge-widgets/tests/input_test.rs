@@ -2,11 +2,27 @@ mod common;
 
 use common::builder;
 use rouge_core::testing::{TestError, TestResult, TestUi, assert_near};
-use rouge_core::{Color, Styled, UiPalette, div, view};
+use rouge_core::{Color, ContentType, EnterKey, InputHints, Styled, UiPalette, div, view};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::text_input;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+#[test]
+fn text_input_publishes_its_input_hints_to_the_focused_editor() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let hints = InputHints {
+        content: ContentType::Url,
+        enter: EnterKey::Go,
+        autocorrect: false,
+    };
+    let mut ui = builder().build(move || {
+        view! { <text_input value={signal(String::new())} input_hints=hints w=200.0/> }
+    });
+    ui.click_at(20.0, 20.0);
+    assert_eq!(ui.editor().ok_or("focused editor")?.hints(), hints);
+    Ok(())
+}
 
 #[test]
 fn multiline_text_input_forwards_selection_row_limits_and_shift_enter_submission() -> TestResult {
