@@ -2,7 +2,8 @@ use crate::{Div, IntoProp};
 use accesskit::Node;
 
 pub use accesskit::{
-    Action, ActionData, ActionRequest, Live, NodeId, Role, Toggled, TreeId, TreeUpdate,
+    Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, Live, NodeId, Role,
+    Toggled, TreeId, TreeUpdate,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

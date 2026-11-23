@@ -10,7 +10,7 @@ use thiserror::Error;
 #[cfg(feature = "tokio-rt")]
 use tokio::runtime::Handle;
 use wgpu::CreateSurfaceError;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 use winit::error::{EventLoopError, OsError};
 
 #[derive(Clone, Debug)]
@@ -77,10 +77,10 @@ impl WindowOptions {
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     #[error("event loop error: {0}")]
     EventLoop(#[from] EventLoopError),
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     #[error("failed to create window: {0}")]
     Window(#[from] OsError),
     #[cfg(target_arch = "wasm32")]

@@ -1,14 +1,18 @@
-pub use winit::platform::android::activity::AndroidApp;
+pub use android_activity::AndroidApp;
+
+mod host;
+
+use host::Exit;
 
 use super::Platform;
-use super::native::{UserEvent, WinitPlatform, run};
 use crate::app::{App, AppError};
+use android_activity::ndk::configuration::UiModeNight;
 use jni::errors::Error as JniError;
 use jni::objects::{JObject, JString, JValue};
 use jni::refs::Global;
 use jni::sys::jobject;
 use jni::{Env, JavaVM, jni_sig, jni_str};
-use rouge_core::{Appearance, Clipboard, Menu, PasteRequest, Ui};
+use rouge_core::{Appearance, Clipboard, PasteRequest};
 use rouge_render::Edges;
 #[cfg(feature = "open-url")]
 use std::io::Error as IoError;
@@ -17,12 +21,6 @@ use std::path::PathBuf;
 use std::process::exit;
 use std::sync::OnceLock;
 use thiserror::Error;
-use winit::event::{ElementState, KeyEvent};
-use winit::event_loop::{EventLoop, EventLoopProxy};
-use winit::keyboard::{Key, NamedKey};
-use winit::platform::android::activity::ndk::configuration::UiModeNight;
-use winit::platform::android::{EventLoopBuilderExtAndroid, WindowExtAndroid};
-use winit::window::Window;
 
 type JniResult<T> = Result<T, JniError>;
 
@@ -55,7 +53,18 @@ impl Platform for Android {
         if app.windows.len() > 1 {
             return Err(Error::MultipleWindows(app.windows.len()).into());
         }
-        run(app, options)
+        let android = options.ok_or(Error::NoActivity)?;
+        let _ = APP.set(android.clone());
+        match host::run(app, android)? {
+            Exit::Destroyed => terminate(),
+            Exit::Quit => finish(),
+        }
+    }
+
+    #[cfg(feature = "persist")]
+    fn default_config_dir(name: &str) -> Option<PathBuf> {
+        let dir = APP.get()?.internal_data_path()?;
+        Some(dir.join(name.to_lowercase()))
     }
 
     #[cfg(feature = "open-url")]
@@ -86,79 +95,6 @@ impl Platform for Android {
         })
         .map_err(IoError::other)
     }
-}
-
-impl WinitPlatform for Android {
-    const SURFACE_LOST_ON_SUSPEND: bool = true;
-
-    fn new(_menus: &[Menu], _waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
-        Ok(Android)
-    }
-
-    fn clipboard() -> impl Clipboard + 'static {
-        AndroidClipboard
-    }
-
-    #[cfg(feature = "persist")]
-    fn default_config_dir(name: &str) -> Option<PathBuf> {
-        let dir = APP.get()?.internal_data_path()?;
-        Some(dir.join(name.to_lowercase()))
-    }
-
-    fn event_loop(options: Self::Options) -> Result<EventLoop<UserEvent>, AppError> {
-        let android = options.ok_or(Error::NoActivity)?;
-        let _ = APP.set(android.clone());
-        Ok(EventLoop::with_user_event().with_android_app(android).build()?)
-    }
-
-    fn safe_area(window: &Window) -> Edges {
-        let (content, size) = (window.content_rect(), window.outer_size());
-        if content.right <= content.left || content.bottom <= content.top {
-            return Edges::ZERO;
-        }
-        let scale = window.scale_factor() as f32;
-        let inset = |pixels: i32| (pixels as f32 / scale).max(0.0);
-        Edges {
-            top: inset(content.top),
-            right: inset(size.width.cast_signed() - content.right),
-            bottom: inset(size.height.cast_signed() - content.bottom),
-            left: inset(content.left),
-        }
-    }
-
-    fn appearance(_window: &Window) -> Appearance {
-        appearance()
-    }
-
-    fn refresh_millihertz(_window: &Window) -> Option<u32> {
-        refresh_rate().map(|hertz| (hertz * 1000.0) as u32)
-    }
-
-    fn key(event: &KeyEvent) -> Key {
-        if is_back(event) {
-            Key::Named(NamedKey::Escape)
-        } else {
-            event.logical_key.clone()
-        }
-    }
-
-    fn unhandled_key(event: &KeyEvent) {
-        if event.state == ElementState::Pressed && is_back(event) {
-            leave();
-        }
-    }
-
-    fn sync(_window: &Window, ui: &mut Ui) {
-        ui.set_appearance(appearance());
-    }
-
-    fn exit() {
-        finish();
-    }
-}
-
-fn is_back(event: &KeyEvent) -> bool {
-    event.logical_key == Key::Named(NamedKey::BrowserBack)
 }
 
 fn appearance() -> Appearance {
@@ -213,6 +149,23 @@ fn finish() -> ! {
             jni_str!("finishAndRemoveTask"),
             jni_sig!("()V"),
             &[],
+        )?
+        .v()
+    });
+    terminate()
+}
+
+fn terminate() -> ! {
+    let _ = java(|env, _| {
+        let process = jni_str!("android/os/Process");
+        let id = env
+            .call_static_method(process, jni_str!("myPid"), jni_sig!("()I"), &[])?
+            .i()?;
+        env.call_static_method(
+            process,
+            jni_str!("killProcess"),
+            jni_sig!("(I)V"),
+            &[JValue::from(id)],
         )?
         .v()
     });
@@ -302,6 +255,80 @@ fn clipboard_manager<'a>(env: &mut Env<'a>, activity: &JObject<'_>) -> JniResult
         &[JValue::from(&service)],
     )?
     .l()
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Insets {
+    safe: Edges,
+    keyboard: f32,
+}
+
+fn insets() -> Option<Insets> {
+    java(|env, activity| {
+        let window = env
+            .call_method(
+                activity,
+                jni_str!("getWindow"),
+                jni_sig!("()Landroid/view/Window;"),
+                &[],
+            )?
+            .l()?;
+        let view = env
+            .call_method(
+                &window,
+                jni_str!("getDecorView"),
+                jni_sig!("()Landroid/view/View;"),
+                &[],
+            )?
+            .l()?;
+        let root = env
+            .call_method(
+                &view,
+                jni_str!("getRootWindowInsets"),
+                jni_sig!("()Landroid/view/WindowInsets;"),
+                &[],
+            )?
+            .l()?;
+        if root.is_null() {
+            return Ok(None);
+        }
+        let mut mask = |name| {
+            env.call_static_method(
+                jni_str!("android/view/WindowInsets$Type"),
+                name,
+                jni_sig!("()I"),
+                &[],
+            )?
+            .i()
+        };
+        let safe = mask(jni_str!("systemBars"))? | mask(jni_str!("displayCutout"))?;
+        let keyboard = mask(jni_str!("ime"))?;
+        let mut edges = |mask: i32| -> JniResult<Edges> {
+            let insets = env
+                .call_method(
+                    &root,
+                    jni_str!("getInsets"),
+                    jni_sig!("(I)Landroid/graphics/Insets;"),
+                    &[JValue::from(mask)],
+                )?
+                .l()?;
+            let mut side = |name| -> JniResult<f32> {
+                Ok(env.get_field(&insets, name, jni_sig!("I"))?.i()? as f32)
+            };
+            Ok(Edges {
+                top: side(jni_str!("top"))?,
+                right: side(jni_str!("right"))?,
+                bottom: side(jni_str!("bottom"))?,
+                left: side(jni_str!("left"))?,
+            })
+        };
+        Ok(Some(Insets {
+            safe: edges(safe)?,
+            keyboard: edges(keyboard)?.bottom,
+        }))
+    })
+    .ok()
+    .flatten()
 }
 
 #[allow(unsafe_code)]
