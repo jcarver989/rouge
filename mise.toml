@@ -100,31 +100,32 @@ description = "Type-check the Android target (requires the Android NDK, cargo-nd
 run = [
     "cargo ndk -t arm64-v8a check --locked -p rouge --all-features",
     "cargo ndk -t arm64-v8a check --locked -p rouge --tests --all-features",
-    "cargo ndk -t arm64-v8a check --locked -p rouge --example android_todomvc",
+    "cargo ndk -t arm64-v8a check --locked -p rouge-mobile-smoke --lib",
+]
+
+[tasks."platform:android:generate"]
+usage = 'arg "[example]" default="mobile_smoke"'
+hide = true
+dir = "crates/rouge-framer/tests/fixtures/mobile"
+run = [
+    "mkdir -p .framer",
+    'cargo run --locked -p rouge-framer --example "$usage_example"',
 ]
 
 [tasks."platform:android:build"]
-description = "Package an example into an APK in target/android (requires the Android SDK and a JDK)"
-usage = '''
-arg "[example]" default="android_todomvc"
-arg "[package]" default="rouge"
-'''
-run = '''
-cargo ndk -t arm64-v8a build --locked -p "$usage_package" --example "$usage_example"
-scripts/android-apk "$usage_example" "dev.rouge.$(printf '%s' "$usage_example" | tr - _)"
-'''
+description = "Build the mobile smoke app into a verified Android App Bundle (run `cargo rouge setup android` once first)"
+usage = 'arg "[example]" default="mobile_smoke"'
+dir = "crates/rouge-framer/tests/fixtures/mobile"
+depends = [{ task = "platform:android:generate", args = ["{{ usage.example }}"] }]
+run = 'cargo run --locked -p rouge-framer --example "$usage_example" -- build android'
 
 [tasks."platform:android:run"]
+description = "Install and launch the mobile smoke app on a connected arm64 Android device or emulator"
 usage = 'arg "<example>"'
 hide = true
-raw = true
-depends = [{ task = "platform:android:build", args = ["{{ usage.example }}"] }]
-run = '''
-package_id="dev.rouge.$(printf '%s' "$usage_example" | tr - _)"
-adb install -r "target/android/$usage_example/$usage_example.apk"
-adb shell am start -n "$package_id/android.app.NativeActivity"
-adb logcat -v color RustStdoutStderr:V AndroidRuntime:E '*:S'
-'''
+dir = "crates/rouge-framer/tests/fixtures/mobile"
+depends = [{ task = "platform:android:generate", args = ["{{ usage.example }}"] }]
+run = 'ROUGE_ANDROID_LOGS=1 cargo run --locked -p rouge-framer --example "$usage_example" -- run android'
 
 [tasks."perf:bench"]
 description = "Measure headless GPU benchmarks; accepts scenario filters, --save, and --runs <n>"

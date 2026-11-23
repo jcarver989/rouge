@@ -4,7 +4,7 @@ set -euo pipefail
 # Columns: public ID, desktop/web/iOS/Android Cargo examples, optional desktop argument.
 catalog() {
     cat <<'CATALOG'
-todomvc  todomvc            todomvc            todomvc            android_todomvc
+todomvc  todomvc            todomvc            todomvc            -
 gallery  component_gallery  component_gallery  component_gallery  -
 counter  demo               -                  -                  -                counter
 glass    demo               -                  -                  -                glass
@@ -13,6 +13,7 @@ motion   demo               -                  -                  -             
 diff     demo               -                  -                  -                diff
 settings demo               -                  -                  -                settings
 surface  surface            -                  -                  -
+smoke    -                  -                  -                  mobile_smoke
 CATALOG
 }
 
@@ -71,7 +72,7 @@ run_example() {
                 xcrun --find simctl >/dev/null 2>&1 || fail 'The ios launcher requires full Xcode selected with xcode-select.'
                 ;;
             android)
-                require "$platform" cargo cargo-ndk adb
+                require "$platform" cargo cargo-ndk java
                 [[ -n ${ANDROID_HOME:-} ]] || fail 'Set ANDROID_HOME to the Android SDK. See README.md for setup.'
                 ;;
         esac
