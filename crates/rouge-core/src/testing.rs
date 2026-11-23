@@ -590,7 +590,12 @@ impl TestUi {
         Ok(handled)
     }
 
-    fn access_tree(&mut self) -> &AccessTree {
+    pub fn stop_accessibility(&mut self) {
+        self.access = None;
+        self.ui.stop_accessibility();
+    }
+
+    pub fn access_tree(&mut self) -> &AccessTree {
         let ui = &mut self.ui;
         match &mut self.access {
             Some(tree) => {
@@ -643,12 +648,13 @@ fn steps(from: Point, to: Point) -> impl Iterator<Item = Point> {
     })
 }
 
-const ACTIONS: [Action; 7] = [
+const ACTIONS: [Action; 8] = [
     Action::Click,
     Action::Focus,
     Action::Increment,
     Action::Decrement,
     Action::SetValue,
+    Action::SetTextSelection,
     Action::ReplaceSelectedText,
     Action::ScrollIntoView,
 ];

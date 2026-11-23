@@ -1,3 +1,5 @@
+pub(crate) mod access;
+
 use parley::fontique::{Blob, GenericFamily};
 use parley::{
     Affinity, Alignment, AlignmentOptions, BoundingBox, Cluster, Cursor, FontContext, FontData,

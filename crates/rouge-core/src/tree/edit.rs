@@ -22,6 +22,7 @@ pub(crate) enum EditOp {
     Insert(String),
     Erase(Movement),
     Move(Movement, bool),
+    SetSelection(TextSelection),
     SelectAll,
     Select(Range<usize>),
     Undo,
@@ -249,6 +250,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
         EditOp::Move(movement, extend) => {
             selection = current.move_selection(selection, movement, extend);
         }
+        EditOp::SetSelection(next) => selection = next,
         EditOp::SelectAll => selection = current.select(0, content.len()),
         EditOp::Press {
             local,
@@ -464,11 +466,15 @@ impl Tree {
             Rc::make_mut(&mut self.clipboard_target);
         }
         let before = text.content.clone();
+        let previous = text.edit.as_ref().map(|edit| (edit.selection, edit.scroll));
         apply(text, op, system, &mut *self.clipboard);
+        let moved = previous != text.edit.as_ref().map(|edit| (edit.selection, edit.scroll));
         let changed = (text.content != before).then(|| text.content.clone());
         let on_change = text.edit.as_ref().and_then(|edit| edit.on_change.clone());
         if changed.is_some() {
             self.invalidate_layout(id);
+        }
+        if changed.is_some() || moved {
             self.mark_access(id);
         }
         self.mark_element(

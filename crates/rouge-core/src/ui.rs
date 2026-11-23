@@ -1,4 +1,4 @@
-use crate::access::{Action, ActionData, ActionRequest, Decrement, Increment, TreeUpdate};
+use crate::access::{Action, ActionData, ActionRequest, Decrement, Increment, TreeId, TreeUpdate};
 use crate::clipboard::Clipboard;
 use crate::compositor::{Commit, CompositorEvent, LayerId};
 use crate::event::{
@@ -639,6 +639,9 @@ impl Ui {
     }
 
     pub fn accessibility_action(&mut self, request: ActionRequest) -> bool {
+        if request.target_tree != TreeId::ROOT {
+            return false;
+        }
         self.flush();
         let Some((id, path)) = self.tree.access_target(request.target_node) else {
             return false;
@@ -661,6 +664,15 @@ impl Ui {
             }
             (Action::Increment, _) => self.invoke_on(&path, &Increment),
             (Action::Decrement, _) => self.invoke_on(&path, &Decrement),
+            (Action::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
+                let Some(selection) =
+                    self.tree
+                        .resolve_selection(id, request.target_node, selection)
+                else {
+                    return false;
+                };
+                self.edit(id, [EditOp::SetSelection(selection)])
+            }
             (Action::SetValue, Some(ActionData::Value(value))) => {
                 self.edit(id, [EditOp::SelectAll, EditOp::Insert(value.into())])
             }

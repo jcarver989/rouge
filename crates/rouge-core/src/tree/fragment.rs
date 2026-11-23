@@ -270,6 +270,9 @@ impl Tree {
             };
             let mut stack = vec![top];
             while let Some(element) = stack.pop().and_then(|id| {
+                if let Some(access) = &mut self.access {
+                    access.editors.remove(&id);
+                }
                 self.layouts.remove(id);
                 self.elements.remove(id)
             }) {

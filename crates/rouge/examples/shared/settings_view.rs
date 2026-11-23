@@ -42,12 +42,12 @@ fn general(name: Signal<String>, notes: Signal<String>, saved: Signal<u32>) -> i
         <div flex col gap=12.0 p=16.0>
             <section title="PROFILE">
                 <row label="Display name">
-                    <text_input value=name placeholder="Your name" w=220.0/>
+                    <text_input value=name access_label="Display name" placeholder="Your name" w=220.0/>
                 </row>
                 <row label="Language">
                     <select value=language options w=220.0/>
                 </row>
-                <text_input multiline value=notes placeholder="Notes" w_full/>
+                <text_input multiline value=notes access_label="Notes" placeholder="Notes" w_full/>
                 <text color=Role::TextMuted text_size=12.0>"Saved {saved} times (⌘S)"</text>
             </section>
             <section title="NOTIFICATIONS">

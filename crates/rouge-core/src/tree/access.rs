@@ -1,10 +1,11 @@
 use super::events::On;
 use super::layers::Slot;
-use super::{Element, ElementId, Interaction, Kind, Tree};
+use super::{Element, ElementId, Interaction, Kind, TextData, Tree};
 use crate::access::{AccessOp, Decrement, Increment, Semantics};
+use crate::text::{TextSelection, access::TextRuns};
 use accesskit::{
-    Action, Affine as NodeTransform, Node, NodeId, Rect as NodeRect, Role, TreeId, TreeInfo,
-    TreeUpdate,
+    Action, Affine as NodeTransform, Node, NodeId, Rect as NodeRect, Role,
+    TextSelection as AccessSelection, TreeId, TreeInfo, TreeUpdate,
 };
 use rouge_render::{Affine, Point, Rect};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -20,8 +21,19 @@ type Poses = [Option<Affine>; 2];
 pub(super) struct Access {
     pub(super) dirty: Vec<ElementId>,
     poses: FxHashMap<ElementId, Poses>,
+    pub(super) editors: FxHashMap<ElementId, TextRuns>,
     focus: Option<NodeId>,
     scale: f32,
+}
+
+impl Access {
+    pub(super) fn text_moved(&self, id: ElementId, text: &TextData, origin: Point) -> bool {
+        let stale = |layout| {
+            let runs = self.editors.get(&id);
+            runs.is_none_or(|runs| !runs.matches(layout, origin + text.offset()))
+        };
+        text.edit.is_some() && text.layout.as_ref().is_some_and(stale)
+    }
 }
 
 fn node_id(id: ElementId) -> NodeId {
@@ -215,6 +227,7 @@ impl Tree {
         }
         for id in access.dirty.drain(..) {
             let Some(path) = self.visible_access_path(id) else {
+                access.editors.remove(&id);
                 continue;
             };
             let ancestors = path.iter().rev().copied();
@@ -287,7 +300,25 @@ impl Tree {
     pub(crate) fn access_target(&self, node: NodeId) -> Option<(ElementId, Vec<ElementId>)> {
         let id = ElementId::from(KeyData::from_ffi(node.0 & !CONTENT));
         let path = self.visible_access_path(id)?;
-        self.is_access_node(id).then_some((id, path))
+        (self.is_access_node(id) && (node == node_id(id) || node == content_id(id)))
+            .then_some((id, path))
+    }
+
+    pub(crate) fn resolve_selection(
+        &self,
+        id: ElementId,
+        target: NodeId,
+        selection: AccessSelection,
+    ) -> Option<TextSelection> {
+        if target != node_id(id) || !self.accepts_value(id) {
+            return None;
+        }
+        let layout = self.elements[id].kind.text()?.layout.as_ref()?;
+        self.access
+            .as_ref()?
+            .editors
+            .get(&id)?
+            .resolve(layout, selection)
     }
 
     pub(crate) fn accepts_value(&self, id: ElementId) -> bool {
@@ -391,6 +422,21 @@ impl Tree {
                 inner.set_children(children);
                 nodes.push((content_id(id), inner));
                 children = vec![content_id(id)];
+            }
+        }
+        let element = &self.elements[id];
+        if let Some(text) = element.kind.text()
+            && let (Some(edit), Some(layout)) = (&text.edit, &text.layout)
+        {
+            let origin = element.bounds.origin + text.offset();
+            let runs = access.editors.entry(id).or_default();
+            runs.publish(layout, &text.content, origin, nodes);
+            children.extend(runs.children());
+            if let Some(selection) = runs.selection(edit.current(layout, &text.content)) {
+                node.set_text_selection(selection);
+                if !self.is_disabled(id) {
+                    node.add_action(Action::SetTextSelection);
+                }
             }
         }
         node.set_children(children);

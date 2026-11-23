@@ -166,7 +166,8 @@ impl Tree {
         };
         let bounds = Rect { origin, size };
         if let Some(access) = &mut self.access
-            && element.bounds != bounds
+            && (element.bounds != bounds
+                || (element.kind.text()).is_some_and(|text| access.text_moved(id, text, origin)))
         {
             access.dirty.push(id);
         }
