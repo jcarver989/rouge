@@ -1,5 +1,6 @@
 use crate::tokens::Space;
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::view;
 use rouge_core::{
     Div, IntoProp, PointerButton, PointerEvent, ResizeEdge, Styled, View, WindowHandle, component,
@@ -12,9 +13,10 @@ where
     T: View,
 {
     let window = window_handle();
-    let button = move |id: &str, label: &str, click: fn(WindowHandle)| {
+    let button = move |id: &str, name: &str, label: &str, click: fn(WindowHandle)| {
         view! {
-            <div test_id=id w=40.0 h_full flex items_center justify_center hover:bg=Role::SurfaceHover
+            <div test_id=id role=access::Role::Button access_label={name.to_owned()}
+                 w=40.0 h_full flex items_center justify_center hover:bg=Role::SurfaceHover
                  on_pointer_down=PointerEvent::stop_propagation on_click={move |_| click(window)}>
                 <text>{label}</text>
             </div>
@@ -31,9 +33,9 @@ where
             <div flex_1 px=Space::X3>
                 <text>{title}</text>
             </div>
-            {button("window-minimize", "−", WindowHandle::minimize)}
-            {button("window-zoom", "□", WindowHandle::zoom)}
-            {button("window-close", "×", WindowHandle::close)}
+            {button("window-minimize", "Minimize", "−", WindowHandle::minimize)}
+            {button("window-zoom", "Zoom", "□", WindowHandle::zoom)}
+            {button("window-close", "Close", "×", WindowHandle::close)}
         </div>
     };
     let mut chrome = view! {

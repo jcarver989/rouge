@@ -3,6 +3,7 @@ use crate::popover::dismiss_layer;
 use crate::snap::dragged;
 use crate::tokens::{Pace, Radius};
 use crate::util::{TestId, focus_ring};
+use rouge_core::access;
 use rouge_core::view;
 use rouge_core::{
     AnyView, BuildCx, Color, Cursor, DragAxis, Key, MotionProp, PointerEvent, Role, Size, Styled,
@@ -207,7 +208,8 @@ impl Presenter {
                         };
                         let grabber = focus_ring(
                             view! {
-                                <div flex flex_none items_center justify_center h=HANDLE border=1.0
+                                <div role=access::Role::Splitter access_label="Sheet height"
+                                     flex flex_none items_center justify_center h=HANDLE border=1.0
                                      border_color=Color::TRANSPARENT rounded=Radius::Floating cursor=Cursor::Grab focusable
                                      on_key_down={move |event| {
                                          match event.key {

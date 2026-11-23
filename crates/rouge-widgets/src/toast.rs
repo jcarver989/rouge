@@ -7,6 +7,7 @@ use crate::snap::PROJECTION;
 use crate::tokens::{ICON_SIZE_SMALL, Pace, Radius, Space, TINT_ALPHA};
 use crate::typography::UiStyles;
 use crate::util::{by_touch, is_touch, tone_icon};
+use rouge_core::access::{self, Live};
 use rouge_core::{
     BuildCx, Div, DragPhase, Size, Styled, Theme, Timing, View, div, dynamic, each, motion,
     overlay, pct, presentation, safe_area, text, view,
@@ -312,7 +313,8 @@ fn card(toasts: Toasts, entry: &Entry, limit: usize, fanned: Signal<bool>) -> Di
     };
     let (x, y) = (motion(0.0), motion(0.0));
     let panel = view! {
-        <div flex items_center gap=Space::X2 p=Space::X3 material=Material::Glass translate_x=x translate_y=y>
+        <div role=access::Role::Status live=Live::Polite access_label={toast.message.clone()}
+             flex items_center gap=Space::X2 p=Space::X3 material=Material::Glass translate_x=x translate_y=y>
             <div flex flex_none items_center justify_center size=24.0 rounded=Radius::Full
                  bg={move || theme.resolve(ink()).with_alpha(TINT_ALPHA)}>
                 {Icon::new(tone_icon(tone), ink).size(ICON_SIZE_SMALL)}

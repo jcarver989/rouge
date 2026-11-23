@@ -1,6 +1,7 @@
 use crate::tokens::{ROW_HEIGHT, Radius, TINT_ALPHA};
 use crate::typography::UiStyles;
 use crate::util::{TestId, chrome};
+use rouge_core::access;
 use rouge_core::{
     BuildCx, Color, DelegateStyle, Div, Fit, ImageSource, IntoProp, Prop, Role, StyleDelta, Styled,
     Theme, View, component, div, image, text, view,
@@ -49,11 +50,12 @@ impl View for Avatar {
                 <image source=source fit=Fit::Cover size_full rounded=Radius::Full/>
             }
             .into_any(),
-            None => view! { <text caption weight=600.0 no_wrap>{initials(&self.name)}</text> }
+            None => view! { <text caption weight=600.0 no_wrap access_hidden=true>{initials(&self.name)}</text> }
                 .into_any(),
         };
         let root = view! {
-            <disc size=self.size ringed=self.ringed text_color=Role::Accent
+            <disc size=self.size ringed=self.ringed role=access::Role::Image
+                 access_label={self.name.clone()} text_color=Role::Accent
                  bg={move || {
                      theme
                          .get()

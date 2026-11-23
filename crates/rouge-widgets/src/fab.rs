@@ -97,7 +97,8 @@ impl View for Fab {
                 .cloned()
                 .map(|action| row(action, open))
                 .collect();
-            let close = disc(IconName::X, id.part("close"), move || open.set(false));
+            let close =
+                disc(IconName::X, id.part("close"), move || open.set(false)).access_label("Close");
             let stack = view! {
                 <div test_id?=id.part("dial") absolute flex col items_end gap=Space::X3 focus_scope autofocus
                      right={move || window.get().width - at.get().max().x}
@@ -111,7 +112,7 @@ impl View for Fab {
         let dial = dials.then(|| floating(move || open.get(), FADED, dial));
         let root = view! {
             <div absolute right=Space::X4 bottom={move || clearance() + Space::X4.px()}>
-                {button.tooltip(self.label)}
+                {button.access_label(self.label.clone()).tooltip(self.label)}
                 {dial}
             </div>
         };

@@ -4,6 +4,7 @@ use crate::popover::{FADED, floating};
 use crate::tokens::Space;
 use crate::typography::UiStyles;
 use crate::util::TestId;
+use rouge_core::access;
 use rouge_core::{
     Apply, BackdropBlur, BuildCx, Key, PointerEvent, Role, Styled, View, component, div, pct, text,
     view,
@@ -92,7 +93,8 @@ impl View for Alert {
                 .into_iter()
                 .map(|button| view! { <div flex col flex_none min_w=0.0 when:flex_1={!stacked}>{button}</div> });
             let panel = view! {
-                <div test_id?={id.clone()} flex col gap=Space::X1 p=Space::X4 w=WIDTH max_w=pct(100.0)
+                <div test_id?={id.clone()} role=access::Role::AlertDialog access_label={title.clone()}
+                     flex col gap=Space::X1 p=Space::X4 w=WIDTH max_w=pct(100.0)
                      material=Material::Glass>
                     <text heading primary>{title.clone()}</text>
                     {message.clone().map(|message| view! { <muted_text>{message}</muted_text> })}
