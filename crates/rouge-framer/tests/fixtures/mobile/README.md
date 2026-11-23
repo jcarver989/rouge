@@ -1,5 +1,7 @@
 # Mobile Framer smoke app
 
+A form with a labelled email field, a multiline notes field, two buttons, a sheet and a keyed list. It is the fixture for soft-keyboard, screen-reader and lifecycle checks on both mobile hosts.
+
 Run from this directory on a configured host. The first command generates the `ios/` and `android/` projects, which are ignored here:
 
 ```sh
