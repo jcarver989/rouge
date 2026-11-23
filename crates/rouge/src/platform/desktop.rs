@@ -1,6 +1,6 @@
 use super::Platform;
 use super::native::clipboard::DesktopClipboard;
-use super::native::{UserEvent, WinitPlatform, run};
+use super::native::{UserEvent, WinitInput, WinitPlatform, run};
 use crate::app::{App, AppError};
 use image::imageops::FilterType;
 use image::{ImageFormat, load_from_memory_with_format};
@@ -31,17 +31,28 @@ impl Platform for Desktop {
 
     const WINDOW_MENU: bool = true;
 
-    fn run(app: App, options: Self::Options) -> Result<(), AppError> {
-        run(app, options)
+    fn run(app: App, _options: Self::Options) -> Result<(), AppError> {
+        run(app)
     }
 
     #[cfg(feature = "open-url")]
     fn open_url(url: &str) -> Result<(), IoError> {
         open::that(url)
     }
+
+    #[cfg(feature = "persist")]
+    fn default_config_dir(name: &str) -> Option<PathBuf> {
+        if cfg!(target_os = "windows") {
+            var_os("APPDATA").map(|root| PathBuf::from(root).join(name))
+        } else {
+            home_dir().map(|home| home.join(".config").join(name.to_lowercase()))
+        }
+    }
 }
 
 impl WinitPlatform for Desktop {
+    type Input = WinitInput;
+
     fn new(_menus: &[Menu], _waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         Ok(Desktop)
     }
@@ -57,15 +68,6 @@ impl WinitPlatform for Desktop {
         let image = image.resize(128, 128, FilterType::Lanczos3).into_rgba8();
         let (width, height) = image.dimensions();
         Icon::from_rgba(image.into_raw(), width, height).ok()
-    }
-
-    #[cfg(feature = "persist")]
-    fn default_config_dir(name: &str) -> Option<PathBuf> {
-        if cfg!(target_os = "windows") {
-            var_os("APPDATA").map(|root| PathBuf::from(root).join(name))
-        } else {
-            home_dir().map(|home| home.join(".config").join(name.to_lowercase()))
-        }
     }
 
     fn key(event: &KeyEvent) -> Key {

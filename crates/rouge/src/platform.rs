@@ -4,21 +4,19 @@ cfg_select! {
         pub(crate) use web::Web as Current;
         pub use web::Error;
     }
+    target_os = "android" => {
+        mod android;
+        pub(crate) use android::Android as Current;
+        pub use android::{AndroidApp, Error};
+    }
     _ => {
         mod native;
         #[doc(hidden)]
         pub use native::{
-            PrimaryTouch, Wheel, WheelGesture, appearance, cursor_icon, logical_point, logical_size,
-            modifiers, named_key, pointer_button, scroll_delta,
+            Wheel, WheelGesture, appearance, cursor_icon, logical_point, logical_size, modifiers,
+            named_key, pointer_button, scroll_delta, touch_phase,
         };
-        #[cfg(feature = "persist")]
-        pub(crate) use native::WinitPlatform;
         cfg_select! {
-            target_os = "android" => {
-                mod android;
-                pub(crate) use android::Android as Current;
-                pub use android::{AndroidApp, Error};
-            }
             target_os = "ios" => {
                 mod ios;
                 pub(crate) use ios::Ios as Current;
@@ -38,12 +36,25 @@ cfg_select! {
     }
 }
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod editing;
+#[cfg(not(target_arch = "wasm32"))]
+mod touch;
+
 use crate::app::{App, AppError, RootFn};
 use rouge_core::{AnyView, Cursor, Menu, Styled, View, div, safe_area, window_handle};
 use rouge_widgets::{menu_bar, window_chrome};
+#[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
+use std::env::var_os;
 #[cfg(feature = "open-url")]
 use std::io::Error as IoError;
+#[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub use touch::PrimaryTouch;
 
+#[cfg(not(target_os = "android"))]
 pub(crate) const LINE_SCROLL: f32 = 40.0;
 
 pub(crate) type Options = <Current as Platform>::Options;
@@ -67,6 +78,18 @@ pub(crate) trait Platform {
 
     #[cfg(feature = "open-url")]
     fn open_url(url: &str) -> Result<(), IoError>;
+
+    #[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
+    fn default_config_dir(name: &str) -> Option<PathBuf>;
+
+    #[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
+    fn config_dir(name: &str) -> Option<PathBuf> {
+        var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| dir.join(name.to_lowercase()))
+            .or_else(|| Self::default_config_dir(name))
+    }
 }
 
 pub(crate) fn log(message: &str) {

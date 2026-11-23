@@ -1,30 +1,19 @@
 use crate::AppError;
 use crate::platform::warn;
 use crate::profile::{Profile, ProfileSettings};
+use rouge_core::access::TreeUpdate;
 use rouge_core::{
-    AnyView, Appearance, Clipboard, CompositorActor, CompositorEvent, Cursor, InputKind, Mailbox,
-    Menu, Message, Ui, Wake, WindowCommand, WindowConfig, WindowId,
+    AnyView, Appearance, Clipboard, CompositorActor, CompositorEvent, InputKind, Mailbox, Menu,
+    Message, Ui, Wake, WindowCommand, WindowConfig, WindowId,
 };
-use rouge_render::{Affine, Gpu, Point, Rect, Size, Surfaces, Target};
+use rouge_render::{Gpu, Point, Size, Surfaces, Target};
 use std::borrow::Cow;
 use std::sync::mpsc::Sender;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_os = "android")]
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 use web_time::Instant;
 use wgpu::{Instance, PresentMode, Surface, SurfaceConfiguration, SurfaceTarget, TextureFormat};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum TextInput {
-    Off,
-    On { area: Option<Rect> },
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct Changes {
-    pub(crate) cursor: Option<Cursor>,
-    pub(crate) text_input: Option<TextInput>,
-}
 
 pub(crate) async fn connect(
     shared: &mut Option<(Instance, Gpu)>,
@@ -105,12 +94,8 @@ pub(crate) struct Driver {
     exit_after_frames: Option<u64>,
     finished: bool,
     profile: Option<Profile>,
-    cursor: Option<Cursor>,
-    text_input: Option<TextInput>,
-    #[cfg(not(target_arch = "wasm32"))]
-    present_mode: Option<PresentMode>,
-    #[cfg(not(target_arch = "wasm32"))]
-    format: TextureFormat,
+    #[cfg(target_os = "android")]
+    swapchain: (Option<PresentMode>, TextureFormat),
 }
 
 impl Driver {
@@ -175,33 +160,10 @@ impl Driver {
             exit_after_frames,
             finished: false,
             profile,
-            cursor: None,
-            text_input: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            present_mode,
-            #[cfg(not(target_arch = "wasm32"))]
-            format: config.format,
+            #[cfg(target_os = "android")]
+            swapchain: (present_mode, config.format),
         };
         Ok((driver, Target::swapchain(gpu, surface, config)))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn detach(&self) -> Receiver<()> {
-        let (reply, detached) = channel();
-        self.send(Message::Detach(self.window, reply));
-        detached
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn target(&self, gpu: &Gpu, surface: Surface<'static>) -> Result<Target, AppError> {
-        let pixels = (self.config.width, self.config.height);
-        let config = swapchain(gpu, &surface, pixels, self.present_mode, Some(self.format))?;
-        Ok(Target::swapchain(gpu, surface, config))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reattach(&self, target: Target) {
-        self.send(Message::Attach(self.window, target));
     }
 
     pub(crate) fn attach(&self, target: Target) {
@@ -225,12 +187,12 @@ impl Driver {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     pub(crate) fn interval(&self) -> Duration {
         self.config.interval
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     pub(crate) fn window(&self) -> WindowId {
         self.window
     }
@@ -268,10 +230,20 @@ impl Driver {
         }
     }
 
-    pub(crate) fn step(&mut self) {
-        if !self.token {
-            return;
+    pub(crate) fn step(&mut self) -> Option<TreeUpdate> {
+        if self.token {
+            self.advance();
         }
+        self.ui.accessibility_update()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn refresh(&mut self) -> Option<TreeUpdate> {
+        self.ui.update();
+        self.ui.accessibility_update()
+    }
+
+    fn advance(&mut self) {
         if let Some(profile) = &mut self.profile {
             let (WindowConfig { width, height, .. }, scale) = (self.config, self.ui.scale());
             let center = Point::new(width as f32 / scale / 2.0, height as f32 / scale / 2.0);
@@ -328,30 +300,25 @@ impl Driver {
             }
         }
     }
+}
 
-    pub(crate) fn changes(&mut self) -> Changes {
-        let mut changes = Changes::default();
-        let cursor = self.ui.cursor();
-        if self.cursor != Some(cursor) {
-            self.cursor = Some(cursor);
-            changes.cursor = Some(cursor);
-        }
-        let text_input = if self.ui.accepts_text() {
-            let scale = self.ui.scale();
-            TextInput::On {
-                area: self
-                    .ui
-                    .text_cursor_area()
-                    .map(|area| Affine::scale(scale, scale).apply_rect(&area)),
-            }
-        } else {
-            TextInput::Off
-        };
-        if self.text_input != Some(text_input) {
-            self.text_input = Some(text_input);
-            changes.text_input = Some(text_input);
-        }
-        changes
+#[cfg(target_os = "android")]
+impl Driver {
+    pub(crate) fn detach(&self) -> Receiver<()> {
+        let (reply, detached) = channel();
+        self.send(Message::Detach(self.window, reply));
+        detached
+    }
+
+    pub(crate) fn target(&self, gpu: &Gpu, surface: Surface<'static>) -> Result<Target, AppError> {
+        let (pixels, (present_mode, format)) =
+            ((self.config.width, self.config.height), self.swapchain);
+        let config = swapchain(gpu, &surface, pixels, present_mode, Some(format))?;
+        Ok(Target::swapchain(gpu, surface, config))
+    }
+
+    pub(crate) fn reattach(&self, target: Target) {
+        self.send(Message::Attach(self.window, target));
     }
 }
 

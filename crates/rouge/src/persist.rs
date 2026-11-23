@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 #[cfg(not(target_arch = "wasm32"))]
 use {
-    crate::platform::{Current, WinitPlatform},
+    crate::platform::{Current, Platform},
     rouge_reactive::spawn_blocking,
     std::fs::{create_dir_all, read_to_string, rename, write as write_file},
     std::io::Result as IoResult,

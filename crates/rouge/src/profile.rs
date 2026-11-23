@@ -2,9 +2,15 @@ use crate::platform::{log, warn};
 use rouge_core::{FrameStats, Ui};
 use rouge_render::Point;
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::level_filters::LevelFilter;
 use tracing::subscriber::set_global_default;
 use tracing::trace;
+#[cfg(not(target_arch = "wasm32"))]
+use tracing_chrome::{ChromeLayerBuilder, FlushGuard};
 use tracing_subscriber::Registry;
+#[cfg(not(target_arch = "wasm32"))]
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use web_time::Instant;
 use wgpu::PresentMode;
@@ -178,4 +184,22 @@ fn parse_bench(spec: &str) -> Result<Bench, String> {
             "a bench must look like `scroll:<px per frame>:<frames>`, not `{spec}`"
         )),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn trace(settings: &ProfileSettings) -> Option<FlushGuard> {
+    let path = settings.trace.as_deref().filter(|path| !path.is_empty())?;
+    let (layer, guard) = ChromeLayerBuilder::new()
+        .file(path)
+        .include_args(true)
+        .build();
+    let layer = layer.with_filter(
+        Targets::new()
+            .with_target("winit", LevelFilter::OFF)
+            .with_default(LevelFilter::TRACE),
+    );
+    subscribe(layer).then(|| {
+        eprintln!("rouge profile: tracing to {path}");
+        guard
+    })
 }

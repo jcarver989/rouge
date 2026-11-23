@@ -1,46 +1,46 @@
 use super::{
-    PrimaryTouch, UserEvent, Wheel, WheelGesture, WinitPlatform, appearance, cursor_icon,
-    logical_point, modifiers, named_key, pointer_button, window_command,
+    Input, UserEvent, Wheel, WheelGesture, WinitPlatform, appearance, cursor_icon, logical_point,
+    modifiers, named_key, pointer_button, touch_phase, window_command,
 };
 use crate::app::{App, AppError, RootFn, WindowOptions};
-use crate::driver::{Driver, Inline, Setup, TextInput, connect};
-use crate::platform::{Current, Options, Platform, default_menus, window_root};
-use crate::profile::{ProfileSettings, subscribe};
+use crate::changes::Tracked;
+use crate::compositing::Compositing;
+use crate::driver::{Driver, Setup, connect};
+use crate::platform::{Current, Platform, PrimaryTouch, default_menus, window_root};
+use crate::profile::{ProfileSettings, trace};
 use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
 use pollster::block_on;
+use rouge_core::access::TreeUpdate;
 use rouge_core::{
-    CompositorEvent, Decorations, Events, FileDropPhase, ImeEvent, InputKind, Key, KeyEvent, Menu,
-    Message, Modifiers, ThreadError, WindowCommand, WindowId as LinkWindow, mailbox, spawn,
+    CompositorEvent, Decorations, FileDropPhase, ImeEvent, InputKind, Key, KeyEvent, Menu,
+    Modifiers, WindowCommand, WindowId as LinkWindow,
 };
 use rouge_reactive::Runtime;
 #[cfg(feature = "tokio-rt")]
 use rouge_reactive::set_tokio;
 use rouge_render::{Gpu, Point, Target};
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::env::var;
 use std::mem::take;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tracing::level_filters::LevelFilter;
 use tracing::trace_span;
-use tracing_chrome::{ChromeLayerBuilder, FlushGuard};
-use tracing_subscriber::filter::Targets;
-use tracing_subscriber::layer::Layer;
+use tracing_chrome::FlushGuard;
 use wgpu::{Instance, InstanceDescriptor};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{
     ElementState, Ime, KeyEvent as WinitKeyEvent, MouseScrollDelta, TouchPhase, WindowEvent,
 };
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, SmolStr};
 use winit::window::{Icon, Window, WindowId};
 
-pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
+pub(crate) fn run(app: App) -> Result<(), AppError> {
     let bar = !app.menus.is_empty();
-    let event_loop = Current::event_loop(options)?;
+    let event_loop = EventLoop::with_user_event().build()?;
     let menus = default_menus(app.menus);
     let waker = event_loop.create_proxy();
     let platform = Current::new(&menus, &waker)?;
@@ -78,11 +78,7 @@ pub(crate) fn run(app: App, options: Options) -> Result<(), AppError> {
     let closed = runner.compositor.take().map_or(Ok(()), Compositing::close);
     runner.windows.clear();
     runner.closing.clear();
-    let result = runner.error.map_or(closed, Err);
-    if result.is_ok() {
-        Current::exit();
-    }
-    result
+    runner.error.map_or(closed, Err)
 }
 
 struct Runner {
@@ -137,9 +133,13 @@ impl Runner {
             ))
         };
         let (gpu, surface) = block_on(connect(&mut self.gpu, instance, window.clone()))?;
+        let waker = self.waker.clone();
+        let wake = move || {
+            let _ = waker.send_event(None);
+        };
         let compositor = match &self.compositor {
             Some(compositor) => compositor,
-            None => (self.compositor).insert(Compositing::open(&gpu, self.waker.clone())?),
+            None => (self.compositor).insert(Compositing::open(&gpu, wake)?),
         };
         let physical = Current::surface_size(&window);
         let chrome = !Current::MOBILE
@@ -176,10 +176,14 @@ impl Runner {
             Current::clipboard(),
             move || window_root(title, bar, chrome, root),
         )?;
-        driver.attach(compositor.target(target, &window));
+        driver.attach(present_target(compositor, target, &window));
+        let driver = Rc::new(RefCell::new(driver));
+        let input = <Current as WinitPlatform>::Input::attach(&window, &driver, &self.waker);
         self.windows.push(WindowState {
             window,
             driver,
+            tracked: Tracked::default(),
+            input,
             access,
             occluded: false,
             wheel: Wheel::default(),
@@ -188,25 +192,6 @@ impl Runner {
         });
         if let Some(state) = self.windows.last_mut() {
             state.sync_environment();
-        }
-        Ok(())
-    }
-
-    fn reattach(&mut self) -> Result<(), AppError> {
-        let (Some((instance, gpu)), Some(compositor)) = (&self.gpu, &self.compositor) else {
-            return Ok(());
-        };
-        for state in &mut self.windows {
-            let surface = instance.create_surface(state.window.clone())?;
-            state.resize(
-                Current::surface_size(&state.window),
-                state.window.scale_factor(),
-            );
-            let target = state.driver.target(gpu, surface)?;
-            (state.driver).reattach(compositor.target(target, &state.window));
-            state.occluded = false;
-            state.driver.ui().set_visible(true);
-            state.window.request_redraw();
         }
         Ok(())
     }
@@ -222,7 +207,7 @@ impl Runner {
         };
         compositor.turn();
         let deadline = Instant::now() + timeout;
-        while let Host::Thread(_) = compositor.host
+        while compositor.threaded()
             && let Some(left) = deadline.checked_duration_since(Instant::now())
             && let Ok(event) = compositor.events.recv_timeout(left)
         {
@@ -244,7 +229,7 @@ impl Runner {
                 return true;
             }
             let mut open = true;
-            state.driver.commands(commands);
+            state.driver.borrow_mut().commands(commands);
             for command in commands.drain(..) {
                 match command {
                     WindowCommand::Close => open = false,
@@ -266,13 +251,6 @@ impl Runner {
 
 impl ApplicationHandler<UserEvent> for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if Current::SURFACE_LOST_ON_SUSPEND
-            && let Err(error) = self.reattach()
-        {
-            self.error = Some(error);
-            event_loop.exit();
-            return;
-        }
         if let Some(png) = self.pending_icon.take() {
             self.window_icon = Current::app_icon(&png);
         }
@@ -285,24 +263,9 @@ impl ApplicationHandler<UserEvent> for Runner {
         }
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if !Current::SURFACE_LOST_ON_SUSPEND {
-            return;
-        }
-        let Some(compositor) = &mut self.compositor else {
-            return;
-        };
-        for state in &mut self.windows {
-            state.occluded = true;
-            state.driver.ui().set_visible(false);
-            let detached = state.driver.detach();
-            compositor.turn();
-            let _ = detached.recv();
-        }
-    }
-
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.windows.retain(|state| !state.driver.finished());
+        self.windows
+            .retain(|state| !state.driver.borrow().finished());
         for state in &mut self.windows {
             state.sync_environment();
         }
@@ -310,7 +273,8 @@ impl ApplicationHandler<UserEvent> for Runner {
         self.pump();
         let now = Instant::now();
         for state in self.windows.iter_mut().filter(|state| !state.occluded) {
-            match state.driver.frame_due(now) {
+            let due = state.driver.borrow_mut().frame_due(now);
+            match due {
                 Some(due) if due <= now => state.window.request_redraw(),
                 Some(due) => deadline = Some(deadline.map_or(due, |at| at.min(due))),
                 None => {}
@@ -329,12 +293,16 @@ impl ApplicationHandler<UserEvent> for Runner {
         {
             state.assist(event.window_event);
         }
-        let ui = self
+        let mut driver = self
             .windows
-            .iter_mut()
+            .iter()
             .find(|state| state.window.has_focus())
-            .map(|state| state.driver.ui());
-        if self.platform.menu_events(ui) {
+            .map(|state| state.driver.borrow_mut());
+        let quit = self
+            .platform
+            .menu_events(driver.as_mut().map(|driver| driver.ui()));
+        drop(driver);
+        if quit {
             self.windows.clear();
         }
         self.process_window_commands(event_loop, None);
@@ -359,7 +327,7 @@ impl ApplicationHandler<UserEvent> for Runner {
                 if !state.occluded {
                     state.step();
                 }
-                if state.driver.finished() {
+                if state.driver.borrow().finished() {
                     self.windows.clear();
                 }
             }
@@ -370,7 +338,10 @@ impl ApplicationHandler<UserEvent> for Runner {
                 );
                 state.event(event);
                 if resized && !state.occluded {
-                    let (window, timeout) = (state.driver.window(), state.driver.interval() * 2);
+                    let (window, timeout) = {
+                        let driver = state.driver.borrow();
+                        (driver.window(), driver.interval() * 2)
+                    };
                     self.settle(window, timeout);
                 }
             }
@@ -388,7 +359,9 @@ impl ApplicationHandler<UserEvent> for Runner {
 
 struct WindowState {
     window: Arc<Window>,
-    driver: Driver,
+    driver: Rc<RefCell<Driver>>,
+    tracked: Tracked,
+    input: <Current as WinitPlatform>::Input,
     access: Adapter,
     occluded: bool,
     wheel: Wheel,
@@ -398,12 +371,32 @@ struct WindowState {
 
 impl WindowState {
     fn close(&self, closing: &mut Vec<(LinkWindow, Arc<Window>)>) {
-        self.driver.close();
-        closing.push((self.driver.window(), self.window.clone()));
+        let driver = self.driver.borrow();
+        driver.close();
+        closing.push((driver.window(), self.window.clone()));
     }
 
     fn event(&mut self, event: WindowEvent) {
-        let ui = self.driver.ui();
+        match event {
+            WindowEvent::Resized(size) => self.resize(size, self.window.scale_factor()),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.refresh_interval();
+                self.resize(Current::surface_size(&self.window), scale_factor);
+            }
+            WindowEvent::Moved(_) => self.refresh_interval(),
+            WindowEvent::MouseWheel { delta, phase, .. } => self.wheel(delta, phase),
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => self.key(event),
+            event => self.input(event),
+        }
+    }
+
+    fn input(&mut self, event: WindowEvent) {
+        let mut driver = self.driver.borrow_mut();
+        let ui = driver.ui();
         match event {
             WindowEvent::ThemeChanged(theme) => ui.set_appearance(appearance(Some(theme))),
             WindowEvent::Focused(focused) => ui.set_focused(focused),
@@ -416,12 +409,6 @@ impl WindowState {
             WindowEvent::DroppedFile(path) => {
                 ui.file_drop(FileDropPhase::Drop, vec![path]);
             }
-            WindowEvent::Resized(size) => self.resize(size, self.window.scale_factor()),
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.refresh_interval();
-                self.resize(Current::surface_size(&self.window), scale_factor);
-            }
-            WindowEvent::Moved(_) => self.refresh_interval(),
             WindowEvent::CursorMoved { position, .. } => {
                 let position = logical_point(position, ui.scale());
                 ui.pointer_moved(position);
@@ -437,9 +424,8 @@ impl WindowState {
                 button,
                 ..
             } => ui.pointer_up(pointer_button(button)),
-            WindowEvent::MouseWheel { delta, phase, .. } => self.wheel(delta, phase),
             WindowEvent::Touch(touch) if Current::MOBILE => {
-                if let Some(phase) = self.touch.input(touch.id, touch.phase) {
+                if let Some(phase) = self.touch.input(touch.id, touch_phase(touch.phase)) {
                     let position = logical_point(touch.location, ui.scale());
                     ui.touch(phase, position);
                 }
@@ -448,11 +434,6 @@ impl WindowState {
                 self.modifiers = modifiers(changed.state());
                 ui.set_modifiers(self.modifiers);
             }
-            WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } => self.key(event),
             WindowEvent::Ime(Ime::Preedit(text, cursor)) => {
                 ui.ime(ImeEvent::Preedit { text, cursor });
             }
@@ -460,7 +441,7 @@ impl WindowState {
             WindowEvent::Occluded(occluded) => {
                 self.occluded = occluded;
                 ui.set_visible(!occluded);
-                (self.driver).configure(|config| config.visible = !occluded);
+                driver.configure(|config| config.visible = !occluded);
                 if !occluded {
                     self.window.request_redraw();
                 }
@@ -478,41 +459,33 @@ impl WindowState {
         let mut key_event = KeyEvent::new(key).with_modifiers(self.modifiers);
         key_event.text = event.text.as_ref().map(SmolStr::to_string);
         key_event.repeat = event.repeat;
-        let ui = self.driver.ui();
-        let handled = match event.state {
+        let mut driver = self.driver.borrow_mut();
+        let ui = driver.ui();
+        match event.state {
             ElementState::Pressed => ui.key_down(key_event),
             ElementState::Released => ui.key_up(key_event),
         };
-        if !handled {
-            Current::unhandled_key(&event);
-        }
     }
 
     fn sync_platform(&mut self) {
-        let changes = self.driver.changes();
+        let changes = self.tracked.changes(self.driver.borrow_mut().ui());
         if let Some(cursor) = changes.cursor {
             self.window.set_cursor(cursor_icon(cursor));
         }
-        if let Some(text_input) = changes.text_input {
-            self.window
-                .set_ime_allowed(matches!(text_input, TextInput::On { .. }));
-            if let TextInput::On { area: Some(area) } = text_input {
-                self.window.set_ime_cursor_area(
-                    PhysicalPosition::new(area.origin.x, area.origin.y),
-                    PhysicalSize::new(area.size.width, area.size.height),
-                );
-            }
-        }
+        self.input.sync(&self.window, changes.text_input);
     }
 
     fn refresh_interval(&mut self) {
         let interval = refresh_interval(&self.window);
-        self.driver.configure(|config| config.interval = interval);
+        self.driver
+            .borrow_mut()
+            .configure(|config| config.interval = interval);
     }
 
     fn resize(&mut self, physical: PhysicalSize<u32>, scale: f64) {
         let resized = self
             .driver
+            .borrow_mut()
             .resize((physical.width, physical.height), scale as f32);
         if resized.is_some() && !self.occluded {
             self.step();
@@ -521,18 +494,19 @@ impl WindowState {
     }
 
     fn step(&mut self) {
-        self.driver.step();
-        self.publish_access();
+        let update = self.driver.borrow_mut().step();
+        self.publish(update);
     }
 
-    fn publish_access(&mut self) {
-        if let Some(update) = self.driver.ui().accessibility_update() {
+    fn publish(&mut self, update: Option<TreeUpdate>) {
+        if let Some(update) = update {
             self.access.update_if_active(|| update);
         }
     }
 
     fn assist(&mut self, request: AccessEvent) {
-        let ui = self.driver.ui();
+        let mut driver = self.driver.borrow_mut();
+        let ui = driver.ui();
         match request {
             AccessEvent::InitialTreeRequested => {
                 self.access.update_if_active(|| ui.accessibility_tree());
@@ -542,23 +516,25 @@ impl WindowState {
             }
             AccessEvent::AccessibilityDeactivated => ui.stop_accessibility(),
         }
-        if self.occluded {
-            ui.update();
-            self.publish_access();
-        }
+        let update = self.occluded.then(|| driver.refresh()).flatten();
+        drop(driver);
+        self.publish(update);
     }
 
     fn sync_environment(&mut self) {
-        let ui = self.driver.ui();
+        let keyboard = self.input.keyboard_inset(&self.window);
+        let mut driver = self.driver.borrow_mut();
+        let ui = driver.ui();
         Current::sync(&self.window, ui);
         if Current::MOBILE {
             ui.set_safe_area(Current::safe_area(&self.window));
-            ui.set_keyboard_inset(Current::keyboard_inset(&self.window));
+            ui.set_keyboard_inset(keyboard);
         }
     }
 
     fn wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
-        let ui = self.driver.ui();
+        let mut driver = self.driver.borrow_mut();
+        let ui = driver.ui();
         match self.wheel.input(delta, phase, ui.scale(), Instant::now()) {
             WheelGesture::Scroll(by) => {
                 ui.scroll(by);
@@ -575,62 +551,12 @@ impl WindowState {
     }
 }
 
-enum Host {
-    Inline(Box<Inline>),
-    Thread(JoinHandle<Vec<Target>>),
-}
-
-struct Compositing {
-    messages: Sender<Message>,
-    events: Events,
-    epoch: Instant,
-    host: Host,
-}
-
-impl Compositing {
-    fn open(gpu: &Gpu, waker: EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
-        let wake = move || {
-            let _ = waker.send_event(None);
-        };
-        let (messages, mailbox, events) = mailbox();
-        let epoch = Instant::now();
-        let host = if var("ROUGE_COMPOSITOR").is_ok_and(|mode| mode == "inline") {
-            Host::Inline(Box::new(Inline::new(gpu, mailbox, epoch, wake)))
-        } else {
-            Host::Thread(spawn(gpu.clone(), messages.clone(), mailbox, epoch, wake)?)
-        };
-        Ok(Compositing {
-            messages,
-            events,
-            epoch,
-            host,
-        })
+fn present_target(compositor: &Compositing, target: Target, window: &Arc<Window>) -> Target {
+    if compositor.threaded() {
+        return target;
     }
-
-    fn target(&self, target: Target, window: &Arc<Window>) -> Target {
-        match self.host {
-            Host::Thread(_) => target,
-            Host::Inline(_) => {
-                let notify = window.clone();
-                target.before_present(move || notify.pre_present_notify())
-            }
-        }
-    }
-
-    fn turn(&mut self) -> Option<Instant> {
-        match &mut self.host {
-            Host::Inline(inline) => inline.turn(),
-            Host::Thread(_) => None,
-        }
-    }
-
-    fn close(self) -> Result<(), AppError> {
-        if let Host::Thread(thread) = self.host {
-            let _ = self.messages.send(Message::Shutdown);
-            drop(thread.join().map_err(|_| ThreadError::Panicked)?);
-        }
-        Ok(())
-    }
+    let notify = window.clone();
+    target.before_present(move || notify.pre_present_notify())
 }
 
 fn deliver(
@@ -641,9 +567,13 @@ fn deliver(
     if event == CompositorEvent::Closed {
         return closing.retain(|(window, _)| *window != id);
     }
-    if let Some(state) = windows.iter_mut().find(|state| state.driver.window() == id) {
-        state.driver.handle(event);
-        if state.driver.frame_due(Instant::now()).is_some() {
+    if let Some(state) = windows
+        .iter_mut()
+        .find(|state| state.driver.borrow().window() == id)
+    {
+        let mut driver = state.driver.borrow_mut();
+        driver.handle(event);
+        if driver.frame_due(Instant::now()).is_some() {
             state.window.request_redraw();
         }
     }
@@ -654,21 +584,4 @@ fn refresh_interval(window: &Window) -> Duration {
         .filter(|rate| *rate > 0)
         .unwrap_or(60_000);
     Duration::from_secs_f64(1000.0 / f64::from(millihertz))
-}
-
-fn trace(settings: &ProfileSettings) -> Option<FlushGuard> {
-    let path = settings.trace.as_deref().filter(|path| !path.is_empty())?;
-    let (layer, guard) = ChromeLayerBuilder::new()
-        .file(path)
-        .include_args(true)
-        .build();
-    let layer = layer.with_filter(
-        Targets::new()
-            .with_target("winit", LevelFilter::OFF)
-            .with_default(LevelFilter::TRACE),
-    );
-    subscribe(layer).then(|| {
-        eprintln!("rouge profile: tracing to {path}");
-        guard
-    })
 }

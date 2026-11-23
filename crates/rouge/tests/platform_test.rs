@@ -1,9 +1,9 @@
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 
 use rouge::core::{Cursor, Key, Modifiers, Point, PointerButton, Size, TouchPhase as UiTouchPhase};
 use rouge::platform::{
     PrimaryTouch, Wheel, WheelGesture, cursor_icon, logical_point, logical_size, modifiers,
-    named_key, pointer_button, scroll_delta,
+    named_key, pointer_button, scroll_delta, touch_phase,
 };
 use std::time::{Duration, Instant};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -190,7 +190,7 @@ fn the_first_finger_down_drives_touch_input_until_it_lifts() {
         (1, TouchPhase::Ended),
         (1, TouchPhase::Moved),
     ]
-    .map(|(id, phase)| touch.input(id, phase));
+    .map(|(id, phase)| touch.input(id, touch_phase(phase)));
     assert_eq!(
         phases,
         [
@@ -208,13 +208,13 @@ fn the_first_finger_down_drives_touch_input_until_it_lifts() {
 #[test]
 fn a_cancelled_touch_frees_the_tracker_for_the_next_finger() {
     let mut touch = PrimaryTouch::default();
-    touch.input(1, TouchPhase::Started);
+    touch.input(1, touch_phase(TouchPhase::Started));
     assert_eq!(
-        touch.input(1, TouchPhase::Cancelled),
+        touch.input(1, touch_phase(TouchPhase::Cancelled)),
         Some(UiTouchPhase::Cancel)
     );
     assert_eq!(
-        touch.input(2, TouchPhase::Started),
+        touch.input(2, touch_phase(TouchPhase::Started)),
         Some(UiTouchPhase::Start)
     );
 }

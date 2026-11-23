@@ -1,6 +1,6 @@
 use super::Platform;
 use super::native::clipboard::DesktopClipboard;
-use super::native::{UserEvent, WinitPlatform, run};
+use super::native::{UserEvent, WinitInput, WinitPlatform, run};
 use crate::app::{App, AppError};
 use muda::accelerator::{Key as NativeKey, KeyAccelerator, Modifiers};
 use muda::{
@@ -44,17 +44,24 @@ impl Platform for MacOs {
     const MENU_BAR: bool = false;
     const WINDOW_MENU: bool = true;
 
-    fn run(app: App, options: Self::Options) -> Result<(), AppError> {
-        run(app, options)
+    fn run(app: App, _options: Self::Options) -> Result<(), AppError> {
+        run(app)
     }
 
     #[cfg(feature = "open-url")]
     fn open_url(url: &str) -> Result<(), IoError> {
         open::that(url)
     }
+
+    #[cfg(feature = "persist")]
+    fn default_config_dir(name: &str) -> Option<PathBuf> {
+        home_dir().map(|home| home.join("Library/Application Support").join(name))
+    }
 }
 
 impl WinitPlatform for MacOs {
+    type Input = WinitInput;
+
     fn new(menus: &[Menu], waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         let menus = NativeMenus::new(menus.to_vec(), waker.clone()).map_err(Error::Menu)?;
         Ok(MacOs { menus })
@@ -75,11 +82,6 @@ impl WinitPlatform for MacOs {
         // SAFETY: AppKit requires a non-null image and the main thread.
         unsafe { app.setApplicationIconImage(Some(&image)) };
         None
-    }
-
-    #[cfg(feature = "persist")]
-    fn default_config_dir(name: &str) -> Option<PathBuf> {
-        home_dir().map(|home| home.join("Library/Application Support").join(name))
     }
 
     fn key(event: &KeyEvent) -> WinitKey {

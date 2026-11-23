@@ -6,26 +6,63 @@ pub(crate) use runner::run;
 
 use super::{LINE_SCROLL, Platform, css_cursor};
 use crate::app::AppError;
+use crate::changes::TextInput;
+use crate::driver::Driver;
 use rouge_core::{
     Appearance, Clipboard, Cursor, Key, Menu, Modifiers, PointerButton, ResizeEdge,
     TouchPhase as UiTouchPhase, Ui, WindowCommand,
 };
 use rouge_render::{Edges, Point, Size};
-#[cfg(feature = "persist")]
-use std::env::var_os;
-#[cfg(feature = "persist")]
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{KeyEvent, MouseButton, MouseScrollDelta, TouchPhase};
-use winit::event_loop::{EventLoop, EventLoopProxy};
+use winit::event_loop::EventLoopProxy;
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Icon, ResizeDirection, Theme, Window};
 
 pub(crate) type UserEvent = Option<accesskit_winit::Event>;
 
+pub(crate) trait Input: Sized {
+    fn attach(
+        window: &Window,
+        driver: &Rc<RefCell<Driver>>,
+        waker: &EventLoopProxy<UserEvent>,
+    ) -> Self;
+
+    fn sync(&mut self, window: &Window, change: Option<TextInput>);
+
+    fn keyboard_inset(&self, _window: &Window) -> f32 {
+        0.0
+    }
+}
+
+pub(crate) struct WinitInput;
+
+impl Input for WinitInput {
+    fn attach(
+        _window: &Window,
+        _driver: &Rc<RefCell<Driver>>,
+        _waker: &EventLoopProxy<UserEvent>,
+    ) -> Self {
+        WinitInput
+    }
+
+    fn sync(&mut self, window: &Window, change: Option<TextInput>) {
+        let Some(text_input) = change else { return };
+        window.set_ime_allowed(matches!(text_input, TextInput::On { .. }));
+        if let TextInput::On { area: Some(area) } = text_input {
+            window.set_ime_cursor_area(
+                PhysicalPosition::new(area.origin.x, area.origin.y),
+                PhysicalSize::new(area.size.width, area.size.height),
+            );
+        }
+    }
+}
+
 pub(crate) trait WinitPlatform: Platform + Sized {
-    const SURFACE_LOST_ON_SUSPEND: bool = false;
+    type Input: Input;
 
     fn new(menus: &[Menu], waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError>;
 
@@ -35,32 +72,12 @@ pub(crate) trait WinitPlatform: Platform + Sized {
         None
     }
 
-    #[cfg(feature = "persist")]
-    fn default_config_dir(name: &str) -> Option<PathBuf>;
-
-    #[cfg(feature = "persist")]
-    fn config_dir(name: &str) -> Option<PathBuf> {
-        var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|dir| dir.is_absolute())
-            .map(|dir| dir.join(name.to_lowercase()))
-            .or_else(|| Self::default_config_dir(name))
-    }
-
-    fn event_loop(_options: Self::Options) -> Result<EventLoop<UserEvent>, AppError> {
-        Ok(EventLoop::with_user_event().build()?)
-    }
-
     fn surface_size(window: &Window) -> PhysicalSize<u32> {
         window.inner_size()
     }
 
     fn safe_area(_window: &Window) -> Edges {
         Edges::ZERO
-    }
-
-    fn keyboard_inset(_window: &Window) -> f32 {
-        0.0
     }
 
     fn appearance(window: &Window) -> Appearance {
@@ -77,15 +94,11 @@ pub(crate) trait WinitPlatform: Platform + Sized {
         event.logical_key.clone()
     }
 
-    fn unhandled_key(_event: &KeyEvent) {}
-
     fn sync(_window: &Window, _ui: &mut Ui) {}
 
     fn menu_events(&mut self, _ui: Option<&mut Ui>) -> bool {
         false
     }
-
-    fn exit() {}
 }
 
 const MOMENTUM_GAP: Duration = Duration::from_millis(50);
@@ -217,27 +230,12 @@ impl Wheel {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct PrimaryTouch(Option<u64>);
-
-impl PrimaryTouch {
-    pub fn input(&mut self, id: u64, phase: TouchPhase) -> Option<UiTouchPhase> {
-        match phase {
-            TouchPhase::Started if self.0.is_none() => {
-                self.0 = Some(id);
-                Some(UiTouchPhase::Start)
-            }
-            TouchPhase::Moved if self.0 == Some(id) => Some(UiTouchPhase::Move),
-            TouchPhase::Ended if self.0 == Some(id) => {
-                self.0 = None;
-                Some(UiTouchPhase::End)
-            }
-            TouchPhase::Cancelled if self.0 == Some(id) => {
-                self.0 = None;
-                Some(UiTouchPhase::Cancel)
-            }
-            _ => None,
-        }
+pub fn touch_phase(phase: TouchPhase) -> UiTouchPhase {
+    match phase {
+        TouchPhase::Started => UiTouchPhase::Start,
+        TouchPhase::Moved => UiTouchPhase::Move,
+        TouchPhase::Ended => UiTouchPhase::End,
+        TouchPhase::Cancelled => UiTouchPhase::Cancel,
     }
 }
 

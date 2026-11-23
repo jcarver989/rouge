@@ -1,4 +1,8 @@
 mod app;
+#[cfg(not(target_os = "android"))]
+mod changes;
+#[cfg(not(target_arch = "wasm32"))]
+mod compositing;
 mod driver;
 #[cfg(feature = "persist")]
 pub mod persist;

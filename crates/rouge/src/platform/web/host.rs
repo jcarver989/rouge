@@ -2,7 +2,8 @@ use super::clipboard::WebClipboard;
 use super::dom_key;
 use super::trace::PerformanceLayer;
 use crate::app::{App, AppError, RootFn, WindowOptions};
-use crate::driver::{Driver, Inline, Setup, TextInput, connect};
+use crate::changes::{TextInput, Tracked};
+use crate::driver::{Driver, Inline, Setup, connect};
 use crate::platform::{LINE_SCROLL, css_cursor, default_menus, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use js_sys::{Array, Error as JsError, Function, Reflect};
@@ -235,6 +236,7 @@ impl Drop for Listener {
 
 struct State {
     driver: Driver,
+    tracked: Tracked,
     compositor: Inline,
     events: Events,
     pressed: bool,
@@ -379,6 +381,7 @@ impl Host {
             input,
             state: RefCell::new(State {
                 driver,
+                tracked: Tracked::default(),
                 compositor,
                 events,
                 pressed: false,
@@ -572,7 +575,7 @@ impl Host {
     }
 
     fn sync(&self, state: &mut State) -> Option<TextInput> {
-        let changes = state.driver.changes();
+        let changes = state.tracked.changes(state.driver.ui());
         if let Some(cursor) = changes.cursor {
             let _ = self
                 .canvas
