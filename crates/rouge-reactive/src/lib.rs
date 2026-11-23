@@ -24,7 +24,7 @@ mod watch;
 pub use action::{Action, action};
 pub use effect::{Effect, effect};
 pub use interval::interval;
-pub use keyed_list::{KeyedList, keyed_list};
+pub use keyed_list::{KeyOrder, KeyedList, keyed_list};
 pub use memo::{Memo, memo};
 pub use resource::{Resource, resource};
 pub use runtime::{Entered, Runtime};

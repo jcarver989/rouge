@@ -1,5 +1,7 @@
 use rouge_reactive::testing::{Driver, counter};
-use rouge_reactive::{KeyedList, effect, keyed_list, memo, stats};
+use rouge_reactive::{KeyOrder, KeyedList, batch, effect, keyed_list, memo, stats};
+
+use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Item {
@@ -70,6 +72,72 @@ fn a_selection_of_a_removed_key_keeps_its_last_value() {
     assert!(done.get_untracked());
     items.remove(&1);
     assert!(done.get_untracked());
+}
+
+#[test]
+fn order_snapshots_keep_their_keys_and_ranks_through_batched_edits() {
+    let _driver = Driver::new();
+    let items = list(6);
+    let original = items.order().get_untracked();
+    let check = |keys: &[u32]| {
+        assert_order(&items.order().get_untracked(), keys);
+        assert_eq!(items.keys().get_untracked(), keys);
+    };
+    batch(|| {
+        items.prepend(Item { id: 7, done: true });
+        check(&[7, 0, 1, 2, 3, 4, 5]);
+        items.move_to(&4, 1);
+        check(&[7, 4, 0, 1, 2, 3, 5]);
+        items.move_to(&1, usize::MAX);
+        check(&[7, 4, 0, 2, 3, 5, 1]);
+        for key in [7, 1, 2] {
+            items.remove(&key);
+        }
+        check(&[4, 0, 3, 5]);
+        items.retain(|row| row.id != 3);
+        check(&[4, 0, 5]);
+        items.prepend(Item { id: 2, done: true });
+        check(&[2, 4, 0, 5]);
+    });
+    assert_order(&original, &[0, 1, 2, 3, 4, 5]);
+    assert_eq!(original.index_of(&7), None);
+    for key in [1, 3, 7] {
+        assert_eq!(items.order().get_untracked().index_of(&key), None);
+    }
+    items.retain(|_| false);
+    check(&[]);
+}
+
+#[test]
+fn value_only_edits_do_not_publish_an_order_snapshot() {
+    let _driver = Driver::new();
+    let items = list(3);
+    let initial = items.order().get_untracked();
+    let (runs, bump) = counter();
+    let keys = items.keys();
+    effect(move || {
+        keys.with(|_| ());
+        bump();
+    });
+    items.update(&1, |item| item.done = true);
+    items.update_all(|item| item.done = false);
+    items.prepend(Item { id: 2, done: true });
+    items.push(Item { id: 1, done: true });
+    assert!(Rc::ptr_eq(&initial, &items.order().get_untracked()));
+    assert_eq!(runs.get(), 1);
+    assert_eq!(items.keys().get_untracked(), [0, 1, 2]);
+    items.push(Item { id: 4, done: false });
+    assert_eq!(runs.get(), 2);
+}
+
+fn assert_order(order: &KeyOrder<u32>, keys: &[u32]) {
+    assert_eq!(order.len(), keys.len());
+    assert_eq!(order.is_empty(), keys.is_empty());
+    for (index, key) in keys.iter().enumerate() {
+        assert_eq!(order.get(index), Some(key));
+        assert_eq!(order.index_of(key), Some(index));
+    }
+    assert_eq!(order.get(keys.len()), None);
 }
 
 fn list(count: u32) -> KeyedList<u32, Item> {
