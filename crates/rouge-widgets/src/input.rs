@@ -1,5 +1,5 @@
 use crate::tokens::{HAIRLINE, Space};
-use crate::util::{by_touch, chrome, entry, entry_frame, field_height};
+use crate::util::{Name, by_touch, chrome, entry, entry_frame, field_height, labelled};
 use rouge_core::Role;
 use rouge_core::{
     Apply, BuildCx, DelegateStyle, Editable, StyleDelta, Styled, View, component, div,
@@ -11,6 +11,7 @@ use std::ops::Range;
 pub struct TextInput {
     value: Signal<String>,
     placeholder: Option<String>,
+    name: Name,
     selection: Option<Signal<Range<usize>>>,
     min_rows: Option<usize>,
     max_rows: Option<usize>,
@@ -26,6 +27,7 @@ pub fn text_input(value: Signal<String>) -> TextInput {
     TextInput {
         value,
         placeholder: None,
+        name: None,
         selection: None,
         min_rows: None,
         max_rows: None,
@@ -75,6 +77,7 @@ impl TextInput {
 }
 
 chrome!(TextInput);
+labelled!(TextInput);
 
 impl View for TextInput {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -82,6 +85,7 @@ impl View for TextInput {
         let TextInput {
             value,
             placeholder,
+            name,
             selection,
             min_rows,
             max_rows,
@@ -91,7 +95,7 @@ impl View for TextInput {
             test_id,
             style,
         } = self;
-        let field = entry(value, focus)
+        let field = entry(value, focus, name, placeholder.as_deref())
             .submit_on_enter(submit_on_enter)
             .on_submit(move |text| on_submit.call(text.to_owned()))
             .when(multiline, Editable::multiline)

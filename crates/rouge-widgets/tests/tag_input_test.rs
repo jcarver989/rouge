@@ -1,9 +1,24 @@
+use rouge_core::access::{Action, Role};
 use rouge_core::testing::TestResult;
 use rouge_core::view;
 use rouge_core::{Styled, div};
 use rouge_reactive::{Runtime, keyed_list};
 use rouge_widgets::tag_input;
 use rouge_widgets::testing::component_test;
+
+#[test]
+fn each_tag_has_a_named_remove_button() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let tags = keyed_list(String::clone);
+    tags.push("ambient".to_owned());
+    let mut ui = component_test()
+        .size(320.0, 120.0)
+        .build(move || div().child(tag_input(tags).access_label("Tags")));
+    ui.access_node(Role::TextInput, "Tags")?;
+    assert!(ui.perform(Role::Button, "Remove ambient", Action::Click)?);
+    assert!(tags.keys().with_untracked(Vec::is_empty));
+    Ok(())
+}
 
 #[test]
 fn enter_adds_a_tag_backspace_removes_the_last_and_each_can_be_removed() -> TestResult {

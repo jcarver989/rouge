@@ -4,6 +4,7 @@ use crate::{
     util::chrome,
 };
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::{
     Apply, BuildCx, DelegateStyle, Div, Key, Prop, StyleDelta, Styled, Theme, View, component, div,
     editable, switch, text,
@@ -96,6 +97,7 @@ impl View for InlineEdit {
                 }
                 let draft = signal(value.get_untracked());
                 editable(draft)
+                    .access_label("Edit")
                     .autofocus()
                     .select_all_on_focus()
                     .caret_color(accent)
@@ -110,6 +112,8 @@ impl View for InlineEdit {
             .w_full()
             .min_w(0.0)
             .body()
+            .role(access::Role::Button)
+            .access_description("Double-click to edit")
             .on_double_click(move |_| editing.set(true))
             .on_key_down(move |event| {
                 if event.key == Key::Escape && editing.get_untracked() {

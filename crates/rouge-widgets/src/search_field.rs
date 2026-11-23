@@ -5,7 +5,7 @@ use crate::components::{
 use crate::icon::{Icon, IconName};
 use crate::popover::POPPED;
 use crate::tokens::{Pace, Space};
-use crate::util::{TestId, chrome, entry, entry_frame, field_height, is_touch};
+use crate::util::{Name, TestId, chrome, entry, entry_frame, field_height, is_touch, labelled};
 use rouge_core::{
     Apply, BuildCx, DelegateStyle, Editable, Role, StyleDelta, Styled, View, component, div,
     focus_handle, show, view,
@@ -17,6 +17,7 @@ use std::rc::Rc;
 pub struct SearchField {
     value: Signal<String>,
     placeholder: Option<String>,
+    name: Name,
     scopes: Option<(Signal<usize>, Rc<[String]>)>,
     on_submit: Callback<(String,)>,
     test_id: Option<String>,
@@ -28,6 +29,7 @@ pub fn search_field(value: Signal<String>) -> SearchField {
     SearchField {
         value,
         placeholder: None,
+        name: None,
         scopes: None,
         on_submit: Callback::default(),
         test_id: None,
@@ -57,6 +59,7 @@ impl SearchField {
 }
 
 chrome!(SearchField);
+labelled!(SearchField);
 
 impl View for SearchField {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -64,7 +67,8 @@ impl View for SearchField {
         let on_submit = self.on_submit;
         let filled = memo(move || value.with(|value| !value.is_empty()));
         let active = memo(move || focus.is_focused() || filled.get());
-        let field = entry(value, focus)
+        let fallback = self.placeholder.as_deref().or(Some("Search"));
+        let field = entry(value, focus, self.name, fallback)
             .on_submit(move |text| on_submit.call(text.to_owned()))
             .when_some(self.placeholder, |field, hint| {
                 field.placeholder(hint, Role::TextMuted)

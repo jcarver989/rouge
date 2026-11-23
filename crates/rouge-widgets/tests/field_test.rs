@@ -1,9 +1,31 @@
+use rouge_core::access::{Action, ActionData, Role};
 use rouge_core::testing::{TestResult, assert_near};
 use rouge_core::view;
 use rouge_core::{Color, Styled, UiPalette, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::{field, text_input};
+
+#[test]
+fn a_field_names_the_control_inside_it() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (name, link) = (signal(String::from("Late night")), signal(String::new()));
+    let mut ui = component_test().size(300.0, 200.0).build(move || {
+        view! {
+            <div flex col gap=8.0>
+                <field label="Playlist name"><text_input value=name/></field>
+                <text_input value=link placeholder="Share link"/>
+            </div>
+        }
+    });
+    let node = ui.access_node(Role::TextInput, "Playlist name")?;
+    assert_eq!(node.value.as_deref(), Some("Late night"));
+    let typed = ActionData::Value("Early".into());
+    assert!(ui.perform_with(Role::TextInput, "Playlist name", Action::SetValue, typed)?);
+    assert_eq!(name.get(), "Early");
+    ui.access_node(Role::TextInput, "Share link")?;
+    Ok(())
+}
 
 #[test]
 fn an_error_replaces_the_hint_and_turns_the_control_border_destructive() -> TestResult {

@@ -1,6 +1,6 @@
 use crate::tokens::Space;
 use crate::typography::UiStyles;
-use crate::util::{Invalid, TestId, chrome};
+use crate::util::{FieldLabel, Invalid, TestId, chrome};
 use rouge_core::view;
 use rouge_core::{
     AnyView, BuildCx, DelegateStyle, Fill, IntoProp, Prop, Role, StyleDelta, Styled, View,
@@ -76,8 +76,8 @@ impl View for Field {
         };
         let root = view! {
             <div flex col gap=Space::X1 test_id?=self.test_id>
-                <text label color=Role::Text>{self.label}</text>
-                <div provide=Invalid(invalid)>{self.control}</div>
+                <text label color=Role::Text>{self.label.clone()}</text>
+                <div provide=Invalid(invalid) provide=FieldLabel(self.label)>{self.control}</div>
                 {note}
             </div>
         };

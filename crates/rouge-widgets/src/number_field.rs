@@ -1,7 +1,8 @@
 use crate::icon::{Icon, IconName};
 use crate::tokens::{CONTROL_HEIGHT_LARGE, PRESS_SCALE, Pace, Space};
 use crate::typography::UiStyles;
-use crate::util::{TestId, chrome, entry, entry_frame, field_height, is_touch};
+use crate::util::{Name, TestId, chrome, entry, entry_frame, field_height, is_touch, labelled};
+use rouge_core::access;
 use rouge_core::{
     Apply, BuildCx, Cursor, DelegateStyle, Div, DragPhase, Editable, Key, PointerEvent, Role,
     StyleDelta, Styled, View, component, div, focus_handle, text, view,
@@ -14,6 +15,7 @@ use std::time::Duration;
 pub struct NumberField {
     value: Signal<f64>,
     label: Option<String>,
+    name: Name,
     range: (f64, f64),
     step: f64,
     suffix: Option<String>,
@@ -26,6 +28,7 @@ pub fn number_field(value: Signal<f64>) -> NumberField {
     NumberField {
         value,
         label: None,
+        name: None,
         range: (f64::MIN, f64::MAX),
         step: 1.0,
         suffix: None,
@@ -59,6 +62,7 @@ impl NumberField {
 }
 
 chrome!(NumberField);
+labelled!(NumberField);
 
 impl View for NumberField {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -84,6 +88,7 @@ impl View for NumberField {
         let id = self.test_id;
         let touch = is_touch();
         let label_id = id.part("label");
+        let named = self.label.clone();
         let label = self.label.map(|label| {
             if touch {
                 view! {
@@ -97,11 +102,12 @@ impl View for NumberField {
         });
         let steppers = touch.then(|| {
             [
-                stepper(IconName::Minus, id.part("decrement"), move || nudge(-1.0)),
-                stepper(IconName::Plus, id.part("increment"), move || nudge(1.0)),
+                (IconName::Minus, "Decrease", "decrement", -1.0),
+                (IconName::Plus, "Increase", "increment", 1.0),
             ]
+            .map(|(icon, name, part, by)| stepper(icon, name, id.part(part), move || nudge(by)))
         });
-        let field = entry(draft, focus)
+        let field = entry(draft, focus, self.name, named.as_deref())
             .select_all_on_focus()
             .on_submit(move |_| commit())
             .on_blur(move |_| commit())
@@ -154,7 +160,12 @@ fn scrubber(
     .hover(|style| style.bg(Role::SurfaceHover).text_color(Role::Text))
 }
 
-fn stepper(icon: IconName, id: Option<String>, nudge: impl Fn() + Copy + 'static) -> Div {
+fn stepper(
+    icon: IconName,
+    name: &str,
+    id: Option<String>,
+    nudge: impl Fn() + Copy + 'static,
+) -> Div {
     let (pressed, repeated) = (signal(false), Rc::new(Cell::new(false)));
     let timer = Rc::new(Cell::new(None::<Task>));
     let stop = {
@@ -168,7 +179,8 @@ fn stepper(icon: IconName, id: Option<String>, nudge: impl Fn() + Copy + 'static
     on_cleanup(stop.clone());
     let held = repeated.clone();
     view! {
-        <div test_id?=id flex flex_none items_center justify_center w=CONTROL_HEIGHT_LARGE h_full preserve_focus
+        <div test_id?=id role=access::Role::Button access_label={name.to_owned()} flex flex_none
+             items_center justify_center w=CONTROL_HEIGHT_LARGE h_full preserve_focus
              scale={move || if pressed.get() { PRESS_SCALE } else { 1.0 }} transition=Pace::Press
              on_pointer_down=PointerEvent::stop_propagation
              on_press={move |down| {

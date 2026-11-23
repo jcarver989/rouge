@@ -1,6 +1,6 @@
 use crate::tokens::{BAR_HEIGHT, GROUP_HEIGHT, Pace, Radius, Space};
 use crate::typography::UiStyles;
-use crate::util::{TestId, chrome, control_edge};
+use crate::util::{Name, TestId, chrome, control_edge, field_name, labelled};
 use rouge_core::{
     Apply, BuildCx, Color, Cursor, DelegateStyle, Div, Role, StyleDelta, Styled, View, component,
     div, editable, focus_handle, text, view,
@@ -10,6 +10,7 @@ use rouge_reactive::{Callback, Signal, effect};
 pub struct CodeInput {
     value: Signal<String>,
     length: usize,
+    name: Name,
     on_complete: Callback<(String,)>,
     test_id: Option<String>,
     style: StyleDelta,
@@ -20,6 +21,7 @@ pub fn code_input(value: Signal<String>, length: usize) -> CodeInput {
     CodeInput {
         value,
         length: length.max(1),
+        name: None,
         on_complete: Callback::default(),
         test_id: None,
         style: StyleDelta::default(),
@@ -34,6 +36,7 @@ impl CodeInput {
 }
 
 chrome!(CodeInput);
+labelled!(CodeInput);
 
 impl View for CodeInput {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -61,16 +64,18 @@ impl View for CodeInput {
                     && value.with(|typed| typed.chars().count().min(length - 1)) == index
             };
             view! {
-                <div test_id?={id.part(format_args!("cell-{index}"))} flex flex_none items_center justify_center w=GROUP_HEIGHT h=BAR_HEIGHT border=1.0
+                <div test_id?={id.part(format_args!("cell-{index}"))} access_hidden=true flex flex_none items_center justify_center w=GROUP_HEIGHT h=BAR_HEIGHT border=1.0
                      rounded=Radius::Control bg=Role::Elevated border_color={control_edge(active)}
                      translate_y={move || if active() { LIFT } else { 0.0 }} transition=Pace::Press>
                     <text code primary no_wrap>{symbol}</text>
                 </div>
             }
         });
+        let name = field_name(self.name, Some("Code"));
         let field = view! {
             <editable value=value w_full code color=Color::TRANSPARENT caret_color=Color::TRANSPARENT
-                 selection_color=Color::TRANSPARENT track_focus=focus test_id?=id.part("input")/>
+                 selection_color=Color::TRANSPARENT track_focus=focus test_id?=id.part("input")
+                 access_label?=name/>
         };
         let root = view! {
             <div relative flex flex_none items_center gap=Space::X1 cursor=Cursor::Text

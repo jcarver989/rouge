@@ -97,9 +97,14 @@ impl TestId for Option<String> {
     }
 }
 
-pub(crate) fn entry(value: Signal<String>, focus: FocusHandle) -> Editable {
+pub(crate) fn entry(
+    value: Signal<String>,
+    focus: FocusHandle,
+    name: Name,
+    fallback: Option<&str>,
+) -> Editable {
     view! {
-        <editable value=value w_full body color=Role::Text
+        <editable value=value w_full body color=Role::Text access_label?={field_name(name, fallback)}
              caret_color=Theme::current().get_untracked().accent track_focus=focus/>
     }
 }
@@ -240,6 +245,31 @@ pub(crate) fn control_edge(focused: impl Fn() -> bool + 'static) -> impl Fn() ->
         }
     }
 }
+
+pub(crate) type Name = Option<Prop<String>>;
+
+#[derive(Clone)]
+pub(crate) struct FieldLabel(pub(crate) String);
+
+pub(crate) fn field_name(name: Name, fallback: Option<&str>) -> Name {
+    name.or_else(|| use_context::<FieldLabel>().map(|label| Prop::Static(label.0)))
+        .or_else(|| fallback.map(|fallback| Prop::Static(fallback.to_owned())))
+}
+
+macro_rules! labelled {
+    (impl[$($generics:tt)*] $widget:ty) => {
+        impl<$($generics)*> $widget {
+            pub fn access_label<V>(mut self, label: impl rouge_core::IntoProp<String, V>) -> Self {
+                self.name = Some(label.into_prop());
+                self
+            }
+        }
+    };
+    ($widget:ty) => {
+        labelled!(impl[] $widget);
+    };
+}
+pub(crate) use labelled;
 
 macro_rules! chrome {
     (impl[$($generics:tt)*] $widget:ty) => {

@@ -2,7 +2,8 @@ use crate::icon::{Icon, IconName};
 use crate::popover::POPPED;
 use crate::tokens::{GROUP_HEIGHT, HAIRLINE, ICON_SIZE_SMALL, Pace, Radius, Space, TINT_ALPHA};
 use crate::typography::UiStyles;
-use crate::util::{TestId, chrome, entry, entry_frame};
+use crate::util::{Name, TestId, chrome, entry, entry_frame, labelled};
+use rouge_core::access;
 use rouge_core::{
     Apply, BuildCx, Cursor, DelegateStyle, Editable, Key, Role, StyleDelta, Styled, Theme, View,
     component, div, each, focus_handle, text, view,
@@ -12,6 +13,7 @@ use rouge_reactive::{KeyedList, signal};
 pub struct TagInput {
     tags: KeyedList<String, String>,
     placeholder: Option<String>,
+    name: Name,
     test_id: Option<String>,
     style: StyleDelta,
 }
@@ -21,6 +23,7 @@ pub fn tag_input(tags: KeyedList<String, String>) -> TagInput {
     TagInput {
         tags,
         placeholder: None,
+        name: None,
         test_id: None,
         style: StyleDelta::default(),
     }
@@ -34,6 +37,7 @@ impl TagInput {
 }
 
 chrome!(TagInput);
+labelled!(TagInput);
 
 impl View for TagInput {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -56,7 +60,8 @@ impl View for TagInput {
                     let part = |kind: &str| chip_id.part(format_args!("{kind}-{name}"));
                     let removed = name.clone();
                     let remove = view! {
-                        <div test_id?={part("remove")} flex_none cursor=Cursor::Pointer on_click={move |event| {
+                        <div test_id?={part("remove")} role=access::Role::Button
+                             access_label={format!("Remove {name}")} flex_none cursor=Cursor::Pointer on_click={move |event| {
                             event.stop_propagation();
                             tags.remove(&removed);
                         }}>
@@ -74,7 +79,8 @@ impl View for TagInput {
                 }
             </each>
         };
-        let field = entry(draft, focus)
+        let fallback = self.placeholder.as_deref().or(Some("Add a tag"));
+        let field = entry(draft, focus, self.name, fallback)
             .on_submit(move |_| add())
             .on_key_down(move |event| {
                 if event.key == Key::Backspace && draft.with_untracked(String::is_empty) {
