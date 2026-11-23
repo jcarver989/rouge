@@ -5,6 +5,7 @@ use crate::prop::IntoProp;
 use crate::theme::Fill;
 
 use crate::text::Movement;
+use crate::tree::InputHints;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Patch, Text, TextOp, View, text};
 use crate::window::EditAction;
@@ -71,6 +72,11 @@ impl Editable {
 
     pub fn select_all_on_focus(mut self) -> Self {
         self.select_all_on_focus = true;
+        self
+    }
+
+    pub fn input_hints(mut self, hints: InputHints) -> Self {
+        self.state.hints = hints;
         self
     }
 

@@ -46,6 +46,10 @@ impl Default for TextData {
 }
 
 impl TextData {
+    pub(super) fn offset(&self) -> Point {
+        self.inset - self.edit.as_ref().map_or(Point::ZERO, |edit| edit.scroll)
+    }
+
     pub(super) fn shaped(&mut self, system: &mut TextSystem) -> &TextLayout {
         self.layout
             .get_or_insert_with(|| system.layout(&self.content, &self.style, self.wrap_width))

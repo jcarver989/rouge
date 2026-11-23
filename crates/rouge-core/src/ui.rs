@@ -13,7 +13,8 @@ use crate::text::TextSystem;
 use crate::theme::Theme;
 use crate::tree::edit::EditOp;
 use crate::tree::{
-    ActionHandler, ElementId, Event, FrameStats, Listeners, On, PaintCache, Tree, emit,
+    ActionHandler, EditTransaction, Editor, ElementId, Event, FrameStats, Listeners, On,
+    PaintCache, Tree, emit,
 };
 use crate::view::{BuildCx, Patch, Queue, View};
 use crate::window::{Appearance, EditAction, Menu, MenuItem, Sent, WindowCommand, WindowHandle};
@@ -598,6 +599,18 @@ impl Ui {
 
     pub fn text_cursor_area(&self) -> Option<Rect> {
         self.tree.caret_area()
+    }
+
+    pub fn editor(&self) -> Option<Editor<'_>> {
+        self.tree.editor()
+    }
+
+    pub fn edit_text(&mut self, transaction: EditTransaction) -> bool {
+        self.flush();
+        let Some(id) = self.tree.focused() else {
+            return false;
+        };
+        self.edit(id, [EditOp::Transact(transaction)])
     }
 
     pub fn cursor(&self) -> Cursor {

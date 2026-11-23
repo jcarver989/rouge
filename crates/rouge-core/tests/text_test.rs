@@ -1,10 +1,31 @@
 use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::text::{
     Granularity, Movement, SUBPIXEL_BUCKETS, SpanStyle, TextLayout, TextStyle, TextSystem,
-    WrapIndent,
+    WrapIndent, byte_offset, utf16_offset,
 };
 use rouge_core::{Canvas, Color, Point, Styled, TextRun, canvas, div, editable, rich_text};
 use rouge_reactive::{Runtime, Signal, signal};
+
+#[test]
+fn utf16_and_byte_offsets_convert_and_floor_inside_a_character() {
+    let text = "a日😀b";
+    let pairs = [(0, 0), (1, 1), (4, 2), (8, 4), (9, 5)];
+    for (byte, utf16) in pairs {
+        assert_eq!(utf16_offset(text, byte), utf16, "byte {byte}");
+        assert_eq!(byte_offset(text, utf16), byte, "utf16 {utf16}");
+    }
+    assert_eq!(
+        utf16_offset(text, 6),
+        2,
+        "inside the emoji floors to its start"
+    );
+    assert_eq!(
+        byte_offset(text, 3),
+        4,
+        "between surrogates floors to the pair"
+    );
+    assert_eq!((utf16_offset(text, 99), byte_offset(text, 99)), (5, 9));
+}
 
 #[test]
 fn layout_measures_scales_and_wraps() {

@@ -33,6 +33,7 @@ mod access;
 mod cascade;
 mod content;
 pub(crate) mod edit;
+mod editor;
 mod events;
 mod focus;
 mod fragment;
@@ -45,6 +46,7 @@ mod selection;
 mod surfaces;
 
 pub(crate) use content::TextData;
+pub use editor::{ContentType, EditTransaction, Editor, EditorId, EnterKey, InputHints};
 pub(crate) use events::{ActionHandler, Event, Listeners, On, emit};
 pub(crate) use focus::FocusSpec;
 pub(crate) use fragment::{FragmentId, Node};

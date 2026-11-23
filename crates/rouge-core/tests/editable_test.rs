@@ -1,5 +1,7 @@
 #[path = "tree/edit_test.rs"]
 mod edit;
+#[path = "tree/editor_test.rs"]
+mod editor;
 
 use rouge_core::Wake;
 use rouge_core::testing::{BLUE, RED, TestResult, TestUi, TestUiBuilder, WHITE, assert_near};

@@ -155,6 +155,25 @@ pub struct GlyphImage {
     pub data: Vec<u8>,
 }
 
+pub(crate) fn boundary(text: &str, index: usize) -> usize {
+    text.floor_char_boundary(index.min(text.len()))
+}
+
+pub fn utf16_offset(text: &str, byte: usize) -> usize {
+    text[..boundary(text, byte)].encode_utf16().count()
+}
+
+pub fn byte_offset(text: &str, utf16: usize) -> usize {
+    let mut units = 0;
+    for (index, character) in text.char_indices() {
+        if units + character.len_utf16() > utf16 {
+            return index;
+        }
+        units += character.len_utf16();
+    }
+    text.len()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Movement {
     Left,

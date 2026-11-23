@@ -1,11 +1,13 @@
 use super::content::laid_out;
+use super::editor::{EditTransaction, InputHints};
 use super::{ElementId, TextData, Tree};
 use crate::clipboard::{Clipboard, ClipboardMedia, ClipboardTarget, PasteRequest, Pasted};
 use crate::style::Dirty;
-use crate::text::{Granularity, Movement, TextLayout, TextSelection, TextSystem};
+use crate::text::{Granularity, Movement, TextLayout, TextSelection, TextSystem, boundary};
 use crate::ui::Wake;
 use rouge_reactive::{Signal, batch};
 use rouge_render::{Color, Point, Rect, Size};
+use std::mem::take;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -40,6 +42,7 @@ pub(crate) enum EditOp {
     Cut,
     Paste,
     PasteText(String),
+    Transact(EditTransaction),
 }
 
 #[derive(Clone)]
@@ -52,6 +55,7 @@ struct Snapshot {
 #[expect(clippy::struct_excessive_bools)]
 pub(crate) struct EditState {
     pub multiline: bool,
+    pub hints: InputHints,
     pub min_rows: usize,
     pub max_rows: usize,
     pub selection_signal: Option<Signal<Range<usize>>>,
@@ -75,6 +79,7 @@ impl Default for EditState {
     fn default() -> Self {
         EditState {
             multiline: false,
+            hints: InputHints::default(),
             min_rows: 1,
             max_rows: usize::MAX,
             selection_signal: None,
@@ -113,6 +118,7 @@ impl EditState {
         self.undo.clear();
         self.redo.clear();
         self.composition = None;
+        self.compose = None;
         self.typing = false;
     }
 
@@ -144,19 +150,37 @@ impl EditState {
         if !self.stale {
             return self.selection;
         }
-        let clamp = |index: usize| content.floor_char_boundary(index.min(content.len()));
         layout.select(
-            clamp(self.selection.anchor()),
-            clamp(self.selection.focus()),
+            boundary(content, self.selection.anchor()),
+            boundary(content, self.selection.focus()),
         )
     }
 
-    pub(super) fn compose(&self, layout: &TextLayout, content: &str) -> Option<TextSelection> {
-        let range = self
-            .compose
+    pub(super) fn marked(&self, content: &str) -> Option<Range<usize>> {
+        self.compose
             .clone()
-            .filter(|range| range.end <= content.len())?;
+            .filter(|range| range.end <= content.len())
+    }
+
+    pub(super) fn compose(&self, layout: &TextLayout, content: &str) -> Option<TextSelection> {
+        let range = self.marked(content)?;
         Some(layout.select(range.start, range.end))
+    }
+}
+
+impl EditTransaction {
+    fn types_at(&self, selection: &TextSelection) -> bool {
+        let caret = selection.focus();
+        self.marked.is_none()
+            && selection.is_collapsed()
+            && self.selection.is_none_or(|(anchor, focus)| anchor == focus)
+            && matches!(
+                self.replacements.as_slice(),
+                [(range, with)] if range.is_empty()
+                    && range.start == caret
+                    && !with.is_empty()
+                    && !with.contains('\n')
+            )
     }
 }
 
@@ -184,34 +208,22 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
     let Some(edit) = edit.as_mut() else { return };
     let current = laid_out(layout, content, style, *wrap_width, system);
     let mut selection = edit.current(current, content);
+    let multiline = edit.multiline;
     let point = |local: Point| {
         (
             local.x - inset.x + edit.scroll.x,
             local.y - inset.y + edit.scroll.y,
         )
     };
-    let erase = |movement: Movement| {
-        if selection.is_collapsed() {
-            current.move_selection(selection, movement, true).range()
-        } else {
-            selection.range()
-        }
-    };
     let before = Snapshot {
         content: content.clone(),
         anchor: selection.anchor(),
         focus: selection.focus(),
     };
-    let cancel_composition = matches!(&op, EditOp::Compose { text, .. } if text.is_empty())
-        && edit.composition.is_some();
-    let history = matches!(op, EditOp::Undo | EditOp::Redo) || cancel_composition;
-    let typing = matches!(&op, EditOp::Insert(text) if !text.contains('\n') && selection.is_collapsed() && edit.compose.is_none());
-    let coalesce = typing && edit.typing;
-    let composing_op = matches!(op, EditOp::Compose { .. });
-    let compose_commit = matches!(op, EditOp::Insert(_)) && edit.composition.is_some();
-    let mut replace = None;
-    let mut composing = None;
-    let mut caret = None;
+    let target = edit.compose.clone().unwrap_or(selection.range());
+    let mut history = false;
+    let mut restored = None;
+    let mut change = None;
     match op {
         EditOp::Undo | EditOp::Redo => {
             let (from, to) = if matches!(op, EditOp::Undo) {
@@ -219,19 +231,20 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
             } else {
                 (&mut edit.redo, &mut edit.undo)
             };
-            if let Some(snapshot) = from.pop() {
+            history = true;
+            restored = from.pop();
+            if restored.is_some() {
                 to.push(before.clone());
-                *content = snapshot.content;
-                *layout = None;
-                selection = laid_out(layout, content, style, *wrap_width, system)
-                    .select(snapshot.anchor, snapshot.focus);
-                edit.compose = None;
                 edit.composition = None;
             }
         }
+        EditOp::Compose { text, .. } if text.is_empty() => {
+            restored = edit.composition.take();
+            history = restored.is_some();
+        }
         EditOp::Select(range) => {
-            let clamp = |index: usize| content.floor_char_boundary(index.min(content.len()));
-            selection = current.select(clamp(range.start), clamp(range.end));
+            selection =
+                current.select(boundary(content, range.start), boundary(content, range.end));
         }
         EditOp::Move(movement, extend) => {
             selection = current.move_selection(selection, movement, extend);
@@ -254,57 +267,99 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
             let (x, y) = point(local);
             selection = current.extend_selection(selection, x, y, false);
         }
-        EditOp::Insert(text) => {
-            let range = edit.compose.take().unwrap_or(selection.range());
-            replace = Some((range, sanitize(text, edit.multiline)));
-        }
-        EditOp::Erase(movement) => replace = Some((erase(movement), String::new())),
-        EditOp::Compose { text, cursor: _ } if text.is_empty() => {
-            if let Some(snapshot) = edit.composition.take() {
-                *content = snapshot.content;
-                *layout = None;
-                selection = laid_out(layout, content, style, *wrap_width, system)
-                    .select(snapshot.anchor, snapshot.focus);
-                edit.compose = None;
-            }
-        }
-        EditOp::Compose { text, cursor } => {
-            let range = edit.compose.take().unwrap_or(selection.range());
-            composing = (!text.is_empty()).then(|| range.start..range.start + text.len());
-            caret =
-                cursor.map(|(_, end)| range.start + text.floor_char_boundary(end.min(text.len())));
-            replace = Some((range, text));
-        }
         EditOp::Copy | EditOp::Cut if selection.is_collapsed() => {}
         EditOp::Copy => clipboard.write(&content[selection.range()]),
+        EditOp::Paste => {}
         EditOp::Cut => {
             clipboard.write(&content[selection.range()]);
-            replace = Some((selection.range(), String::new()));
+            change = Some(EditTransaction::new().replace(selection.range(), ""));
         }
-        EditOp::Paste => {}
+        EditOp::Erase(movement) => {
+            let range = if selection.is_collapsed() {
+                current.move_selection(selection, movement, true).range()
+            } else {
+                selection.range()
+            };
+            change = Some(EditTransaction::new().replace(range, ""));
+        }
+        EditOp::Insert(text) => {
+            change = Some(EditTransaction::new().replace(target, sanitize(text, multiline)));
+        }
         EditOp::PasteText(text) => {
-            replace = Some(sanitize(text, edit.multiline))
+            change = Some(sanitize(text, multiline))
                 .filter(|text| !text.is_empty())
-                .map(|text| (selection.range(), text));
+                .map(|text| EditTransaction::new().replace(selection.range(), text));
+        }
+        EditOp::Compose { text, cursor } => {
+            let text = sanitize(text, multiline);
+            let end = cursor.map_or(text.len(), |(_, end)| boundary(&text, end));
+            let (caret, marked) = (target.start + end, target.start..target.start + text.len());
+            change = Some(
+                EditTransaction::new()
+                    .replace(target, text)
+                    .mark(marked)
+                    .select(caret, caret),
+            );
+        }
+        EditOp::Transact(mut transaction) => {
+            for (_, with) in &mut transaction.replacements {
+                *with = sanitize(take(with), multiline);
+            }
+            change = Some(transaction);
         }
     }
-    if let Some((range, with)) =
-        replace.filter(|(range, with)| !(range.is_empty() && with.is_empty()))
-    {
-        let caret = caret.unwrap_or(range.start + with.len());
-        content.replace_range(range, &with);
+    let typing = edit.compose.is_none()
+        && change
+            .as_ref()
+            .is_some_and(|change| change.types_at(&selection));
+    let coalesce = typing && edit.typing;
+    let composing = change
+        .as_ref()
+        .is_some_and(|change| change.marked.is_some());
+    let mut commit = false;
+    if let Some(snapshot) = restored {
+        *content = snapshot.content;
         *layout = None;
-        selection = laid_out(layout, content, style, *wrap_width, system).select(caret, caret);
-        edit.compose = composing;
+        selection = laid_out(layout, content, style, *wrap_width, system)
+            .select(snapshot.anchor, snapshot.focus);
+        edit.compose = None;
     }
-    if (*content != before.content || compose_commit) && !history {
-        if composing_op {
+    if let Some(change) = change {
+        let mut end = None;
+        for (range, with) in change.replacements {
+            let start = boundary(content, range.start);
+            let range = start..boundary(content, range.end).max(start);
+            if range.is_empty() && with.is_empty() {
+                continue;
+            }
+            end = Some(range.start + with.len());
+            content.replace_range(range, &with);
+            *layout = None;
+        }
+        if end.is_some() || change.selection.is_some() || change.marked.is_some() {
+            let (anchor, focus) = change
+                .selection
+                .or(end.map(|end| (end, end)))
+                .unwrap_or((selection.anchor(), selection.focus()));
+            selection = laid_out(layout, content, style, *wrap_width, system)
+                .select(boundary(content, anchor), boundary(content, focus));
+            edit.compose = change
+                .marked
+                .map(|range| boundary(content, range.start)..boundary(content, range.end))
+                .filter(|range| range.start < range.end);
+            commit = !composing && edit.composition.is_some();
+        }
+    }
+    if (*content != before.content || commit) && !history {
+        if composing {
             if edit.composition.is_none() {
                 edit.composition = Some(before);
             }
         } else {
-            if compose_commit {
-                if let Some(snapshot) = edit.composition.take() {
+            if commit {
+                if let Some(snapshot) = edit.composition.take()
+                    && snapshot.content != *content
+                {
                     edit.undo.push(snapshot);
                 }
             } else if !coalesce {
@@ -313,7 +368,7 @@ fn apply(text: &mut TextData, op: EditOp, system: &mut TextSystem, clipboard: &m
             edit.redo.clear();
         }
     }
-    edit.typing = typing && !compose_commit;
+    edit.typing = typing && !commit;
     (edit.selection, edit.stale) = (selection, false);
     if let Some(signal) = edit.selection_signal.filter(|signal| signal.is_alive()) {
         signal.set_if_changed(selection.range());
@@ -476,18 +531,10 @@ impl Tree {
 
     pub(crate) fn caret_area(&self) -> Option<Rect> {
         let id = self.focused?;
-        let element = self.elements.get(id)?;
-        let text = element.kind.text()?;
+        let text = self.elements.get(id)?.kind.text()?;
         let (edit, layout) = (text.edit.as_ref()?, text.layout.as_ref()?);
         let caret = layout.caret(edit.current(layout, &text.content), CARET_WIDTH);
-        let origin = element.bounds.origin
-            + text.inset
-            + Point::new(caret.x - edit.scroll.x, caret.y - edit.scroll.y);
-        let rect = Rect {
-            origin,
-            size: Size::new(caret.width, caret.height),
-        };
-        Some(self.to_window(id, rect))
+        Some(self.text_rect(id, text, caret))
     }
 }
 
