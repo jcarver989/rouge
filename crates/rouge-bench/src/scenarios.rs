@@ -30,7 +30,10 @@ pub(crate) const SCENARIOS: &[Scenario] = &[
     ("enabled_toggle", enabled_toggle),
     ("selection_change", selection_change),
     ("idle_editor", idle_editor),
-    ("editor_typing", editor_typing),
+    ("editor_typing", || editor(EditorWork::Type, false)),
+    ("editor_typing_access", || editor(EditorWork::Type, true)),
+    ("editor_caret", || editor(EditorWork::Move, false)),
+    ("editor_caret_access", || editor(EditorWork::Move, true)),
     ("layers_animation", layers_animation),
     ("glass_scroll", || glass(1)),
     ("glass_panels", || glass(4)),
@@ -113,7 +116,12 @@ fn idle_editor() -> Staged {
     })
 }
 
-fn editor_typing() -> Staged {
+enum EditorWork {
+    Type,
+    Move,
+}
+
+fn editor(work: EditorWork, access: bool) -> Staged {
     let mut source = String::new();
     for line in 0..2000 {
         let _ = writeln!(
@@ -124,10 +132,24 @@ fn editor_typing() -> Staged {
     let view = div()
         .size_full()
         .child(editable(signal(source)).multiline().size_full().autofocus());
-    staged(view, |ui, frame| {
+    staged(view, move |ui, frame| {
+        if access {
+            ui.access_tree();
+        }
         let step = phase(frame, 200);
         if step != Step::Done {
-            ui.key_down(KeyEvent::typed("x"));
+            match work {
+                EditorWork::Type => {
+                    ui.key_down(KeyEvent::typed("x"));
+                }
+                EditorWork::Move => {
+                    ui.press(if frame.is_multiple_of(2) {
+                        "right"
+                    } else {
+                        "left"
+                    });
+                }
+            }
         }
         step
     })
