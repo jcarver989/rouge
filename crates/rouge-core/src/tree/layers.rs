@@ -153,6 +153,7 @@ impl Tree {
             self.elements[id].layers[Slot::Own as usize] = Some(Box::new(layer));
             self.sync_backing(id);
             self.mark(Dirty::Layout);
+            self.mark_access_subtree(id);
         }
         if let (Some((from, timing)), Some(layer)) = (presence.enter, self.layer_id(id, Slot::Own))
         {

@@ -1,3 +1,4 @@
+use crate::access::{AccessOp, Live, Role, Semantics};
 use crate::animation::{Keyframes, LayerProp, LayoutTransition, Timing};
 use crate::canvas::{PaintOp, TextHit};
 use crate::clipboard::{ClipboardTarget, Pasted};
@@ -48,6 +49,7 @@ pub(crate) enum Op {
     ScrollLink(u64, ScrollLinked),
     ScrollTo(Point, bool),
     LayoutTransition(LayoutTransition),
+    Access(AccessOp),
 }
 
 impl Op {
@@ -67,6 +69,7 @@ impl Op {
             Op::ScrollLink(key, link) => tree.set_scroll_link(id, key, link),
             Op::ScrollTo(offset, anchored) => tree.scroll_to(id, offset, anchored),
             Op::LayoutTransition(transition) => tree.set_layout_transition(id, transition),
+            Op::Access(op) => tree.set_access(id, op),
         }
     }
 }
@@ -553,10 +556,11 @@ impl Div {
         self.layer_prop(LayerProp::Opacity, value)
     }
 
-    pub fn on_activate(self, f: impl Fn() + 'static) -> Self {
+    pub fn on_activate(mut self, f: impl Fn() + 'static) -> Self {
         let clicked = Rc::new(f);
         let pressed = clicked.clone();
         let focus = self.focus_policy;
+        self.semantics().activates = true;
         self.unselectable()
             .cursor(Cursor::Pointer)
             .on_click(move |event| {
@@ -611,6 +615,50 @@ impl Div {
         self.bind(enabled, |enabled| {
             Op::State(Interaction::Disabled, !enabled)
         })
+    }
+
+    fn semantics(&mut self) -> &mut Semantics {
+        self.spec.extras().access.get_or_insert_default()
+    }
+
+    pub fn role(mut self, role: Role) -> Self {
+        self.semantics().role = Some(role);
+        self
+    }
+
+    pub fn heading_level(mut self, level: usize) -> Self {
+        self.semantics().node.set_level(level);
+        self.role(Role::Heading)
+    }
+
+    pub fn value_range(mut self, min: f64, max: f64) -> Self {
+        let node = &mut self.semantics().node;
+        node.set_min_numeric_value(min);
+        node.set_max_numeric_value(max);
+        self
+    }
+
+    pub fn value_step(mut self, step: f64) -> Self {
+        self.semantics().node.set_numeric_value_step(step);
+        self
+    }
+
+    pub fn live(mut self, live: Live) -> Self {
+        self.semantics().node.set_live(live);
+        self
+    }
+
+    pub fn access_hidden<U>(self, hidden: impl IntoProp<bool, U>) -> Self {
+        self.access(hidden, AccessOp::Hidden)
+    }
+
+    pub(crate) fn access<T: 'static, U>(
+        mut self,
+        value: impl IntoProp<T, U>,
+        op: fn(T) -> AccessOp,
+    ) -> Self {
+        self.semantics();
+        self.bind(value, move |value| Op::Access(op(value)))
     }
 
     pub fn focusable(mut self) -> Self {
@@ -890,6 +938,18 @@ impl Text {
             run_in(owner, || f(hit.map(|hit| hit.index), modifiers));
         }));
         self
+    }
+
+    pub fn role(self, role: Role) -> Self {
+        Text(self.0.role(role))
+    }
+
+    pub fn heading_level(self, level: usize) -> Self {
+        Text(self.0.heading_level(level))
+    }
+
+    pub fn access_hidden<U>(self, hidden: impl IntoProp<bool, U>) -> Self {
+        Text(self.0.access_hidden(hidden))
     }
 
     pub(crate) fn text_prop<T: 'static, U>(

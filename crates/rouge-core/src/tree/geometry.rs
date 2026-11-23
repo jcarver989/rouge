@@ -207,7 +207,7 @@ impl Tree {
         Some(Cow::Owned(parts.join("-")))
     }
 
-    fn enter(&self, id: ElementId, slot: Slot) -> Option<Affine> {
+    pub(super) fn enter(&self, id: ElementId, slot: Slot) -> Option<Affine> {
         let element = &self.elements[id];
         let pose = self.layers.pose(element.layer(slot)?.id)?;
         Some(pose.transform(element.bounds))

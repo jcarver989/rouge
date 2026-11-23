@@ -414,6 +414,7 @@ impl Tree {
         let on_change = text.edit.as_ref().and_then(|edit| edit.on_change.clone());
         if changed.is_some() {
             self.invalidate_layout(id);
+            self.mark_access(id);
         }
         self.mark_element(
             id,

@@ -164,7 +164,13 @@ impl Tree {
             bottom: border.bottom,
             left: border.left,
         };
-        element.bounds = Rect { origin, size };
+        let bounds = Rect { origin, size };
+        if let Some(access) = &mut self.access
+            && element.bounds != bounds
+        {
+            access.dirty.push(id);
+        }
+        element.bounds = bounds;
         let within = |space: &Space| Rect {
             origin: origin - space.origin,
             size,

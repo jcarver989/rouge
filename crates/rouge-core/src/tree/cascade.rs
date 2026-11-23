@@ -124,6 +124,11 @@ impl Tree {
         let grouped = element
             .extras()
             .is_some_and(|extras| extras.group.is_some());
+        match which {
+            Interaction::Selected | Interaction::Checked => self.mark_access(id),
+            Interaction::Disabled => self.mark_access_subtree(id),
+            _ => {}
+        }
         if grouped || matches!(which, Interaction::Disabled) {
             self.refresh_variant_subtree(id);
         } else {
@@ -198,6 +203,7 @@ impl Tree {
         let element = &self.elements[id];
         let new = element.effective_style();
         let text = !TextProperties::same(new, old);
+        let reshown = new.hidden != old.hidden || new.invisible != old.invisible;
         let dirty = if relayout {
             Dirty::Layout
         } else if new.same_box(old) {
@@ -218,6 +224,9 @@ impl Tree {
         }
         if text {
             self.refresh_text_subtree(id);
+        }
+        if reshown {
+            self.mark_access_subtree(id);
         }
     }
 

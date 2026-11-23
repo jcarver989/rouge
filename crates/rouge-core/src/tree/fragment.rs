@@ -242,6 +242,7 @@ impl Tree {
             return;
         }
         self.mark_layer(parent, true);
+        self.mark_access(parent);
         let range = start..start + count;
         let removed: Vec<_> = self.elements[parent].children.drain(range).collect();
         self.invalidate_layout(parent);

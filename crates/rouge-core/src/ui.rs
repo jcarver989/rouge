@@ -1,3 +1,4 @@
+use crate::access::{Action, ActionData, ActionRequest, Decrement, Increment, TreeUpdate};
 use crate::clipboard::Clipboard;
 use crate::compositor::{Commit, CompositorEvent, LayerId};
 use crate::event::{
@@ -10,10 +11,11 @@ use crate::presentation::{InputKind, Presentation, Presented, WidthClass};
 use crate::style::Dirty;
 use crate::text::TextSystem;
 use crate::theme::Theme;
+use crate::tree::edit::EditOp;
 use crate::tree::{
     ActionHandler, ElementId, Event, FrameStats, Listeners, On, PaintCache, Tree, emit,
 };
-use crate::view::{BuildCx, Queue, View};
+use crate::view::{BuildCx, Patch, Queue, View};
 use crate::window::{Appearance, EditAction, Menu, MenuItem, Sent, WindowCommand, WindowHandle};
 use rouge_reactive::{
     ReadSignal, Scope, Signal, batch, expect_context, poll_tasks, provide_context, signal, stats,
@@ -609,6 +611,77 @@ impl Ui {
     pub fn accepts_text(&self) -> bool {
         let path = self.tree.focus_path();
         self.tree.focused().is_some() && !self.tree.listeners(&path, On::Ime).is_empty()
+    }
+
+    pub fn accessibility_tree(&mut self) -> TreeUpdate {
+        self.tree.access_tree(self.cache.scale)
+    }
+
+    pub fn accessibility_update(&mut self) -> Option<TreeUpdate> {
+        self.tree.access_update(self.cache.scale)
+    }
+
+    pub fn stop_accessibility(&mut self) {
+        self.tree.stop_access();
+    }
+
+    pub fn accessibility_action(&mut self, request: ActionRequest) -> bool {
+        self.flush();
+        let Some((id, path)) = self.tree.access_target(request.target_node) else {
+            return false;
+        };
+        match (request.action, request.data) {
+            (Action::Focus, _) => {
+                self.invoke_tree(|tree| tree.set_focus(Some(id), true));
+                self.tree.focused() == Some(id)
+            }
+            (Action::Blur, _) => {
+                self.clear_focus();
+                true
+            }
+            (Action::Click, _) => {
+                let clicked = !self.tree.listeners(&path, On::Click).is_empty();
+                let position = self.tree.window_bounds(id).center();
+                self.clicks = None;
+                self.dispatch(&path, On::Click, position, PointerButton::Primary);
+                clicked
+            }
+            (Action::Increment, _) => self.invoke_on(&path, &Increment),
+            (Action::Decrement, _) => self.invoke_on(&path, &Decrement),
+            (Action::SetValue, Some(ActionData::Value(value))) => {
+                self.edit(id, [EditOp::SelectAll, EditOp::Insert(value.into())])
+            }
+            (Action::ReplaceSelectedText, Some(ActionData::Value(value))) => {
+                self.edit(id, [EditOp::Insert(value.into())])
+            }
+            (Action::ScrollIntoView, _) => {
+                self.invoke_tree(|tree| tree.reveal(id));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn invoke_tree(&mut self, f: impl FnOnce(&mut Tree)) {
+        let tree = &mut self.tree;
+        self.scope.run(|| batch(|| f(tree)));
+        self.flush();
+    }
+
+    fn invoke_on(&mut self, path: &[ElementId], action: &dyn Any) -> bool {
+        let handlers = self.tree.action_handlers(path, action.type_id());
+        self.invoke_action(action, &handlers)
+    }
+
+    fn edit<const N: usize>(&mut self, id: ElementId, ops: [EditOp; N]) -> bool {
+        if !self.tree.accepts_value(id) {
+            return false;
+        }
+        for op in ops {
+            self.queue.push(Patch::Edit(id, op));
+        }
+        self.flush();
+        true
     }
 
     pub fn binding_for<T: Any>(&self) -> Option<Chord> {

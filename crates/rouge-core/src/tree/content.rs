@@ -87,6 +87,7 @@ impl Tree {
             self.invalidate_layout(id);
         }
         self.mark_element(id, dirty);
+        self.mark_access(id);
     }
 
     pub(crate) fn update_text_prop(&mut self, id: ElementId, op: TextOp) {

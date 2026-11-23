@@ -1,3 +1,4 @@
+use crate::access::Semantics;
 use crate::animation::{Pose, Timing};
 use crate::canvas::{CanvasData, HitListener};
 use crate::clipboard::{Clipboard, MemoryClipboard};
@@ -11,6 +12,7 @@ use crate::surface::{StatusSink, SurfaceSpec};
 use crate::text::TextStats;
 use crate::theme::{Palette, Theme};
 use crate::view::Queue;
+use access::Access;
 use events::Listener;
 use focus::ReplacedFocus;
 use fragment::Fragment;
@@ -27,6 +29,7 @@ use std::ops::Sub;
 use std::rc::Rc;
 use taffy::{Position, Rect as Sides, Style as Layout};
 
+mod access;
 mod cascade;
 mod content;
 pub(crate) mod edit;
@@ -164,6 +167,7 @@ pub(crate) struct Extras {
     pub selection: Option<Box<SelectionScope>>,
     pub select_row: Option<usize>,
     pub row_source: Option<RowSource>,
+    pub access: Option<Box<Semantics>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -291,6 +295,7 @@ pub struct FrameStats {
     pub style_resolutions: u64,
     pub elements_created: u64,
     pub elements_removed: u64,
+    pub access_nodes: u64,
     pub layers: usize,
     pub elements: usize,
     pub text: TextStats,
@@ -310,6 +315,7 @@ impl Sub for FrameStats {
             style_resolutions: self.style_resolutions - earlier.style_resolutions,
             elements_created: self.elements_created - earlier.elements_created,
             elements_removed: self.elements_removed - earlier.elements_removed,
+            access_nodes: self.access_nodes - earlier.access_nodes,
             text: self.text - earlier.text,
             reactive: self.reactive - earlier.reactive,
             ..self
@@ -354,6 +360,7 @@ pub(crate) struct Tree {
     window_visible: bool,
     selection_scopes: Vec<ElementId>,
     selection_drag: Option<SelectionDrag>,
+    access: Option<Box<Access>>,
 }
 
 impl Tree {
@@ -395,6 +402,7 @@ impl Tree {
             window_visible: true,
             selection_scopes: Vec::new(),
             selection_drag: None,
+            access: None,
         };
         tree.root = tree.create_element(ElementSpec {
             layout: root_layout(size),
@@ -638,6 +646,7 @@ impl Tree {
             self.refresh_variant_subtree(child);
             self.refresh_text_subtree(child);
             self.sync_backing_subtree(child);
+            self.mark_access_subtree(child);
         }
         self.mark_layer(parent, true);
         self.mark(Dirty::Layout);
@@ -648,6 +657,7 @@ impl Tree {
             return;
         };
         self.mark_layer(parent, true);
+        self.mark_access(parent);
         self.elements[parent].children.retain(|c| *c != child);
         self.invalidate_layout(parent);
         self.mark(Dirty::Layout);

@@ -47,6 +47,11 @@ impl Editable {
         self.text.0 = self.text.0.autofocus();
         self
     }
+
+    pub fn access_label<U>(mut self, label: impl IntoProp<String, U>) -> Self {
+        self.text.0 = self.text.0.access_label(label);
+        self
+    }
     pub fn selection(mut self, selection: Signal<Range<usize>>) -> Self {
         self.state.selection_signal = Some(selection);
         self
