@@ -1,9 +1,33 @@
+use rouge_core::access::{Action, Role};
 use rouge_core::testing::TestResult;
 use rouge_core::view;
 use rouge_core::{InputKind, Point, Styled, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::wheel;
+
+#[test]
+fn a_wheel_is_a_list_box_that_names_its_choice() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let hour = signal(1usize);
+    let mut ui = component_test()
+        .size(200.0, 240.0)
+        .build(move || div().child(wheel(hour, ["One", "Two", "Three"]).access_label("Hour")));
+    ui.run(0.5);
+    assert_eq!(
+        ui.access_node(Role::ListBox, "Hour")?.value.as_deref(),
+        Some("Two")
+    );
+    assert_eq!(
+        ui.access_node(Role::ListBoxOption, "Two")?.selected,
+        Some(true)
+    );
+    assert!(ui.perform(Role::ListBox, "Hour", Action::Increment)?);
+    assert_eq!(hour.get(), 2);
+    assert!(ui.perform(Role::ListBoxOption, "One", Action::Click)?);
+    assert_eq!(hour.get(), 0);
+    Ok(())
+}
 
 #[test]
 fn a_wheel_holds_its_choice_in_the_middle_row_and_turns_by_drag_tap_and_arrows() -> TestResult {

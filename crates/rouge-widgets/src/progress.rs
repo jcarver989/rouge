@@ -1,6 +1,7 @@
 use crate::tokens::{ICON_SIZE, ICON_SIZE_LARGE, MotionScale, Radius};
 use crate::util::chrome;
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::{
     BuildCx, DelegateStyle, Div, Ease, Fill, IntoProp, Keyframes, Path, Point, Prop, StyleDelta,
     Styled, Theme, View, auto, canvas, component, div, pct, view,
@@ -47,9 +48,12 @@ impl View for Separator {
 
 #[component]
 pub fn progress<T>(value: impl IntoProp<f32, T>) -> Div {
-    let value = value.into_prop();
+    let value = std::rc::Rc::new(value.into_prop());
+    let share = value.clone();
     view! {
-        <div h=4.0 min_w=40.0 rounded=Radius::Full bg=Role::SurfaceSelected overflow_hidden>
+        <div role=access::Role::ProgressIndicator value_range=(0.0, 1.0)
+             numeric_value={move || f64::from(share.get().clamp(0.0, 1.0))}
+             h=4.0 min_w=40.0 rounded=Radius::Full bg=Role::SurfaceSelected overflow_hidden>
             <div h_full bg=Role::Accent w={move || pct(value.get().clamp(0.0, 1.0) * 100.0)}/>
         </div>
     }
@@ -163,7 +167,8 @@ impl View for Spinner {
             .ease(Ease::Linear)
             .repeat();
         let rotor = view! {
-            <div flex_none size=ICON_SIZE_LARGE test_id?=self.test_id>{ring}</div>
+            <div role=access::Role::ProgressIndicator access_label="Loading"
+                 flex_none size=ICON_SIZE_LARGE test_id?=self.test_id>{ring}</div>
         };
         let rotor = self.style.apply(rotor);
         if MotionScale::current() == MotionScale::Full {

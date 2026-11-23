@@ -1,22 +1,37 @@
 mod common;
 
 use common::builder;
-use rouge_core::testing::TestResult;
+use rouge_core::access::{Action, Role};
+use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::view;
 use rouge_core::{Point, PointerButton, Rect, Styled, div};
-use rouge_reactive::{Runtime, signal};
+use rouge_reactive::{Runtime, Signal, signal};
 use rouge_widgets::slider;
 use rouge_widgets::testing::component_test;
 
 #[test]
+fn a_slider_reports_its_value_and_steps_by_accessibility_actions() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, value) = stepped_slider(40.0);
+    let node = ui.access_node(Role::Slider, "Volume")?;
+    assert_eq!(node.numeric_value, Some(40.0));
+    assert_eq!(node.value.as_deref(), Some("40%"));
+    assert!(ui.perform(Role::Slider, "Volume", Action::Increment)?);
+    assert_eq!(value.get(), 50.0);
+    assert!(ui.perform(Role::Slider, "Volume", Action::Decrement)?);
+    assert!(ui.perform(Role::Slider, "Volume", Action::Decrement)?);
+    assert_eq!(value.get(), 30.0);
+    assert_eq!(
+        ui.access_node(Role::Slider, "Volume")?.value.as_deref(),
+        Some("30%")
+    );
+    Ok(())
+}
+
+#[test]
 fn slider_follows_the_pointer_snaps_to_steps_and_takes_arrow_keys() {
     let _entered = Runtime::new().enter();
-    let value = signal(0.0f32);
-    let mut ui = builder().build(move || {
-        div()
-            .p(10.0)
-            .child(slider(value).range((0.0, 100.0)).step(10.0).w(216.0))
-    });
+    let (mut ui, value) = stepped_slider(0.0);
     ui.click_at(118.0, 18.0);
     assert_eq!(value.get(), 50.0, "the middle of the track");
     ui.pointer_moved(Point::new(118.0, 18.0));
@@ -102,4 +117,17 @@ fn a_formatted_slider_shows_a_value_tip_while_hovered_or_dragged() -> TestResult
     assert!(ui.bounds_of("volume-tip").is_none());
     assert_eq!(ui.compositor_frames(1.0)?, 0);
     Ok(())
+}
+
+fn stepped_slider(initial: f32) -> (TestUi, Signal<f32>) {
+    let value = signal(initial);
+    let ui = builder().build(move || {
+        view! {
+            <div p=10.0>
+                <slider value=value range={(0.0, 100.0)} step=10.0 w=216.0 access_label="Volume"
+                     format={|v| format!("{v:.0}%")}/>
+            </div>
+        }
+    });
+    (ui, value)
 }

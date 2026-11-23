@@ -1,16 +1,18 @@
 use crate::snap::Snap;
 use crate::tokens::Radius;
 use crate::typography::UiStyles;
-use crate::util::{TestId, chrome};
+use crate::util::{Name, TestId, chrome, field_name, labelled};
+use rouge_core::access;
 use rouge_core::{
-    BuildCx, DelegateStyle, DragAxis, Fill, Role, StyleDelta, Styled, View, component, div, text,
-    view,
+    Apply, BuildCx, DelegateStyle, Div, DragAxis, Fill, Role, StyleDelta, Styled, View, component,
+    div, text, view,
 };
 use rouge_reactive::Signal;
 
 pub struct Wheel {
     selected: Signal<usize>,
     labels: Vec<String>,
+    name: Name,
     test_id: Option<String>,
     style: StyleDelta,
 }
@@ -23,12 +25,14 @@ pub fn wheel<T: Into<String>>(
     Wheel {
         selected,
         labels: labels.into_iter().map(Into::into).collect(),
+        name: None,
         test_id: None,
         style: StyleDelta::default(),
     }
 }
 
 chrome!(Wheel);
+labelled!(Wheel);
 
 impl View for Wheel {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -40,6 +44,7 @@ impl View for Wheel {
             lead: MIDDLE * ROW,
             reach: f32::INFINITY,
         };
+        let spoken = self.labels.clone();
         let rows: Vec<_> = self
             .labels
             .into_iter()
@@ -53,7 +58,9 @@ impl View for Wheel {
                     })
                 };
                 view! {
-                    <div test_id?=id.part(format_args!("row-{index}")) flex flex_none items_center justify_center h=ROW
+                    <div test_id?=id.part(format_args!("row-{index}")) role=access::Role::ListBoxOption
+                         is_selected={move || selected.get() == index}
+                         flex flex_none items_center justify_center h=ROW
                          on_click={move |_| { selected.set_if_changed(index); }}>
                         <text reading no_wrap color=ink>{label}</text>
                     </div>
@@ -68,6 +75,10 @@ impl View for Wheel {
             <div test_id?=id relative flex_none h={ROWS * ROW} min_w=ROW overflow_hidden rounded=Radius::Control/>
         };
         let (root, y) = snap.track(root, || ROW, || true);
+        let root = root
+            .when_some(field_name(self.name, Some("Picker")), Div::access_label)
+            .role(access::Role::ListBox)
+            .access_value(move || spoken.get(selected.get()).cloned().unwrap_or_default());
         let track = view! { <div flex col translate_y=y>{rows}</div> };
         self.style.apply(root.child(band).child(track)).build(cx);
     }

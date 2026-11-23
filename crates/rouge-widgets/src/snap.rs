@@ -1,5 +1,5 @@
 use crate::tokens::Pace;
-use crate::util::focus_frame;
+use crate::util::{focus_frame, step_actions};
 use rouge_core::{Div, DragAxis, DragPhase, Key, Motion, Point, Timing, motion};
 use rouge_reactive::{Signal, effect, signal};
 
@@ -71,8 +71,12 @@ impl Snap {
             DragAxis::Horizontal => (Key::ArrowLeft, Key::ArrowRight),
             DragAxis::Vertical => (Key::ArrowUp, Key::ArrowDown),
         };
+        let step_by = move |by: i8| {
+            let current = selected.get_untracked().min(last);
+            selected.set_if_changed(current.saturating_add_signed(isize::from(by)).min(last));
+        };
         let root = dragged(
-            root.focusable(),
+            step_actions(root.focusable(), step_by),
             axis,
             at,
             move || (rest(last), rest(0)),
@@ -87,15 +91,17 @@ impl Snap {
             },
         )
         .on_key_down(move |event| {
-            let current = selected.get_untracked().min(last);
-            let to = match &event.key {
-                key if *key == forward => (current + 1).min(last),
-                key if *key == back => current.saturating_sub(1),
-                Key::Home => 0,
-                Key::End => last,
+            match &event.key {
+                key if *key == forward => step_by(1),
+                key if *key == back => step_by(-1),
+                Key::Home => {
+                    selected.set_if_changed(0);
+                }
+                Key::End => {
+                    selected.set_if_changed(last);
+                }
                 _ => return,
-            };
-            selected.set_if_changed(to);
+            }
             event.stop_propagation();
         });
         (focus_frame(root), at)

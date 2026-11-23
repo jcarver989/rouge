@@ -1,3 +1,4 @@
+use rouge_core::access::{Action, Role};
 use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::view;
 use rouge_core::{InputKind, Point, Styled, div};
@@ -5,6 +6,25 @@ use rouge_reactive::{Runtime, Signal, signal};
 use rouge_widgets::testing::component_test;
 use rouge_widgets::tokens::Space;
 use rouge_widgets::{page_dots, pager};
+
+#[test]
+fn a_pager_reports_its_page_and_turns_by_accessibility_actions() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let (mut ui, page) = cards();
+    ui.run(0.5);
+    let node = ui.access_node(Role::Slider, "Pages")?;
+    assert_eq!(node.value.as_deref(), Some("Page 1 of 3"));
+    assert!(ui.perform(Role::Slider, "Pages", Action::Increment)?);
+    assert_eq!(page.get(), 1);
+    assert!(ui.perform(Role::Button, "Page 3", Action::Click)?);
+    assert_eq!(page.get(), 2);
+    ui.run(0.5);
+    assert_eq!(
+        ui.access_node(Role::Slider, "Pages")?.value.as_deref(),
+        Some("Page 3 of 3")
+    );
+    Ok(())
+}
 
 #[test]
 fn pages_snap_under_a_swipe_one_at_a_time_and_stop_at_the_ends() -> TestResult {

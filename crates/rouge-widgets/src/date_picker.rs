@@ -111,9 +111,9 @@ impl View for DatePicker {
         let years = (first..=last).map(|year| year.to_string());
         let wheels = view! {
             <div flex gap=Space::X1>
-                {wheel(month, MONTHS).when_some(id.part("month"), Wheel::test_id).flex_1()}
-                {wheel(day, days).when_some(id.part("day"), Wheel::test_id).w(DAY_WIDTH)}
-                {wheel(year, years).when_some(id.part("year"), Wheel::test_id).w(YEAR_WIDTH)}
+                {wheel(month, MONTHS).access_label("Month").when_some(id.part("month"), Wheel::test_id).flex_1()}
+                {wheel(day, days).access_label("Day").when_some(id.part("day"), Wheel::test_id).w(DAY_WIDTH)}
+                {wheel(year, years).access_label("Year").when_some(id.part("year"), Wheel::test_id).w(YEAR_WIDTH)}
             </div>
         };
         let root = wheels.when_some(id, Div::test_id);

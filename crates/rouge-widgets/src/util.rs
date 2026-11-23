@@ -4,6 +4,7 @@ use crate::tokens::{
     CONTROL_HEIGHT_LARGE, GROUP_HEIGHT, HAIRLINE, Hold, PRESS_SCALE, Pace, Radius,
 };
 use crate::typography::UiStyles;
+use rouge_core::access::{Decrement, Increment};
 use rouge_core::view;
 use rouge_core::{
     Color, Cursor, Div, Editable, Fill, FocusHandle, LayoutTransition, Prop, Rect, Role, Styled,
@@ -254,6 +255,11 @@ pub(crate) struct FieldLabel(pub(crate) String);
 pub(crate) fn field_name(name: Name, fallback: Option<&str>) -> Name {
     name.or_else(|| use_context::<FieldLabel>().map(|label| Prop::Static(label.0)))
         .or_else(|| fallback.map(|fallback| Prop::Static(fallback.to_owned())))
+}
+
+pub(crate) fn step_actions(root: Div, step: impl Fn(i8) + Copy + 'static) -> Div {
+    root.on_action(move |_: &Increment| step(1))
+        .on_action(move |_: &Decrement| step(-1))
 }
 
 macro_rules! labelled {

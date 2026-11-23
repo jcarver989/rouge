@@ -2,8 +2,9 @@ use crate::material::{Material, MaterialExt};
 use crate::popover::POPPED;
 use crate::tokens::{GRAB_SCALE, Pace, Radius, Space};
 use crate::typography::UiStyles;
-use crate::util::{by_touch, chrome, focus_ring};
+use crate::util::{Name, by_touch, chrome, field_name, focus_ring, labelled, step_actions};
 use rouge_core::Role;
+use rouge_core::access;
 use rouge_core::{
     Apply, BuildCx, Color, Cursor, DelegateStyle, Div, Key, PointerButton, StyleDelta, Styled,
     View, component, div, pct, show, text, view,
@@ -23,6 +24,7 @@ pub struct Slider {
     range: (f32, f32),
     step: Option<f32>,
     format: Option<Format>,
+    name: Name,
     test_id: Option<String>,
     style: StyleDelta,
 }
@@ -36,6 +38,7 @@ pub fn slider(value: Signal<f32>) -> Slider {
         range: (0.0, 1.0),
         step: None,
         format: None,
+        name: None,
         test_id: None,
         style: StyleDelta::default(),
     }
@@ -59,6 +62,7 @@ impl Slider {
 }
 
 chrome!(Slider);
+labelled!(Slider);
 
 impl View for Slider {
     fn build(self, cx: &mut BuildCx<'_>) {
@@ -70,6 +74,7 @@ impl View for Slider {
             self.format,
             self.test_id.as_deref(),
         );
+        let root = root.when_some(field_name(self.name, None), Div::access_label);
         style
             .apply(root.when_some(self.test_id, Div::test_id))
             .build(cx);
@@ -113,6 +118,7 @@ fn slider_root(
              border_color=Role::Border left={move || pct(fraction() * 100.0)}
              scale={move || if grabbed.get() { GRAB_SCALE } else { 1.0 }} transition=Pace::Press/>
     };
+    let spoken = format.clone();
     let tip = format.map(|format| {
         let tip_id = test_id.map(|id| format!("{id}-tip"));
         let bubble = view! {
@@ -145,8 +151,19 @@ fn slider_root(
         <div relative flex items_center h=height min_w=40.0 rounded=Radius::Full border=BORDER
              border_color=Color::TRANSPARENT/>
     };
-    focus_ring(root)
+    let root = root.when_some(spoken, |root, format| {
+        root.access_value(move || format(value.get()))
+    });
+    let set = move |next| {
+        value.set_if_changed(snap(next));
+    };
+    let step_by = move |by| set(value.get_untracked() + f32::from(by) * nudge);
+    step_actions(focus_ring(root), step_by)
         .focusable()
+        .role(access::Role::Slider)
+        .numeric_value(move || f64::from(value.get()))
+        .value_range(f64::from(min), f64::from(max))
+        .value_step(f64::from(nudge))
         .cursor(Cursor::Pointer)
         .on_hover(move |inside| hovered.set(inside))
         .on_press(move |down| grabbed.set(down))
@@ -162,15 +179,13 @@ fn slider_root(
             place(x + event.translation.x, width);
         })
         .on_key_down(move |event| {
-            let current = value.get_untracked();
-            let next = match event.key {
-                Key::ArrowRight | Key::ArrowUp => current + nudge,
-                Key::ArrowLeft | Key::ArrowDown => current - nudge,
-                Key::Home => min,
-                Key::End => max,
+            match event.key {
+                Key::ArrowRight | Key::ArrowUp => step_by(1),
+                Key::ArrowLeft | Key::ArrowDown => step_by(-1),
+                Key::Home => set(min),
+                Key::End => set(max),
                 _ => return,
-            };
-            value.set_if_changed(snap(next));
+            }
             event.stop_propagation();
         })
         .child(track.child(fill))

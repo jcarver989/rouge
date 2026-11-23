@@ -1,9 +1,10 @@
 use crate::snap::Snap;
 use crate::tokens::{Pace, Radius, Space};
-use crate::util::{TestId, chrome};
+use crate::util::{Name, TestId, chrome, labelled};
+use rouge_core::access;
 use rouge_core::{
-    AnyView, BuildCx, DelegateStyle, Div, DragAxis, Fill, LayoutTransition, Role, Size, StyleDelta,
-    Styled, View, component, div, view,
+    AnyView, BuildCx, DelegateStyle, Div, DragAxis, Fill, LayoutTransition, Prop, Role, Size,
+    StyleDelta, Styled, View, component, div, view,
 };
 use rouge_reactive::{Signal, signal};
 
@@ -11,6 +12,7 @@ pub struct Pager {
     page: Signal<usize>,
     pages: Vec<AnyView>,
     peek: Space,
+    name: Name,
     test_id: Option<String>,
     style: StyleDelta,
 }
@@ -21,6 +23,7 @@ pub fn pager(page: Signal<usize>) -> Pager {
         page,
         pages: Vec::new(),
         peek: Space::X4,
+        name: None,
         test_id: None,
         style: StyleDelta::default(),
     }
@@ -44,10 +47,12 @@ impl Pager {
 }
 
 chrome!(Pager);
+labelled!(Pager);
 
 impl View for Pager {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (id, peek, size) = (self.test_id, self.peek.px(), signal(Size::ZERO));
+        let (page, count) = (self.page, self.pages.len());
         let snap = Snap {
             axis: DragAxis::Horizontal,
             selected: self.page,
@@ -74,6 +79,16 @@ impl View for Pager {
             move || width() + GAP.px(),
             move || size.get().width > 0.0,
         );
+        let name = self
+            .name
+            .unwrap_or_else(|| Prop::Static("Pages".to_owned()));
+        let root = root
+            .access_label(name)
+            .role(access::Role::Slider)
+            .numeric_value(move || (page.get().min(count.saturating_sub(1)) + 1) as f64)
+            .value_range(1.0, count.max(1) as f64)
+            .value_step(1.0)
+            .access_value(move || format!("Page {} of {count}", page.get() + 1));
         let track = view! { <div flex gap=GAP px=self.peek translate_x=x>{pages}</div> };
         self.style.apply(root.child(track)).build(cx);
     }
@@ -89,7 +104,8 @@ pub fn page_dots(page: Signal<usize>, count: usize) -> Div {
                  layout_transition=LayoutTransition::new(Pace::Move).size()/>
         };
         view! {
-            <div test_id="page-dot" flex items_center justify_center h=DOT_TARGET on_click={move |_| { page.set_if_changed(index); }}>
+            <div test_id="page-dot" role=access::Role::Button access_label={format!("Page {}", index + 1)}
+                 flex items_center justify_center h=DOT_TARGET on_click={move |_| { page.set_if_changed(index); }}>
                 {dot}
             </div>
         }
