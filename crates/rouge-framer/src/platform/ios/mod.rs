@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use xshell::{Cmd, cmd};
 
-const SUPPORTED: (u32, u32) = (15, 0);
+const SUPPORTED: (u32, u32) = (17, 0);
 const XCODE_INFO: [&str; 3] = [
     "UIDeviceFamily",
     "MinimumOSVersion",
@@ -74,7 +74,7 @@ impl Ios {
     pub fn new(destination: TestFlight) -> Self {
         Self {
             destination,
-            minimum_os: "16.0".into(),
+            minimum_os: "17.0".into(),
             devices: vec![Device::Phone, Device::Pad],
             orientations: None,
             bundle: Bundle::default(),

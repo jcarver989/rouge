@@ -308,8 +308,8 @@ fn rejects_platform_options_rouge_cannot_build() {
         (
             RougePublish::new(APP_ID)
                 .icon("icon.png")
-                .ios(ios().minimum_os("14.0")),
-            "iOS 15.0",
+                .ios(ios().minimum_os("16.4")),
+            "iOS 17.0",
         ),
         (
             RougePublish::new(APP_ID)
