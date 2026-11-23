@@ -236,7 +236,7 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 - Rouge does not support Windows.
 - On Android, text comes from key events only. Input methods that compose text, autocorrect and swipe typing do not work yet.
 - Rouge draws all widgets itself. The widgets do not look like the native widgets of the platform.
-- Accessibility is not available yet.
+- Accessibility is at an early stage. On macOS and Linux a screen reader can read the element tree and operate the widgets, which declare roles, names and states. Text fields report their value but not the caret. The browser and Android have no accessibility.
 - Color emoji are not available yet.
 
 For the full design and the list of planned work, read [design.md](design.md).
