@@ -1,3 +1,6 @@
+#[allow(unsafe_code)]
+mod text_input;
+
 use super::Platform;
 use super::native::{UserEvent, WinitPlatform, run};
 use crate::app::{App, AppError};
@@ -33,28 +36,30 @@ impl Platform for Ios {
     const MOBILE: bool = true;
     const MENU_BAR: bool = false;
 
-    fn run(app: App, options: Self::Options) -> Result<(), AppError> {
-        run(app, options)
+    fn run(app: App, _options: Self::Options) -> Result<(), AppError> {
+        run(app)
     }
 
     #[cfg(feature = "open-url")]
     fn open_url(url: &str) -> Result<(), IoError> {
         open::that(url)
     }
+
+    #[cfg(feature = "persist")]
+    fn default_config_dir(name: &str) -> Option<PathBuf> {
+        home_dir().map(|home| home.join("Library/Application Support").join(name))
+    }
 }
 
 impl WinitPlatform for Ios {
+    type Input = text_input::TextInput;
+
     fn new(_menus: &[Menu], _waker: &EventLoopProxy<UserEvent>) -> Result<Self, AppError> {
         Ok(Ios)
     }
 
     fn clipboard() -> impl Clipboard + 'static {
         IosClipboard::new()
-    }
-
-    #[cfg(feature = "persist")]
-    fn default_config_dir(name: &str) -> Option<PathBuf> {
-        home_dir().map(|home| home.join("Library/Application Support").join(name))
     }
 
     fn appearance(window: &Window) -> Appearance {

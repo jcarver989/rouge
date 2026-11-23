@@ -55,8 +55,13 @@ winit = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6.3"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSString"] }
-objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "UIImage", "UIInterface", "UIPasteboard", "UIResponder", "UITraitCollection", "UIView"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSObjCRuntime", "NSRange", "NSString"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "std", "objc2-core-foundation", "NSLayoutAnchor", "NSLayoutConstraint", "NSText", "UIGeometry", "UIImage", "UIInterface",
+    "UIKeyboardLayoutGuide", "UILayoutGuide", "UIPasteboard", "UIResponder", "UITextInput", "UITextInputTraits",
+    "UITrackingLayoutGuide", "UITraitCollection", "UIView",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { workspace = true, features = ["webgl"] }
