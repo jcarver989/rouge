@@ -3,7 +3,7 @@ mod common;
 use common::{builder, handheld_test};
 use rouge_core::testing::{TestResult, TestUi, counter};
 use rouge_core::view;
-use rouge_core::{Color, IntoChord, Point, Rect, Role, Size, Styled, Theme, div, show};
+use rouge_core::{Color, IntoChord, Point, Rect, Role, Size, Styled, Theme, div, show, text};
 use rouge_reactive::{Runtime, signal};
 use rouge_theme::UiPalette;
 use rouge_widgets::testing::component_test;
@@ -213,6 +213,52 @@ fn any_view_takes_an_optional_hint_and_none_adds_nothing() {
         ui.wait_until(|ui| shown(ui) > idle),
         "the hinted view shows one"
     );
+}
+
+#[test]
+fn a_tooltip_or_popover_allowed_to_shrink_truncates_its_target() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = builder().build(|| {
+        let label = |id: &str| {
+            div()
+                .test_id(id)
+                .min_w(0.0)
+                .overflow_hidden()
+                .child(text("A label far too long for the row it sits in").no_wrap())
+        };
+        let fixed = |id: &str| div().test_id(id).flex_none().w(60.0).h(20.0);
+        let row = |id: &str| div().test_id(id).w(200.0).flex();
+        div()
+            .size_full()
+            .child(
+                row("hinted")
+                    .child(label("hinted-label").tooltip("Helpful").min_w(0.0))
+                    .child(fixed("hinted-fixed").tooltip("Helpful")),
+            )
+            .child(
+                row("popped")
+                    .child(popover(signal(false), label("popped-label"), div).min_w(0.0))
+                    .child(popover(signal(false), fixed("popped-fixed"), div)),
+            )
+    });
+    for row in ["hinted", "popped"] {
+        let [label, fixed] = ["label", "fixed"].map(|part| ui.rect_of(&format!("{row}-{part}")));
+        let (label, fixed) = (label?, fixed?);
+        assert_eq!(
+            fixed.size.width, 60.0,
+            "{row}: a rigid target keeps its size"
+        );
+        assert_eq!(
+            label.size.width, 140.0,
+            "{row}: a shrinkable target takes what is left"
+        );
+        assert_eq!(
+            fixed.origin.x,
+            label.max().x,
+            "{row}: and stays clear of its neighbour"
+        );
+    }
+    Ok(())
 }
 
 #[test]

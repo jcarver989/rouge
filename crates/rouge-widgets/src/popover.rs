@@ -138,7 +138,7 @@ pub(crate) fn popup(
 
 fn anchored(target: impl View) -> (Div, Signal<Rect>) {
     let anchor = signal(Rect::ZERO);
-    (div().flex_none().track_bounds(anchor).child(target), anchor)
+    (div().track_bounds(anchor).child(target), anchor)
 }
 
 pub struct Popover {
