@@ -283,7 +283,7 @@ fn rejects_platform_options_rouge_cannot_build() {
     for (bad, reason) in [
         (
             RougePublish::new(APP_ID).android(Android::new(PlayInternal).min_sdk(24)),
-            "API level 28",
+            "API level 30",
         ),
         (
             RougePublish::new(APP_ID).android(Android::new(PlayInternal).target_sdk(27)),
@@ -417,19 +417,30 @@ fn generates_a_gradle_project_that_builds_the_rust_library()
         "namespace 'com.example.app'",
         "compileSdk { version = release(37) }",
         "ndkVersion '28.2.13676358'",
-        "minSdk 28",
+        "minSdk 30",
         "targetSdk 36",
         "env('APP_NAME', 'It\\'s an app')",
         "env('APP_TARGET', 'fixture-app')",
-        "'cargo', 'ndk', '-t', 'arm64-v8a', '-P', '28'",
+        "'cargo', 'ndk', '-t', 'arm64-v8a', '-P', '30'",
         "'--lib', '--package', 'fixture-app']",
         "from '../icon.png'",
+        "implementation 'androidx.games:games-activity:4.4.0'",
+        "proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'",
     ] {
         assert!(gradle.contains(expected), "missing {expected} in {gradle}");
     }
     let manifest = file("android/src/main/AndroidManifest.xml")?;
     assert!(manifest.contains("<uses-permission android:name=\"android.permission.INTERNET\" />"));
     assert!(manifest.contains("android:icon=\"@drawable/rouge_icon\""));
+    assert!(manifest.contains("android:name=\".RougeActivity\""));
+    assert!(manifest.contains("android:windowSoftInputMode=\"adjustResize\""));
+    let activity = file("android/src/main/java/com/example/app/RougeActivity.java")?;
+    assert!(activity.contains("package com.example.app;"));
+    assert!(activity.contains("class RougeActivity extends GameActivity"));
+    assert!(activity.contains("public void stateChanged(State state, boolean dismissed)"));
+    assert!(
+        file("android/proguard-rules.pro")?.contains("-keep class com.example.app.RougeActivity")
+    );
     assert!(
         file("android/gradle/wrapper/gradle-wrapper.properties")?.contains("gradle-9.6.0-bin.zip")
     );

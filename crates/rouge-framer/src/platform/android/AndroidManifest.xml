@@ -1,7 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">@@PERMISSIONS@@
     <application android:label="${appName}"@@ICON@@>
-        <activity android:name="android.app.NativeActivity" android:exported="true"
-            android:configChanges="orientation|keyboardHidden|screenSize">
+        <activity android:name=".RougeActivity" android:exported="true"
+            android:theme="@style/Theme.AppCompat.DayNight.NoActionBar"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode">
             <meta-data android:name="android.app.lib_name" android:value="${rustLibrary}" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
