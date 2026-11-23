@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.3.0...rouge-widgets-v0.4.0) - 2026-11-23
+
+### Added
+
+- *(widgets)* pass input hints from text_input to the platform keyboard
+- *(widgets)* drive transcript and data table rows from keyed list order
+- *(widgets)* label window chrome and announce dialogs and status
+- *(widgets)* expose range values and share accessible step actions
+- *(widgets)* expose roles and selection state for choices and collections
+- *(widgets)* give editable controls explicit and inherited field names
+
+### Other
+
+- describe the mobile hosts, the editor contract and accessible text editing
+- *(core)* key virtual list rows by model identity without enumerating keys
+- describe accessibility support and remaining platform gaps
+
 ## [0.3.0](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.2.0...rouge-widgets-v0.3.0) - 2026-11-21
 
 ### Added

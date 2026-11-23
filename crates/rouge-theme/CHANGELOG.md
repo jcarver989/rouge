@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/jcarver989/rouge/compare/rouge-theme-v0.3.0...rouge-theme-v0.4.0) - 2026-11-23
+
+### Other
+
+- describe the mobile hosts, the editor contract and accessible text editing
+- describe accessibility support and remaining platform gaps
+
 ## [0.3.0](https://github.com/jcarver989/rouge/compare/rouge-theme-v0.2.0...rouge-theme-v0.3.0) - 2026-11-21
 
 ### Added

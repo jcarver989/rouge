@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/jcarver989/rouge/compare/rouge-reactive-v0.3.0...rouge-reactive-v0.4.0) - 2026-11-23
+
+### Added
+
+- *(reactive)* publish keyed list order as a persistent snapshot with prepend
+
+### Other
+
+- describe the mobile hosts, the editor contract and accessible text editing
+- describe accessibility support and remaining platform gaps
+
 ## [0.3.0](https://github.com/jcarver989/rouge/compare/rouge-reactive-v0.2.0...rouge-reactive-v0.3.0) - 2026-11-21
 
 ### Added

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/jcarver989/rouge/compare/rouge-v0.3.0...rouge-v0.4.0) - 2026-11-23
+
+### Added
+
+- *(android)* run on a GameActivity host with IME text input and accessibility
+- *(ios)* edit text through a UITextInput responder
+- *(core)* expose editable text, caret and selection to assistive technology
+- *(widgets)* pass input hints from text_input to the platform keyboard
+- *(native)* route AccessKit events through each window’s winit adapter
+
+### Other
+
+- describe the mobile hosts, the editor contract and accessible text editing
+- *(rouge)* split host plumbing out of the winit runner
+- *(core)* key virtual list rows by model identity without enumerating keys
+- describe accessibility support and remaining platform gaps
+- *(gallery)* require every interactive control to have a role and name
+- add AccessKit dependencies for tree consumers and native hosts
+
 ## [0.3.0](https://github.com/jcarver989/rouge/compare/rouge-v0.2.0...rouge-v0.3.0) - 2026-11-21
 
 ### Added
