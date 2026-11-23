@@ -5,11 +5,14 @@ use rouge_core::testing::{
 use rouge_core::view;
 use rouge_core::{
     Align, Color, Point, RowKey, ScrollEvent, ScrollLinked, ScrollState, Scrollable, Size, Styled,
-    View, div, dynamic, scroll, text, virtual_list, virtual_list_handle,
+    View, VirtualListHandle, div, dynamic, scroll, text, virtual_list, virtual_list_handle,
+    virtual_row_index,
 };
-use rouge_reactive::{Runtime, Signal, batch, effect, on_cleanup, signal};
-use std::cell::RefCell;
+use rouge_reactive::{KeyedList, Runtime, Signal, batch, effect, keyed_list, on_cleanup, signal};
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
+use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::rc::Rc;
 
 #[test]
@@ -761,6 +764,107 @@ fn keyed_rows_refresh_the_view_and_pointer_target_at_the_same_index() -> TestRes
 }
 
 #[test]
+fn keyed_edits_keep_mounted_rows_their_focus_and_a_partial_anchor() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let KeyedRows {
+        mut ui,
+        model,
+        handle,
+        mounts,
+        pressed,
+    } = keyed_rows(0..100).build();
+    handle.scroll_to(Point::new(0.0, 405.0));
+    ui.update();
+    ui.click_on("id-22")?;
+    let before = mounts.get();
+    model.prepend((Id(100), 20.0));
+    ui.update();
+    assert_eq!(mounts.get() - before, 1);
+    ui.press("enter");
+    assert_eq!(pressed.get(), Some((22, 23)));
+    batch(|| {
+        model.move_to(&Id(22), 21);
+        model.remove(&Id(0));
+        model.update(&Id(22), |row| row.1 = 45.0);
+    });
+    ui.update();
+    let anchor = handle.row_bounds(21).ok_or("anchor remains mounted")?;
+    assert_eq!(anchor.origin.y, -5.0);
+    assert_eq!(handle.row_top(21) - handle.row_top(20), 45.0);
+    ui.press("enter");
+    assert_eq!(pressed.get(), Some((22, 20)));
+    batch(|| {
+        model.remove(&Id(20));
+        model.remove(&Id(21));
+        model.move_to(&Id(23), 24);
+    });
+    ui.update();
+    let successor = handle.row_bounds(24).ok_or("successor is mounted")?;
+    assert_eq!(successor.origin.y, -5.0);
+    assert!(ui.has_focus());
+    Ok(())
+}
+
+#[test]
+fn prepending_to_a_measured_keyed_list_reads_keys_near_the_viewport_only() {
+    let [small, large] = [1_000, 100_000].map(|count| {
+        let _rt = Runtime::new().enter();
+        let KeyedRows {
+            mut ui,
+            model,
+            handle,
+            ..
+        } = keyed_rows(0..count)
+            .height(|id| if id % 3 == 0 { 35.0 } else { 20.0 })
+            .build();
+        handle.scroll_to_row(count / 2, Align::Top);
+        ui.update();
+        let before = KEY_READS.get();
+        for id in count..count + 8 {
+            model.prepend((Id(id), 20.0));
+            ui.update();
+        }
+        let top = handle.top_row().get();
+        assert_eq!(
+            model
+                .order()
+                .with_untracked(|order| order.get(top).cloned()),
+            Some(Id(count / 2))
+        );
+        KEY_READS.get() - before
+    });
+    assert!(
+        small > 0 && large < 2 * small,
+        "{small} and {large} key reads for eight prepends"
+    );
+}
+
+#[test]
+fn reinserting_a_key_in_a_batch_mounts_the_new_entry() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let KeyedRows {
+        mut ui,
+        model,
+        handle,
+        mounts,
+        ..
+    } = keyed_rows(1..3)
+        .height(|id| if id == 1 { 40.0 } else { 20.0 })
+        .build();
+    assert_eq!(handle.row_top(1), 40.0);
+    let before = mounts.get();
+    batch(|| {
+        model.remove(&Id(1));
+        model.prepend((Id(1), 30.0));
+    });
+    ui.update();
+    assert_eq!(mounts.get() - before, 1);
+    let replacement = handle.row_bounds(0).ok_or("replacement mounted")?;
+    assert_eq!(replacement.size.height, 30.0);
+    Ok(())
+}
+
+#[test]
 fn keyed_anchor_survives_reorder_and_falls_forward_when_removed() -> TestResult {
     let _rt = Runtime::new().enter();
     let ids = signal((0..100).collect::<Vec<_>>());
@@ -1373,4 +1477,88 @@ fn linked_y(link: ScrollLinked, offsets: [f32; 3]) -> [Option<f32>; 3] {
         ui.advance(0.0);
         ui.bounds_of("linked").map(|bounds| bounds.origin.y)
     })
+}
+
+thread_local! {
+    static KEY_READS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Id(usize);
+
+impl Clone for Id {
+    fn clone(&self) -> Self {
+        KEY_READS.set(KEY_READS.get() + 1);
+        Id(self.0)
+    }
+}
+
+impl Hash for Id {
+    fn hash<T: Hasher>(&self, state: &mut T) {
+        KEY_READS.set(KEY_READS.get() + 1);
+        self.0.hash(state);
+    }
+}
+
+struct KeyedRows {
+    ui: TestUi,
+    model: KeyedList<Id, (Id, f32)>,
+    handle: VirtualListHandle,
+    mounts: Rc<Cell<u32>>,
+    pressed: Signal<Option<(usize, usize)>>,
+}
+
+struct KeyedRowsBuilder {
+    ids: Range<usize>,
+    height: fn(usize) -> f32,
+}
+
+fn keyed_rows(ids: Range<usize>) -> KeyedRowsBuilder {
+    KeyedRowsBuilder {
+        ids,
+        height: |_| 20.0,
+    }
+}
+
+impl KeyedRowsBuilder {
+    fn height(mut self, height: fn(usize) -> f32) -> Self {
+        self.height = height;
+        self
+    }
+
+    fn build(self) -> KeyedRows {
+        let model = keyed_list(|(id, _): &(Id, f32)| id.clone());
+        model.extend(self.ids.map(|id| (Id(id), (self.height)(id))));
+        let handle = virtual_list_handle();
+        let (mounts, mount) = counter();
+        let pressed = signal(None);
+        let ui = TestUiBuilder::default().size(100.0, 100.0).build(|| {
+            virtual_list(model, 20.0, move |index| {
+                mount();
+                let key = model
+                    .order()
+                    .with_untracked(|order| order.get(index).cloned());
+                let Some(Id(id)) = key else {
+                    return div();
+                };
+                let position = virtual_row_index();
+                let height = model.select(Id(id), |row| row.1);
+                div()
+                    .test_id(format!("id-{id}"))
+                    .focusable()
+                    .h(move || height.get())
+                    .on_key_down(move |_| pressed.set(Some((id, position.get()))))
+            })
+            .measure_rows(|| 0)
+            .handle(handle)
+            .size_full()
+        });
+        KeyedRows {
+            ui,
+            model,
+            handle,
+            mounts,
+            pressed,
+        }
+    }
 }

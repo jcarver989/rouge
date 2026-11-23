@@ -1,5 +1,6 @@
 use crate::tree::RowSource;
 use crate::view::{Div, Text};
+use rouge_reactive::Memo;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextBreak {
@@ -34,7 +35,7 @@ impl Div {
         self
     }
 
-    pub(crate) fn selection_row(mut self, row: usize) -> Self {
+    pub(crate) fn selection_row(mut self, row: Memo<usize>) -> Self {
         self.spec.extras().select_row = Some(row);
         self
     }

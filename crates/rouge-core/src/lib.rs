@@ -56,8 +56,8 @@ pub use presentation::{COMPACT_WIDTH, InputKind, Presentation, WidthClass, prese
 pub use prop::{AnyEffect, IntoProp, Prop, PropFrom};
 pub use rouge_theme::{Rgba, Role, UiPalette};
 pub use scroll::{
-    Align, RowHeight, RowKey, Scrollable, VirtualList, VirtualListHandle, scroll, virtual_list,
-    virtual_list_handle,
+    Align, RowHeight, RowKey, Scrollable, VirtualList, VirtualListHandle, VirtualRows, scroll,
+    virtual_list, virtual_list_handle, virtual_row_index,
 };
 pub use selection::TextBreak;
 pub use style::{

@@ -50,6 +50,7 @@ pub(crate) enum Op {
     ScrollTo(Point, bool),
     LayoutTransition(LayoutTransition),
     Access(AccessOp),
+    TestId(String),
 }
 
 impl Op {
@@ -70,6 +71,7 @@ impl Op {
             Op::ScrollTo(offset, anchored) => tree.scroll_to(id, offset, anchored),
             Op::LayoutTransition(transition) => tree.set_layout_transition(id, transition),
             Op::Access(op) => tree.set_access(id, op),
+            Op::TestId(name) => tree.set_test_id(id, name),
         }
     }
 }
@@ -316,9 +318,14 @@ impl Div {
         self
     }
 
-    pub fn test_id(mut self, name: impl Into<String>) -> Self {
-        self.spec.extras().test_id = Some(name.into());
-        self
+    pub fn test_id<T>(mut self, name: impl IntoProp<String, T>) -> Self {
+        match name.into_prop() {
+            Prop::Static(name) => {
+                self.spec.extras().test_id = Some(name);
+                self
+            }
+            name @ Prop::Dynamic(_) => self.bind(name, Op::TestId),
+        }
     }
 
     pub fn test_scope(mut self, name: impl ToString) -> Self {
@@ -903,7 +910,7 @@ pub fn rich_text<T, U>(
 
 impl Text {
     pub fn test_id(self, name: impl Into<String>) -> Self {
-        Text(self.0.test_id(name))
+        Text(self.0.test_id(name.into()))
     }
 
     pub fn spans<U>(self, spans: impl IntoProp<Vec<(Range<usize>, SpanStyle)>, U>) -> Self {

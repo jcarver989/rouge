@@ -18,7 +18,7 @@ use focus::ReplacedFocus;
 use fragment::Fragment;
 use layers::{LayerState, Slot};
 use layout::{LayoutNode, root_layout};
-use rouge_reactive::{ReactiveStats, Signal};
+use rouge_reactive::{Memo, ReactiveStats, Signal};
 use rouge_render::{Color, Edges, Rect, Size, SurfaceId};
 use rouge_theme::UiPalette;
 use rustc_hash::FxHashMap;
@@ -165,7 +165,7 @@ pub(crate) struct Extras {
     pub bounds_observer: Option<Signal<Rect>>,
     pub paint_region: Option<Signal<PaintRegion>>,
     pub selection: Option<Box<SelectionScope>>,
-    pub select_row: Option<usize>,
+    pub select_row: Option<Memo<usize>>,
     pub row_source: Option<RowSource>,
     pub access: Option<Box<Semantics>>,
 }
@@ -628,6 +628,12 @@ impl Tree {
         self.append(Node::Element(self.root), overlay);
         self.overlay = Some(overlay);
         overlay
+    }
+
+    pub(crate) fn set_test_id(&mut self, id: ElementId, name: String) {
+        if let Some(element) = self.elements.get_mut(id) {
+            element.extras.get_or_insert_default().test_id = Some(name);
+        }
     }
 
     pub(crate) fn set_cursor(&mut self, id: ElementId, cursor: Option<Cursor>) {

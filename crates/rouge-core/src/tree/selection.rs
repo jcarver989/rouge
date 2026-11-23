@@ -573,7 +573,12 @@ impl Tree {
                 continue;
             }
             let list = list.or_else(|| self.row_source(id).map(|_| id));
-            let row = row.or_else(|| element.extras().and_then(|extras| extras.select_row));
+            let row = row.or_else(|| {
+                element
+                    .extras()
+                    .and_then(|extras| extras.select_row)
+                    .and_then(|index| untrack(|| index.try_get()))
+            });
             let visible = visible && !element.unseen();
             if element.kind.text().is_some_and(|text| text.edit.is_none()) {
                 let index = row.unwrap_or(0);

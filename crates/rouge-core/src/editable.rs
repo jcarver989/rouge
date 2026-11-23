@@ -40,7 +40,7 @@ pub fn editable(value: Signal<String>) -> Editable {
 
 impl Editable {
     pub fn test_id(mut self, name: impl Into<String>) -> Self {
-        self.text.0 = self.text.0.test_id(name);
+        self.text.0 = self.text.0.test_id(name.into());
         self
     }
     pub fn autofocus(mut self) -> Self {

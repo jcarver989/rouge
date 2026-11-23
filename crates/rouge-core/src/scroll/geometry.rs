@@ -1,8 +1,8 @@
-use super::heights::{Heights, VariableHeights};
-use super::{RowHeight, RowKey};
+use super::RowHeight;
+use super::heights::Heights;
 use crate::compositor::ScrollState;
 use crate::prop::Prop;
-use rouge_reactive::{Memo, Signal, batch, effect, memo, signal};
+use rouge_reactive::{KeyOrder, Memo, ReadSignal, Signal, batch, effect, memo, signal};
 use rouge_render::{Point, Size};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -24,10 +24,7 @@ impl PartialEq for Rows {
 impl Rows {
     pub(super) fn new() -> Self {
         Self {
-            heights: Rc::new(RefCell::new(Heights::Uniform {
-                height: 0.0,
-                count: 0,
-            })),
+            heights: Rc::new(RefCell::new(Heights::uniform(0.0, 0, FxHashMap::default()))),
             version: signal(0),
         }
     }
@@ -71,55 +68,21 @@ impl Rows {
     }
 }
 
-pub(super) struct Keys<T> {
-    pub(super) rows: Vec<RowKey<T>>,
-    indices: FxHashMap<T, usize>,
-}
-
-impl<T: PartialEq> PartialEq for Keys<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows
-    }
-}
-
-impl<T: Clone + Eq + Hash> Keys<T> {
-    pub(super) fn new(rows: Vec<RowKey<T>>) -> Self {
-        let indices: FxHashMap<_, _> = rows
-            .iter()
-            .enumerate()
-            .map(|(i, row)| (row.id.clone(), i))
-            .collect();
-        assert_eq!(
-            rows.len(),
-            indices.len(),
-            "virtual_list row IDs must be unique"
-        );
-        Self { rows, indices }
-    }
-
-    fn locate(&self, old: &Self, index: usize) -> Option<usize> {
-        let find = |row: &RowKey<T>| self.indices.get(&row.id).copied();
-        old.rows
-            .get(index..)?
-            .iter()
-            .find_map(find)
-            .or_else(|| old.rows[..index].iter().rev().find_map(find))
-    }
-}
-
-pub(super) type Measurements<T> = Signal<FxHashMap<usize, (Option<RowKey<T>>, Signal<Size>)>>;
+pub(super) type Keys<T> = ReadSignal<Rc<KeyOrder<T>>>;
+pub(super) type MountKey<T> = Result<(T, u64), usize>;
+pub(super) type Measurements<T> = Signal<FxHashMap<MountKey<T>, Signal<Size>>>;
 
 pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
     rows: &Rows,
     state: Signal<ScrollState>,
     current_count: Memo<usize>,
-    current_keys: Option<Memo<Rc<Keys<T>>>>,
+    current_keys: Option<Keys<T>>,
     row_height: Prop<RowHeight>,
     measured: bool,
     configured: Signal<u64>,
 ) {
     let rows = rows.clone();
-    let mut previous: Option<Rc<Keys<T>>> = None;
+    let mut previous: Option<Rc<KeyOrder<T>>> = None;
     effect(move || {
         let count = current_count.get();
         let keys = current_keys.map(|keys| keys.get());
@@ -149,45 +112,34 @@ pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
         } else {
             Vec::new()
         };
+        let cached = rows
+            .heights
+            .borrow()
+            .measurements()
+            .iter()
+            .filter_map(|(&index, &height)| {
+                let target = match (&previous, &keys) {
+                    (Some(previous), Some(keys)) => keys.position(previous.entry(index)?)?,
+                    _ => (index < count).then_some(index)?,
+                };
+                Some((target, height))
+            })
+            .collect();
         let next = match input {
-            RowHeight::Uniform(value) if !measured => Heights::Uniform {
-                height: height(value),
-                count,
-            },
-            _ => {
-                let heights = match input {
-                    RowHeight::Uniform(value) => vec![height(value); count],
-                    RowHeight::Each(_) => estimates
-                        .iter()
-                        .map(|estimate| estimate.get_untracked().unwrap_or(minimum))
-                        .collect(),
-                };
-                let cached = if let Heights::Variable(old) = &*rows.heights.borrow() {
-                    old.measurements()
-                        .iter()
-                        .filter_map(|(&index, &height)| {
-                            let target = match (&previous, &keys) {
-                                (Some(previous), Some(keys)) => {
-                                    let row = previous.rows.get(index)?;
-                                    let &target = keys.indices.get(&row.id)?;
-                                    (keys.rows[target] == *row).then_some(target)?
-                                }
-                                _ => (index < count).then_some(index)?,
-                            };
-                            Some((target, height))
-                        })
-                        .collect()
-                } else {
-                    FxHashMap::default()
-                };
-                Heights::Variable(VariableHeights::new(heights, cached))
-            }
+            RowHeight::Uniform(value) => Heights::uniform(height(value), count, cached),
+            RowHeight::Each(_) => Heights::each(
+                estimates
+                    .iter()
+                    .map(|estimate| estimate.get_untracked().unwrap_or(minimum))
+                    .collect(),
+                cached,
+            ),
         };
         rows.update(state, |current, index| {
             let anchor = previous
                 .as_ref()
                 .zip(keys.as_ref())
-                .and_then(|(old, new)| new.locate(old, index));
+                .and_then(|(old, new)| locate(old, new, index));
             *current = next;
             (true, anchor)
         });
@@ -202,9 +154,6 @@ pub(super) fn configure_rows<T: Clone + Eq + Hash + 'static>(
                     return;
                 }
                 rows.update(state, |heights, _| {
-                    let Heights::Variable(heights) = heights else {
-                        return (false, None);
-                    };
                     (heights.set_estimate(index, value), None)
                 });
             });
@@ -217,7 +166,7 @@ pub(super) type LayoutKey = (f32, u64);
 pub(super) fn observe_measurements<T: Clone + Eq + Hash + 'static>(
     rows: &Rows,
     state: Signal<ScrollState>,
-    keys: Option<Memo<Rc<Keys<T>>>>,
+    keys: Option<Keys<T>>,
     configured: Signal<u64>,
     mounted: Measurements<T>,
     layout: Memo<LayoutKey>,
@@ -232,16 +181,16 @@ pub(super) fn observe_measurements<T: Clone + Eq + Hash + 'static>(
         mounted.with(|mounted| {
             rows.update(state, |heights, _| {
                 let count = heights.count();
-                let Heights::Variable(heights) = heights else {
-                    return (false, None);
-                };
                 let mut changed = invalidate && heights.clear_measurements();
-                for (&index, (key, size)) in mounted {
-                    if index >= count
-                        || key.as_ref() != keys.as_ref().and_then(|keys| keys.rows.get(index))
-                    {
+                for (key, size) in mounted {
+                    let index = match (key, &keys) {
+                        (Err(index), None) => Some(*index),
+                        (Ok(key), Some(keys)) => keys.position(key),
+                        _ => None,
+                    };
+                    let Some(index) = index.filter(|&index| index < count) else {
                         continue;
-                    }
+                    };
                     let size = size.get();
                     if size.width == current.0
                         && current.0 > 0.0
@@ -255,4 +204,15 @@ pub(super) fn observe_measurements<T: Clone + Eq + Hash + 'static>(
             });
         });
     });
+}
+
+fn locate<T: Clone + Eq + Hash>(
+    old: &KeyOrder<T>,
+    new: &KeyOrder<T>,
+    index: usize,
+) -> Option<usize> {
+    let index = index.min(old.len());
+    (index..old.len())
+        .chain((0..index).rev())
+        .find_map(|at| new.index_of(old.get(at)?))
 }

@@ -89,7 +89,7 @@ impl ResizablePanel {
     }
 
     pub fn test_id(mut self, id: impl Into<String>) -> Self {
-        self.root = self.root.test_id(id);
+        self.root = self.root.test_id(id.into());
         self
     }
 

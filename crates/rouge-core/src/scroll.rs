@@ -5,7 +5,10 @@ use crate::style::{DelegateStyle, Styled};
 use crate::tree::RowSource;
 use crate::view::{AnyView, BuildCx, Div, View, div};
 use rouge_macros::component;
-use rouge_reactive::{Memo, ReadSignal, Signal, effect, memo, on_cleanup, signal, untrack};
+use rouge_reactive::{
+    KeyOrder, KeyedList, Memo, ReadSignal, Signal, effect, expect_context, memo, on_cleanup,
+    provide_context, signal, untrack,
+};
 use rouge_render::{Point, Rect, Size};
 use rustc_hash::{FxHashMap, FxHasher};
 use std::cell::Cell;
@@ -15,10 +18,33 @@ use std::rc::Rc;
 
 mod geometry;
 mod heights;
-use geometry::{Keys, LayoutKey, Measurements, Rows, configure_rows, observe_measurements};
+use geometry::{
+    Keys, LayoutKey, Measurements, MountKey, Rows, configure_rows, observe_measurements,
+};
 use heights::Heights;
 
-type Identity<T> = Box<dyn Fn(usize) -> RowKey<T>>;
+pub struct VirtualRows<T> {
+    count: Box<dyn Fn() -> usize>,
+    keys: Option<Keys<T>>,
+}
+
+impl<T: Fn() -> usize + 'static> From<T> for VirtualRows<usize> {
+    fn from(count: T) -> Self {
+        Self {
+            count: Box::new(count),
+            keys: None,
+        }
+    }
+}
+
+impl<T: Eq + Hash + Clone + 'static, U: 'static> From<KeyedList<T, U>> for VirtualRows<T> {
+    fn from(list: KeyedList<T, U>) -> Self {
+        Self {
+            count: Box::new(move || list.len()),
+            keys: Some(list.order()),
+        }
+    }
+}
 
 const OVERSCAN: usize = 8;
 const FOLLOW_SLOP: f32 = 2.0;
@@ -188,12 +214,19 @@ impl<T> RowKey<T> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct RowIndex(Memo<usize>);
+
+pub fn virtual_row_index() -> Memo<usize> {
+    expect_context::<RowIndex>().0
+}
+
 pub struct VirtualList<T, U = usize> {
     container: Div,
     count: Box<dyn Fn() -> usize>,
     row_height: Prop<RowHeight>,
     row: Rc<dyn Fn(usize) -> T>,
-    identity: Option<Identity<U>>,
+    keys: Option<Keys<U>>,
     measure: Option<Box<dyn Fn() -> u64>>,
     overscan: usize,
     state: Option<Signal<ScrollState>>,
@@ -205,17 +238,18 @@ pub struct VirtualList<T, U = usize> {
 }
 
 #[component]
-pub fn virtual_list<T: View, U>(
-    count: impl Fn() -> usize + 'static,
+pub fn virtual_list<T: View, U, V>(
+    count: impl Into<VirtualRows<V>>,
     row_height: impl IntoProp<RowHeight, U>,
     children: impl Fn(usize) -> T + 'static,
-) -> VirtualList<T> {
+) -> VirtualList<T, V> {
+    let VirtualRows { count, keys } = count.into();
     VirtualList {
         container: scroll(),
-        count: Box::new(count),
+        count,
         row_height: row_height.into_prop(),
         row: Rc::new(children),
-        identity: None,
+        keys,
         measure: None,
         overscan: OVERSCAN,
         state: None,
@@ -228,16 +262,22 @@ pub fn virtual_list<T: View, U>(
 }
 
 impl<T, U> VirtualList<T, U> {
-    pub fn row_identity<V>(
+    pub fn row_identity<V: Clone + Eq + Hash + 'static>(
         self,
         identity: impl Fn(usize) -> RowKey<V> + 'static,
     ) -> VirtualList<T, V> {
+        let count: Rc<dyn Fn() -> usize> = self.count.into();
+        let len = count.clone();
+        let entry = move |index| {
+            let RowKey { id, revision } = identity(index);
+            (id, revision)
+        };
         VirtualList {
             container: self.container,
-            count: self.count,
+            count: Box::new(move || count()),
             row_height: self.row_height,
             row: self.row,
-            identity: Some(Box::new(identity)),
+            keys: Some(memo(move || Rc::new((0..len()).map(&entry).collect()))),
             measure: self.measure,
             overscan: self.overscan,
             state: self.state,
@@ -302,9 +342,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (row, overscan) = (self.row, self.overscan);
         let count = memo(self.count);
-        let keys = self.identity.map(|identity| {
-            memo(move || Rc::new(Keys::new((0..count.get()).map(identity.as_ref()).collect())))
-        });
+        let keys = self.keys;
         let follow = self.follow;
         let handle = self
             .handle
@@ -399,7 +437,9 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                     let mut items = Vec::new();
                     let mut index = heights.next_visible(start);
                     while index < end {
-                        let key = keys.as_ref().and_then(|keys| keys.rows.get(index)).cloned();
+                        let Some(key) = mount_key(keys.as_deref(), index) else {
+                            break;
+                        };
                         items.push((index, key));
                         index = heights.next_visible(index + 1);
                     }
@@ -418,23 +458,22 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
             .col()
             .child(each(
                 move || items.get(),
-                Clone::clone,
+                |(_, key)| key.clone(),
                 move |item| {
-                    let (index, key) = item.get_untracked();
+                    let index = item.select(|(index, _)| *index);
+                    provide_context(RowIndex(index));
                     let mut container = div().flex_none().selection_row(index);
                     if let Some(mounted) = mounted {
                         let size = signal(Size::ZERO);
+                        let key = item.get_untracked().1;
                         mounted.update(|rows| {
-                            rows.insert(index, (key, size));
+                            rows.insert(key.clone(), size);
                         });
                         on_cleanup(move || {
                             if mounted.is_alive() {
                                 mounted.update(|rows| {
-                                    if rows
-                                        .get(&index)
-                                        .is_some_and(|(_, current)| *current == size)
-                                    {
-                                        rows.remove(&index);
+                                    if rows.get(&key) == Some(&size) {
+                                        rows.remove(&key);
                                     }
                                 });
                             }
@@ -444,6 +483,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                     } else {
                         let rows = row_heights.clone();
                         let height = memo(move || {
+                            let index = index.get();
                             rows.with(|heights| {
                                 if index < heights.count() {
                                     heights.height(index)
@@ -454,7 +494,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
                         });
                         container = container.h(move || height.get());
                     }
-                    container.child(row(index))
+                    container.child(row(index.get_untracked()))
                 },
             ));
         let mut content = div()
@@ -475,7 +515,7 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
             }),
             identity: Rc::new(move |row| {
                 keys.filter(ReadSignal::is_alive).map_or(0, |keys| {
-                    keys.with_untracked(|keys| keys.rows.get(row).map_or(0, identity))
+                    keys.with_untracked(|keys| keys.entry(row).map_or(0, identity))
                 })
             }),
             text: self.row_text,
@@ -491,7 +531,17 @@ impl<T: View, U: Clone + Eq + Hash + 'static> View for VirtualList<T, U> {
     }
 }
 
-fn identity<T: Hash>(key: &RowKey<T>) -> u64 {
+fn mount_key<T: Clone + Eq + Hash>(
+    keys: Option<&KeyOrder<T>>,
+    index: usize,
+) -> Option<MountKey<T>> {
+    match keys {
+        Some(keys) => keys.entry(index).cloned().map(Ok),
+        None => Some(Err(index)),
+    }
+}
+
+fn identity<T: Hash>(key: &(T, u64)) -> u64 {
     let mut hasher = FxHasher::default();
     key.hash(&mut hasher);
     hasher.finish()
@@ -536,7 +586,7 @@ fn attach_handle<T: Clone + Eq + Hash + 'static>(
     state: Signal<ScrollState>,
     mounted: Option<Measurements<T>>,
     layout: Option<Memo<LayoutKey>>,
-    keys: Option<Memo<Rc<Keys<T>>>>,
+    keys: Option<Keys<T>>,
 ) {
     handle.rows.set(Some(rows.clone()));
     let version = rows.version;
@@ -601,11 +651,11 @@ fn attach_handle<T: Clone + Eq + Hash + 'static>(
                 Align::Visible => current.offset.y,
             };
             let max = (rows.top(rows.count()) - viewport.height).max(0.0);
-            let measured = match rows {
-                Heights::Uniform { .. } => None,
-                Heights::Variable(heights) => heights.measurements().get(&index).copied(),
-            };
-            Some((index, y.clamp(0.0, max), measured))
+            Some((
+                index,
+                y.clamp(0.0, max),
+                rows.measurements().get(&index).copied(),
+            ))
         });
         let Some((index, y, height)) = target else {
             handle.request.set(None);
@@ -614,14 +664,13 @@ fn attach_handle<T: Clone + Eq + Hash + 'static>(
         let measured = mounted.zip(layout).is_none_or(|(mounted, layout)| {
             let width = layout.get().0;
             let keys = keys.map(|keys| keys.get());
-            let expected = keys.as_ref().and_then(|keys| keys.rows.get(index));
+            let Some(expected) = mount_key(keys.as_deref(), index) else {
+                return false;
+            };
             mounted.with(|mounted| {
-                mounted.get(&index).is_some_and(|(key, size)| {
+                mounted.get(&expected).is_some_and(|size| {
                     let size = size.get();
-                    key.as_ref() == expected
-                        && width > 0.0
-                        && size.width == width
-                        && height == Some(size.height)
+                    width > 0.0 && size.width == width && height == Some(size.height)
                 })
             })
         });

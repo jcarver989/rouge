@@ -28,17 +28,17 @@ pub mod prelude {
         Point, PointerButton, PointerEvent, Pose, Rect, ResizeEdge, Rgba, Role, RowKey,
         ScrollEvent, ScrollState, Scrollable, ShaderEffect, Size, SpanStyle, Spring, StyleDelta,
         Styled, Surface, SurfaceError, SurfaceSource, SurfaceStatus, Text, TextAlign, TextStyle,
-        Theme, Tween, Typography, UiPalette, Underline, View, VirtualListHandle, WindowHandle,
-        appearance, auto, canvas, component, div, dynamic, each, editable, focus_handle, icon,
-        image, keyboard_inset, motion, overlay, pct, px, rich_text, route, safe_area, scroll, show,
-        surface, switch, text, use_binding, view, virtual_list, virtual_list_handle,
-        window_focused, window_handle, window_size, zoom,
+        Theme, Tween, Typography, UiPalette, Underline, View, VirtualListHandle, VirtualRows,
+        WindowHandle, appearance, auto, canvas, component, div, dynamic, each, editable,
+        focus_handle, icon, image, keyboard_inset, motion, overlay, pct, px, rich_text, route,
+        safe_area, scroll, show, surface, switch, text, use_binding, view, virtual_list,
+        virtual_list_handle, virtual_row_index, window_focused, window_handle, window_size, zoom,
     };
     #[cfg(not(target_arch = "wasm32"))]
     pub use rouge_reactive::spawn_blocking;
     pub use rouge_reactive::{
-        Action, Callback, Effect, KeyedList, Memo, ReadSignal, Resource, Runtime, Scope, Selector,
-        Signal, Stored, Task, TaskError, action, batch, effect, expect_context, interval,
+        Action, Callback, Effect, KeyOrder, KeyedList, Memo, ReadSignal, Resource, Runtime, Scope,
+        Selector, Signal, Stored, Task, TaskError, action, batch, effect, expect_context, interval,
         keyed_list, memo, on_cleanup, provide_context, resource, selector, signal, sleep, spawn,
         stored, untrack, use_context, watch,
     };
