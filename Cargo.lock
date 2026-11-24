@@ -1633,9 +1633,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.5"
+version = "1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
+checksum = "fd9ae8fcb3ea71b0b26338b4ffb13006bb175de8fd07921089a906ce7e5e6945"
 dependencies = [
  "cfg-if",
 ]
@@ -2589,9 +2589,9 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "litrs"
-version = "1.0.1"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
+checksum = "02b614978e47ce529faee66579f2b2fe19c94aa96d910a6a9a8043b2b02d8175"
 
 [[package]]
 name = "lock_api"
@@ -3717,7 +3717,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "rouge"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "accesskit_android",
  "accesskit_winit",
@@ -3763,7 +3763,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-bench"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "dhat",
  "rouge",
@@ -3776,7 +3776,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -3799,7 +3799,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-framer"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "cargo_metadata",
@@ -3815,7 +3815,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-macros"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3825,7 +3825,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-markdown"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "linkify",
  "pulldown-cmark",
@@ -3843,7 +3843,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-reactive"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "crossbeam-channel",
  "gloo-timers",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-render"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bytemuck",
  "image",
@@ -3879,7 +3879,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-syntax"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "arborium-asm",
  "arborium-bash",
@@ -3953,7 +3953,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-theme"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3961,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-widgets"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "nucleo-matcher",
  "rouge-core",
@@ -5869,9 +5869,9 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.6.8"
+version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+checksum = "aa76918995d776d9dd34d371030be228d021137449771493d56e29f77e4148ac"
 
 [[package]]
 name = "zmij"
