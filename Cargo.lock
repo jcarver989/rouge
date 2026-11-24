@@ -3717,7 +3717,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "rouge"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "accesskit_android",
  "accesskit_winit",
@@ -3763,7 +3763,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-bench"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "dhat",
  "rouge",
@@ -3776,7 +3776,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -3799,7 +3799,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-framer"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "cargo_metadata",
@@ -3815,7 +3815,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-macros"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3825,7 +3825,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-markdown"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "linkify",
  "pulldown-cmark",
@@ -3843,7 +3843,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-reactive"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "crossbeam-channel",
  "gloo-timers",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-render"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bytemuck",
  "image",
@@ -3879,7 +3879,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-syntax"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "arborium-asm",
  "arborium-bash",
@@ -3953,7 +3953,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-theme"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3961,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "rouge-widgets"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "nucleo-matcher",
  "rouge-core",
