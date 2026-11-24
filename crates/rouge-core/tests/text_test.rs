@@ -1,9 +1,11 @@
 use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::text::{
     Granularity, Movement, SUBPIXEL_BUCKETS, SpanStyle, TextLayout, TextStyle, TextSystem,
-    WrapIndent, byte_offset, utf16_offset,
+    TextWrap, WrapIndent, byte_offset, utf16_offset,
 };
-use rouge_core::{Canvas, Color, Point, Styled, TextRun, canvas, div, editable, rich_text};
+use rouge_core::{
+    Canvas, Color, Point, Styled, TextAlign, TextRun, canvas, div, editable, rich_text, text,
+};
 use rouge_reactive::{Runtime, Signal, signal};
 
 #[test]
@@ -71,7 +73,7 @@ fn layout_measures_scales_and_wraps() {
     );
 
     let unwrapped = TextStyle {
-        wrap: false,
+        wrap: TextWrap::NoWrap,
         ..style(16.0)
     };
     let layout = text.layout("several words in a row", &unwrapped, Some(20.0));
@@ -379,6 +381,116 @@ fn continuation_lines_hang_under_the_leading_indent_capped_at_half_the_width() {
 }
 
 #[test]
+fn truncated_text_that_fits_is_laid_out_like_any_other() {
+    let mut system = TextSystem::new();
+    let natural = system.layout(LABEL, &style(16.0), None).size().0;
+    for align in [TextAlign::Start, TextAlign::Center, TextAlign::End] {
+        let [fits, wraps] = [TextWrap::Truncate, TextWrap::Wrap].map(|wrap| {
+            let style = TextStyle {
+                wrap,
+                align,
+                ..style(16.0)
+            };
+            glyphs(&system.layout(LABEL, &style, Some(natural + 20.0)))
+        });
+        assert_eq!(fits, wraps, "{align:?}");
+    }
+}
+
+#[test]
+fn truncated_text_ends_in_an_ellipsis_within_its_width() {
+    let mut system = TextSystem::new();
+    let natural = system.layout(LABEL, &truncated(), None);
+    let full = glyphs(&natural);
+    let ellipsis = glyphs(&system.layout("…", &truncated(), None))[0].0;
+    let (widest, _) = natural.size();
+    let mut shown = 0;
+    for width in (20..widest as u32).step_by(7).map(|width| width as f32) {
+        let layout = system.layout(LABEL, &truncated(), Some(width));
+        let painted = glyphs(&layout);
+
+        assert_eq!(layout.line_count(), 1);
+        assert!(layout.size().0 <= width, "{width}: {:?}", layout.size());
+        assert_eq!(layout.size().1, natural.size().1, "{width}");
+        let (last, kept) = painted.split_last().expect("the ellipsis is painted");
+        assert_eq!(last.0, ellipsis, "{width}");
+        assert_eq!(kept, &full[..kept.len()], "{width}: keeps its beginning");
+        assert!(kept.len() >= shown, "{width}: more room never shows less");
+        shown = kept.len();
+    }
+    assert!(shown > LABEL.len() / 2, "kept {shown} glyphs");
+}
+
+#[test]
+fn truncated_text_paints_nothing_beyond_a_width_too_small_for_the_ellipsis() {
+    let layout = TextSystem::new().layout(LABEL, &truncated(), Some(1.0));
+    assert_eq!(glyphs(&layout), []);
+}
+
+#[test]
+fn truncated_text_gives_way_down_to_its_ellipsis() {
+    let mut system = TextSystem::new();
+    let ellipsis = system.layout("…", &truncated(), None).size().0;
+    let (min, max) = system.layout(LABEL, &truncated(), None).content_widths();
+    assert_eq!(min, ellipsis);
+    assert_eq!(max, system.layout(LABEL, &style(16.0), None).size().0);
+
+    let (min, max) = system.layout("i", &truncated(), None).content_widths();
+    assert_eq!(min, max, "text narrower than an ellipsis is never replaced");
+}
+
+#[test]
+fn truncated_text_keeps_decorations_and_selections_within_what_it_shows() {
+    let mut system = TextSystem::new();
+    let style = TextStyle {
+        strikethrough: true,
+        ..truncated()
+    };
+    let layout = system.layout(LABEL, &style, Some(80.0));
+    layout.for_each_rect(true, |rect, _| {
+        assert!(rect.x + rect.width <= 80.0, "{rect:?}");
+    });
+    let rects = layout.selection_rects(layout.select(0, LABEL.len()));
+    assert_ne!(rects, []);
+    assert!(
+        rects.iter().all(|rect| rect.x + rect.width <= 80.0),
+        "{rects:?}"
+    );
+    assert_eq!(
+        layout.select(0, LABEL.len()).range(),
+        0..LABEL.len(),
+        "selecting it all selects the hidden text too"
+    );
+}
+
+#[test]
+fn a_truncated_label_yields_its_room_to_rigid_siblings_without_help_from_its_ancestors()
+-> TestResult {
+    let _entered = Runtime::new().enter();
+    let mut ui = TestUi::new(|| {
+        div().size_full().flex().items_start().child(
+            div()
+                .w(160.0)
+                .flex()
+                .child(
+                    div()
+                        .flex()
+                        .child(div().test_id("label").child(text(LABEL).truncate())),
+                )
+                .child(div().test_id("rigid").flex_none().size(60.0)),
+        )
+    });
+    let (label, rigid) = (ui.rect_of("label")?, ui.rect_of("rigid")?);
+    assert_eq!(label.size.width, 100.0);
+    assert_eq!(rigid.origin.x, 100.0);
+    assert!(
+        ui.text_bounds(LABEL).is_some(),
+        "the whole text is still there"
+    );
+    Ok(())
+}
+
+#[test]
 fn hits_share_one_shaping_and_span_colors_apply_at_paint() {
     let mut text = TextSystem::new();
     let red = text.layout("abcdef", &tinted(Color::RED), Some(30.0));
@@ -435,6 +547,21 @@ fn steady_frames_neither_shape_nor_break_text() -> TestResult {
     Ok(())
 }
 
+const LABEL: &str = "Thread trailing commas through the grammar";
+
+fn truncated() -> TextStyle {
+    TextStyle {
+        wrap: TextWrap::Truncate,
+        ..style(16.0)
+    }
+}
+
+fn glyphs(layout: &TextLayout) -> Vec<(u32, f32)> {
+    let mut glyphs = Vec::new();
+    layout.for_each_glyph(|glyph| glyphs.push((glyph.glyph_id, glyph.x)));
+    glyphs
+}
+
 fn style(size: f32) -> TextStyle {
     TextStyle {
         size,
@@ -450,7 +577,7 @@ fn monospace() -> TextStyle {
     TextStyle {
         family: "monospace".into(),
         size: 16.0,
-        wrap: false,
+        wrap: TextWrap::NoWrap,
         ..Default::default()
     }
 }
@@ -464,7 +591,7 @@ fn last_glyph_x(text: &mut TextSystem, content: &str, style: &TextStyle) -> f32 
 
 fn code(wrap_indent: WrapIndent) -> TextStyle {
     TextStyle {
-        wrap: true,
+        wrap: TextWrap::Wrap,
         wrap_indent,
         ..monospace()
     }

@@ -81,7 +81,7 @@ pub use rouge_render::{
     ImageError, Inputs, Mask, Point, Quad, Rect, ShaderEffect, Size, SurfaceError, SurfaceProducer,
     SurfaceSource, SurfaceStatus,
 };
-pub use text::{SpanStyle, TextAlign, TextStats, TextStyle, Underline, WrapIndent};
+pub use text::{SpanStyle, TextAlign, TextStats, TextStyle, TextWrap, Underline, WrapIndent};
 
 pub use window::{
     Appearance, Decorations, EditAction, Menu, MenuAction, MenuItem, ResizeEdge, WindowCommand,

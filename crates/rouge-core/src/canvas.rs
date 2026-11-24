@@ -2,7 +2,7 @@ use crate::event::Modifiers;
 use crate::path::Path;
 use crate::prop::{IntoProp, Prop};
 use crate::style::{DelegateStyle, Styled};
-use crate::text::{TextLayout, TextStyle, TextSystem};
+use crate::text::{TextLayout, TextStyle, TextSystem, TextWrap};
 use crate::theme::{Fill, Theme};
 use crate::tree::Kind;
 use crate::view::{BuildCx, Div, Patch, View, div};
@@ -103,7 +103,7 @@ impl TextRun {
     }
 
     pub fn wrap(mut self, max_width: f32) -> Self {
-        self.style.wrap = true;
+        self.style.wrap = TextWrap::Wrap;
         self.wrap = Some(max_width.max(0.0));
         self
     }
@@ -152,7 +152,7 @@ impl ShapedRun {
         };
         let style = TextStyle {
             spans: Vec::new(),
-            wrap: false,
+            wrap: TextWrap::NoWrap,
             ..self.run.style.clone()
         };
         layout

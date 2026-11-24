@@ -1,6 +1,6 @@
 use crate::length::Length;
 use crate::prop::{IntoProp, Prop};
-use crate::text::TextStyle;
+use crate::text::{TextStyle, TextWrap};
 use crate::theme::Fill;
 use crate::tree::Interaction;
 use rouge_render::{Color, Corners, Point};
@@ -588,7 +588,7 @@ impl Typography {
             size: self.size,
             weight: self.weight,
             line_height: self.line_height,
-            wrap: false,
+            wrap: TextWrap::NoWrap,
             ..defaults
         }
     }

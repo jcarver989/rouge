@@ -4,7 +4,7 @@ use crate::focus::FocusHandle;
 use crate::prop::IntoProp;
 use crate::theme::Fill;
 
-use crate::text::{Movement, SpanStyle};
+use crate::text::{Movement, SpanStyle, TextWrap};
 use crate::tree::InputHints;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Patch, Text, TextOp, View, text};
@@ -243,7 +243,11 @@ impl View for Editable {
         if let Some(data) = div.spec.kind.text_mut() {
             data.content = value.get_untracked();
             data.edit = Some(Box::new(state));
-            data.style.wrap = multiline;
+            data.style.wrap = if multiline {
+                TextWrap::Wrap
+            } else {
+                TextWrap::NoWrap
+            };
         }
 
         let select = edit.clone();

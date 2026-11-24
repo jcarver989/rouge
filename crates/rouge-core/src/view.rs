@@ -12,7 +12,7 @@ use crate::motion::{MotionOp, MotionProp};
 use crate::prop::{AnyEffect, IntoProp, Prop, PropFrom};
 use crate::scroll::{Scrollable, scroll_key};
 use crate::style::{Declaration, DelegateStyle, StyleDelta, StyleState, Styled};
-use crate::text::{SpanStyle, TextAlign, TextStyle, TextSystem, WrapIndent};
+use crate::text::{SpanStyle, TextAlign, TextStyle, TextSystem, TextWrap, WrapIndent};
 use crate::theme::{Fill, Theme};
 use crate::tree::edit::EditOp;
 use crate::tree::{
@@ -995,7 +995,11 @@ impl Text {
     }
 
     pub fn no_wrap(self) -> Self {
-        self.text_style(|style| style.wrap = false)
+        self.text_style(|style| style.wrap = TextWrap::NoWrap)
+    }
+
+    pub fn truncate(self) -> Self {
+        self.text_style(|style| style.wrap = TextWrap::Truncate)
     }
 
     pub fn wrap_indent(self, indent: WrapIndent) -> Self {

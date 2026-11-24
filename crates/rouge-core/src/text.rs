@@ -3,7 +3,7 @@ pub(crate) mod access;
 use parley::fontique::{Blob, GenericFamily};
 use parley::{
     Affinity, Alignment, AlignmentOptions, BoundingBox, Cluster, Cursor, FontContext, FontData,
-    FontFamily, FontStyle, FontWeight, IndentOptions, Layout, LayoutContext, LineHeight,
+    FontFamily, FontStyle, FontWeight, IndentOptions, Layout, LayoutContext, Line, LineHeight,
     OverflowWrap, PositionedLayoutItem, Run, Selection, StyleProperty,
 };
 use rouge_render::Color;
@@ -64,10 +64,18 @@ pub struct TextStyle {
     pub strikethrough: bool,
     pub line_height: f32,
     pub align: TextAlign,
-    pub wrap: bool,
+    pub wrap: TextWrap,
     pub wrap_indent: WrapIndent,
     pub tab_size: u8,
     pub spans: Vec<(Range<usize>, SpanStyle)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextWrap {
+    #[default]
+    Wrap,
+    NoWrap,
+    Truncate,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -89,7 +97,7 @@ impl Default for TextStyle {
             strikethrough: false,
             line_height: 1.4,
             align: TextAlign::Start,
-            wrap: true,
+            wrap: TextWrap::Wrap,
             wrap_indent: WrapIndent::None,
             tab_size: 4,
             spans: Vec::new(),
@@ -251,7 +259,56 @@ struct Shaped {
     align: TextAlign,
     indent: f32,
     len: usize,
-    wrap: bool,
+    wrap: TextWrap,
+    ellipsis: Option<Rc<Ellipsis>>,
+    cuts: Vec<Option<Cut>>,
+}
+
+struct Ellipsis {
+    layout: Layout<u16>,
+    baseline: f32,
+    width: f32,
+}
+
+#[derive(Clone, Copy)]
+struct Cut {
+    glyphs: usize,
+    x: f32,
+    end: f32,
+}
+
+impl Cut {
+    fn new(line: &Line<'_, u16>, width: f32, ellipsis: f32) -> Option<Self> {
+        let metrics = line.metrics();
+        let mut x = metrics.offset;
+        if x + metrics.advance - metrics.hanging_advance <= width {
+            return None;
+        }
+        let mut glyphs = 0;
+        let mut cut = Cut { glyphs, x, end: x };
+        for run in line.runs() {
+            for cluster in run.visual_clusters() {
+                if x + ellipsis > width {
+                    return Some(cut);
+                }
+                if !cluster.is_ligature_continuation() {
+                    cut = Cut {
+                        glyphs,
+                        x,
+                        end: x + ellipsis,
+                    };
+                }
+                x += cluster.advance();
+                glyphs += cluster.glyphs().count();
+            }
+        }
+        Some(cut)
+    }
+
+    fn clamp(self, mut rect: TextRect) -> Option<TextRect> {
+        rect.width = rect.width.min(self.end - rect.x);
+        (rect.width > 0.0).then_some(rect)
+    }
 }
 
 impl Shaped {
@@ -264,7 +321,12 @@ impl Shaped {
                 hanging: true,
             },
         );
-        self.layout.break_all_lines(width);
+        self.layout
+            .break_all_lines(width.filter(|_| self.wrap == TextWrap::Wrap));
+        let cut_at = width.filter(|width| self.ellipsis.is_some() && self.layout.width() > *width);
+        if self.ellipsis.is_some() && cut_at.is_none() {
+            self.layout.break_all_lines(width);
+        }
         let alignment = match self.align {
             TextAlign::Start => Alignment::Start,
             TextAlign::Center => Alignment::Center,
@@ -272,13 +334,25 @@ impl Shaped {
             TextAlign::Justify => Alignment::Justify,
         };
         self.layout.align(alignment, AlignmentOptions::default());
+        self.cuts = match (&self.ellipsis, cut_at) {
+            (Some(ellipsis), Some(width)) => self
+                .layout
+                .lines()
+                .map(|line| Cut::new(&line, width, ellipsis.width))
+                .collect(),
+            _ => Vec::new(),
+        };
         self.width = width;
     }
 }
 
 impl TextLayout {
     pub(crate) fn fits(&self, max_width: Option<f32>) -> bool {
-        self.shaped.width == max_width.filter(|_| self.shaped.wrap)
+        self.shaped.width == bound(max_width, self.shaped.wrap)
+    }
+
+    fn cut(&self, line: usize) -> Option<Cut> {
+        self.shaped.cuts.get(line).copied().flatten()
     }
 
     fn paint(&self, brush: u16) -> &SpanStyle {
@@ -291,7 +365,13 @@ impl TextLayout {
     }
 
     pub fn for_each_rect(&self, foreground: bool, mut f: impl FnMut(TextRect, Option<Color>)) {
-        for line in self.shaped.layout.lines() {
+        for (index, line) in self.shaped.layout.lines().enumerate() {
+            let cut = self.cut(index);
+            let mut f = |rect: TextRect, color| {
+                if let Some(rect) = cut.map_or(Some(rect), |cut| cut.clamp(rect)) {
+                    f(rect, color);
+                }
+            };
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
@@ -398,7 +478,10 @@ impl TextLayout {
             .0
             .geometry(&self.shaped.layout)
             .into_iter()
-            .map(|(bounds, _)| bounds.into())
+            .filter_map(|(bounds, line)| match self.cut(line) {
+                Some(cut) => cut.clamp(bounds.into()),
+                None => Some(bounds.into()),
+            })
             .collect()
     }
 
@@ -411,16 +494,22 @@ impl TextLayout {
     }
 
     pub fn size(&self) -> (f32, f32) {
-        (self.shaped.layout.width(), self.shaped.layout.height())
+        let layout = &self.shaped.layout;
+        let width = match self.shaped.width {
+            Some(width) if !self.shaped.cuts.is_empty() => layout.width().min(width),
+            _ => layout.width(),
+        };
+        (width, layout.height())
     }
 
     pub fn content_widths(&self) -> (f32, f32) {
         let widths = self.shaped.layout.calculate_content_widths();
-        if self.shaped.wrap {
-            (widths.min, widths.max)
-        } else {
-            (widths.max, widths.max)
-        }
+        let min = match (&self.shaped.ellipsis, self.shaped.wrap) {
+            (Some(ellipsis), _) => ellipsis.width.min(widths.max),
+            (None, TextWrap::Wrap) => widths.min,
+            (None, _) => widths.max,
+        };
+        (min, widths.max)
     }
 
     pub fn line_count(&self) -> usize {
@@ -435,29 +524,52 @@ impl TextLayout {
     }
 
     pub fn for_each_glyph(&self, mut f: impl FnMut(PositionedGlyph<'_>)) {
-        for line in self.shaped.layout.lines() {
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                    continue;
-                };
-                let run = glyph_run.run();
-                let synthesis = run.synthesis();
-                let variation = variation(run);
-                let style = self.paint(glyph_run.style().brush);
-                for glyph in glyph_run.positioned_glyphs() {
-                    f(PositionedGlyph {
-                        glyph_id: glyph.id,
-                        x: glyph.x,
-                        y: glyph.y,
-                        font: run.font(),
-                        font_size: run.font_size(),
-                        style,
-                        run,
-                        variation,
-                        embolden: synthesis.embolden(),
-                        skew: synthesis.skew(),
-                    });
+        for (index, line) in self.shaped.layout.lines().enumerate() {
+            let cut = self.cut(index);
+            let shown = cut.map_or(usize::MAX, |cut| cut.glyphs);
+            self.for_each_glyph_in(&line, shown, (0.0, 0.0), &mut f);
+            if let (Some(cut), Some(ellipsis)) = (cut, &self.shaped.ellipsis)
+                && cut.end > cut.x
+                && let Some(mark) = ellipsis.layout.lines().next()
+            {
+                let offset = (cut.x, line.metrics().baseline - ellipsis.baseline);
+                self.for_each_glyph_in(&mark, usize::MAX, offset, &mut f);
+            }
+        }
+    }
+
+    fn for_each_glyph_in(
+        &self,
+        line: &Line<'_, u16>,
+        mut limit: usize,
+        offset: (f32, f32),
+        f: &mut impl FnMut(PositionedGlyph<'_>),
+    ) {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                continue;
+            };
+            let run = glyph_run.run();
+            let synthesis = run.synthesis();
+            let variation = variation(run);
+            let style = self.paint(glyph_run.style().brush);
+            for glyph in glyph_run.positioned_glyphs() {
+                if limit == 0 {
+                    return;
                 }
+                limit -= 1;
+                f(PositionedGlyph {
+                    glyph_id: glyph.id,
+                    x: offset.0 + glyph.x,
+                    y: offset.1 + glyph.y,
+                    font: run.font(),
+                    font_size: run.font_size(),
+                    style,
+                    run,
+                    variation,
+                    embolden: synthesis.embolden(),
+                    skew: synthesis.skew(),
+                });
             }
         }
     }
@@ -540,7 +652,7 @@ impl TextSystem {
     }
 
     pub fn layout(&mut self, text: &str, style: &TextStyle, max_width: Option<f32>) -> TextLayout {
-        let width = max_width.filter(|_| style.wrap);
+        let width = bound(max_width, style.wrap);
         let (segments, palette) = if style.spans.is_empty() {
             (Vec::new(), self.plain.clone())
         } else {
@@ -603,13 +715,14 @@ impl TextSystem {
         };
         let mut layout = self.build(&source, style, segments, palette, &stops);
         let indent = match style.wrap_indent {
-            WrapIndent::Leading { extra_columns } if style.wrap => {
+            WrapIndent::Leading { extra_columns } if style.wrap == TextWrap::Wrap => {
                 layout.break_all_lines(None);
                 leading_width(&layout, text)
                     + f32::from(extra_columns) * self.space(style, &SpanStyle::default())
             }
             _ => 0.0,
         };
+        let ellipsis = (style.wrap == TextWrap::Truncate).then(|| Rc::new(self.ellipsis(style)));
         Shaped {
             layout,
             width: None,
@@ -617,6 +730,18 @@ impl TextSystem {
             indent,
             len: text.len(),
             wrap: style.wrap,
+            ellipsis,
+            cuts: Vec::new(),
+        }
+    }
+
+    fn ellipsis(&mut self, style: &TextStyle) -> Ellipsis {
+        let mut layout = self.build("…", style, &[], &[], &[]);
+        layout.break_all_lines(None);
+        Ellipsis {
+            baseline: layout.first_baseline().unwrap_or_default(),
+            width: layout.width(),
+            layout,
         }
     }
 
@@ -633,7 +758,7 @@ impl TextSystem {
             weight,
             italic,
             spans: Vec::new(),
-            wrap: false,
+            wrap: TextWrap::NoWrap,
             wrap_indent: WrapIndent::None,
             align: TextAlign::Start,
             ..*style
@@ -665,7 +790,7 @@ impl TextSystem {
         builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
             style.line_height,
         )));
-        if style.wrap {
+        if style.wrap == TextWrap::Wrap {
             builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
         }
         for (range, class) in segments {
@@ -856,7 +981,11 @@ impl ShapeCache {
     }
 }
 
-fn shape_of(style: &TextStyle) -> (&str, [u32; 3], bool, TextAlign, bool, WrapIndent, u8) {
+fn bound(width: Option<f32>, wrap: TextWrap) -> Option<f32> {
+    width.filter(|_| wrap != TextWrap::NoWrap)
+}
+
+fn shape_of(style: &TextStyle) -> (&str, [u32; 3], bool, TextAlign, TextWrap, WrapIndent, u8) {
     (
         &style.family,
         [style.size, style.weight, style.line_height].map(f32::to_bits),
