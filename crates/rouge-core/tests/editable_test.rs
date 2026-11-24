@@ -6,10 +6,45 @@ mod editor;
 use rouge_core::Wake;
 use rouge_core::testing::{BLUE, RED, TestResult, TestUi, TestUiBuilder, WHITE, assert_near};
 use rouge_core::{
-    ClipboardMedia, Color, EditAction, ImeEvent, Key, MemoryClipboard, Point, Styled, div, editable,
+    ClipboardMedia, Color, EditAction, ImeEvent, Key, MemoryClipboard, Point, SpanStyle, Styled,
+    div, editable,
 };
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_render::headless::Image;
+
+#[test]
+fn editing_keeps_reactive_glyph_spans_and_selection() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let value = signal("MM".to_owned());
+    let selection = signal(2..2);
+    let color = signal(Color::RED);
+    let mut ui = TestUi::canvas(|| {
+        editable(value)
+            .autofocus()
+            .multiline()
+            .selection(selection)
+            .text_size(32.0)
+            .spans(move || {
+                vec![(
+                    0..value.get().len(),
+                    SpanStyle {
+                        color: Some(color.get()),
+                        ..Default::default()
+                    },
+                )]
+            })
+    });
+    let before = ui.render()?;
+    assert!((0..45).any(|y| (0..50).any(|x| before.pixel(x, y) == RED)));
+    ui.type_text("M");
+    color.set(Color::BLUE);
+    ui.advance(0.0);
+    let after = ui.render()?;
+    assert!((0..45).any(|y| (0..50).any(|x| after.pixel(x, y) == BLUE)));
+    assert_eq!(value.get(), "MMM");
+    assert_eq!(selection.get(), 3..3);
+    Ok(())
+}
 
 #[test]
 fn clipboard_shortcuts_copy_cut_and_paste() {

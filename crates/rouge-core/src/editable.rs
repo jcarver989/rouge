@@ -4,7 +4,7 @@ use crate::focus::FocusHandle;
 use crate::prop::IntoProp;
 use crate::theme::Fill;
 
-use crate::text::Movement;
+use crate::text::{Movement, SpanStyle};
 use crate::tree::InputHints;
 use crate::tree::edit::{EditOp, EditState, TextHandler};
 use crate::view::{BuildCx, Patch, Text, TextOp, View, text};
@@ -137,6 +137,11 @@ impl Editable {
 
     pub fn on_blur(mut self, f: impl Fn(&FocusEvent) + 'static) -> Self {
         self.text.0 = self.text.0.on_blur(f);
+        self
+    }
+
+    pub fn spans<U>(mut self, spans: impl IntoProp<Vec<(Range<usize>, SpanStyle)>, U>) -> Self {
+        self.text = self.text.spans(spans);
         self
     }
 
