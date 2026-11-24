@@ -186,7 +186,7 @@ impl EditTransaction {
 }
 
 fn sanitize(text: String, multiline: bool) -> String {
-    let keep = |c: &char| !c.is_control() || (multiline && *c == '\n');
+    let keep = |c: &char| !c.is_control() || (multiline && matches!(c, '\n' | '\t'));
     let text = if multiline {
         text.replace("\r\n", "\n").replace('\r', "\n")
     } else {

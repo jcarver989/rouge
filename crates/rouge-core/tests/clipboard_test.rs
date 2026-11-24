@@ -53,6 +53,20 @@ fn a_paste_answered_later_lands_in_the_editor_with_sanitization_and_undo()
 }
 
 #[test]
+fn a_multiline_paste_keeps_tabs() {
+    let _rt = Runtime::new().enter();
+    let value = signal(String::new());
+    let clipboard = MemoryClipboard::new();
+    let mut ui = TestUi::new(|| editable(value).multiline());
+    ui.set_clipboard(clipboard.clone());
+    assert!(ui.focus_next(false));
+    clipboard.set_text("all:\r\n\tmake");
+    assert!(ui.dispatch_action(EditAction::Paste));
+    ui.advance(0.0);
+    assert_eq!(value.get(), "all:\n\tmake");
+}
+
+#[test]
 fn a_late_paste_is_dropped_after_an_edit_focus_change_or_remount() {
     let _rt = Runtime::new().enter();
     let value = signal("original".to_owned());
