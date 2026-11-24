@@ -335,6 +335,39 @@ fn pasting_media_goes_to_the_paste_handler_instead_of_the_text() -> TestResult {
 }
 
 #[test]
+fn a_placeholder_wraps_only_within_the_rows_the_editor_has() -> TestResult {
+    let _rt = Runtime::new().enter();
+    for (rows, wraps) in [(1, false), (3, true)] {
+        let value = signal(String::new());
+        let mut ui = TestUi::canvas(|| {
+            div().size_full().bg(Color::WHITE).child(
+                editable(value)
+                    .test_id("field")
+                    .multiline()
+                    .min_rows(rows)
+                    .w(80.0)
+                    .text_size(16.0)
+                    .placeholder("MMMM MMMM MMMM", Color::RED),
+            )
+        });
+        let field = ui.rect_of("field")?;
+        let image = ui.render()?;
+        let inked = |top: f32, bottom: f32| {
+            (top as u32..bottom as u32)
+                .any(|y| (0..image.width).any(|x| image.pixel(x, y)[1] < 128))
+        };
+        let row = field.size.height / rows as f32;
+        assert!(inked(0.0, row), "{rows} rows: the first row is painted");
+        assert!(
+            !inked(field.max().y, image.height as f32),
+            "{rows} rows: nothing is painted below the field"
+        );
+        assert_eq!(wraps, rows > 1 && inked(row, field.max().y), "{rows} rows");
+    }
+    Ok(())
+}
+
+#[test]
 fn a_placeholder_paints_only_while_the_editor_is_empty() -> TestResult {
     let _rt = Runtime::new().enter();
     let value = signal(String::new());

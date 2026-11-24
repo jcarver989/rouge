@@ -7,7 +7,7 @@ use crate::compositor::{Content, Layers, Nested};
 use crate::image::{Fit, ImageSpec};
 use crate::path::Path;
 use crate::style::Dirty;
-use crate::text::{GlyphKey, TextLayout, TextRect, TextSelection, TextSystem};
+use crate::text::{GlyphKey, TextLayout, TextRect, TextSelection, TextStyle, TextSystem, TextWrap};
 use crate::theme::Palette;
 use rouge_render::{
     Atlas, AtlasRect, Color, Corners, DrawList, Edges, Glyph, ImageData, ImageQuad, Point, Quad,
@@ -498,9 +498,7 @@ fn paint_text(
         );
     };
     if text.content.is_empty() && !text.placeholder.is_empty() {
-        let shaped = cx
-            .text_system
-            .layout(&text.placeholder, &text.style, text.wrap_width);
+        let shaped = placeholder(text, cx.text_system);
         let color = text.placeholder_color.resolve(&cx.palette);
         paint_glyphs(&shaped, origin, clip, color, out, cx);
     }
@@ -550,6 +548,18 @@ fn paint_text(
             )
         });
     }
+}
+
+fn placeholder(text: &TextData, system: &mut TextSystem) -> TextLayout {
+    let shaped = system.layout(&text.placeholder, &text.style, text.wrap_width);
+    if shaped.size().1.floor() <= text.content_size.height {
+        return shaped;
+    }
+    let style = TextStyle {
+        wrap: TextWrap::Truncate,
+        ..text.style.clone()
+    };
+    system.layout(&text.placeholder, &style, text.wrap_width)
 }
 
 fn paint_selection(
