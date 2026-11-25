@@ -345,8 +345,8 @@ fn any_view_takes_an_optional_hint_and_none_adds_nothing() -> TestResult {
 
 #[test]
 fn a_tooltip_or_popover_allowed_to_shrink_truncates_its_target() -> TestResult {
-    let _entered = Runtime::new().enter();
     const RIGID_WIDTH: f32 = 60.0;
+    let _entered = Runtime::new().enter();
     let mut ui = builder().build(|| {
         let label = |id: &str| {
             div()
