@@ -1,3 +1,5 @@
+#![cfg(feature = "all-languages")]
+
 mod support;
 
 use rouge_syntax::{MAX_SOURCE_BYTES, SyntaxError, analyze};

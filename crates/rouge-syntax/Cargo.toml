@@ -12,68 +12,134 @@ categories = ["text-processing", "text-editors"]
 [lints]
 workspace = true
 
+[features]
+default = ["all-languages"]
+all-languages = [
+    "lang-asm",
+    "lang-bash",
+    "lang-batch",
+    "lang-c",
+    "lang-c-sharp",
+    "lang-clojure",
+    "lang-cmake",
+    "lang-commonlisp",
+    "lang-cpp",
+    "lang-css",
+    "lang-dart",
+    "lang-diff",
+    "lang-dockerfile",
+    "lang-elixir",
+    "lang-erlang",
+    "lang-fish",
+    "lang-go",
+    "lang-graphql",
+    "lang-haskell",
+    "lang-hcl",
+    "lang-html",
+    "lang-ini",
+    "lang-java",
+    "lang-javascript",
+    "lang-json",
+    "lang-just",
+    "lang-kotlin",
+    "lang-lua",
+    "lang-make",
+    "lang-markdown",
+    "lang-meson",
+    "lang-ninja",
+    "lang-nix",
+    "lang-objc",
+    "lang-ocaml",
+    "lang-perl",
+    "lang-php",
+    "lang-powershell",
+    "lang-proto",
+    "lang-python",
+    "lang-r",
+    "lang-rego",
+    "lang-ruby",
+    "lang-rust",
+    "lang-scala",
+    "lang-scheme",
+    "lang-scss",
+    "lang-solidity",
+    "lang-sql",
+    "lang-starlark",
+    "lang-svelte",
+    "lang-swift",
+    "lang-toml",
+    "lang-tsx",
+    "lang-typescript",
+    "lang-vue",
+    "lang-x86asm",
+    "lang-xml",
+    "lang-yaml",
+    "lang-zig",
+    "lang-zsh",
+]
+
 [dependencies]
-arborium-asm = "=2.18.2"
-arborium-bash = "=2.18.2"
-arborium-batch = "=2.18.2"
-arborium-c = "=2.18.2"
-arborium-c-sharp = "=2.18.2"
-arborium-clojure = "=2.18.2"
-arborium-cmake = "=2.18.2"
-arborium-commonlisp = "=2.18.2"
-arborium-cpp = "=2.18.2"
-arborium-css = "=2.18.2"
-arborium-dart = "=2.18.2"
-arborium-diff = "=2.18.2"
-arborium-dockerfile = "=2.18.2"
-arborium-elixir = "=2.18.2"
-arborium-erlang = "=2.18.2"
-arborium-fish = "=2.18.2"
-arborium-go = "=2.18.2"
-arborium-graphql = "=2.18.2"
-arborium-haskell = "=2.18.2"
-arborium-hcl = "=2.18.2"
-arborium-html = "=2.18.2"
-arborium-ini = "=2.18.2"
-arborium-java = "=2.18.2"
-arborium-javascript = "=2.18.2"
-arborium-json = "=2.18.2"
-arborium-just = "=2.18.2"
-arborium-kotlin = "=2.18.2"
-arborium-lua = "=2.18.2"
-arborium-make = "=2.18.2"
-arborium-markdown = "=2.18.2"
-arborium-meson = "=2.18.2"
-arborium-ninja = "=2.18.2"
-arborium-nix = "=2.18.2"
-arborium-objc = "=2.18.2"
-arborium-ocaml = "=2.18.2"
-arborium-perl = "=2.18.2"
-arborium-php = "=2.18.2"
-arborium-powershell = "=2.18.2"
-arborium-proto = "=2.18.2"
-arborium-python = "=2.18.2"
-arborium-r = "=2.18.2"
-arborium-rego = "=2.18.2"
-arborium-ruby = "=2.18.2"
-arborium-rust = "=2.18.2"
-arborium-scala = "=2.18.2"
-arborium-scheme = "=2.18.2"
-arborium-scss = "=2.18.2"
-arborium-solidity = "=2.18.2"
-arborium-sql = "=2.18.2"
-arborium-starlark = "=2.18.2"
-arborium-svelte = "=2.18.2"
-arborium-swift = "=2.18.2"
-arborium-toml = "=2.18.2"
-arborium-tsx = "=2.18.2"
-arborium-typescript = "=2.18.2"
-arborium-vue = "=2.18.2"
-arborium-x86asm = "=2.18.2"
-arborium-xml = "=2.18.2"
-arborium-yaml = "=2.18.2"
-arborium-zig = "=2.18.2"
-arborium-zsh = "=2.18.2"
+lang-asm = { package = "arborium-asm", version = "=2.18.2", optional = true }
+lang-bash = { package = "arborium-bash", version = "=2.18.2", optional = true }
+lang-batch = { package = "arborium-batch", version = "=2.18.2", optional = true }
+lang-c = { package = "arborium-c", version = "=2.18.2", optional = true }
+lang-c-sharp = { package = "arborium-c-sharp", version = "=2.18.2", optional = true }
+lang-clojure = { package = "arborium-clojure", version = "=2.18.2", optional = true }
+lang-cmake = { package = "arborium-cmake", version = "=2.18.2", optional = true }
+lang-commonlisp = { package = "arborium-commonlisp", version = "=2.18.2", optional = true }
+lang-cpp = { package = "arborium-cpp", version = "=2.18.2", optional = true }
+lang-css = { package = "arborium-css", version = "=2.18.2", optional = true }
+lang-dart = { package = "arborium-dart", version = "=2.18.2", optional = true }
+lang-diff = { package = "arborium-diff", version = "=2.18.2", optional = true }
+lang-dockerfile = { package = "arborium-dockerfile", version = "=2.18.2", optional = true }
+lang-elixir = { package = "arborium-elixir", version = "=2.18.2", optional = true }
+lang-erlang = { package = "arborium-erlang", version = "=2.18.2", optional = true }
+lang-fish = { package = "arborium-fish", version = "=2.18.2", optional = true }
+lang-go = { package = "arborium-go", version = "=2.18.2", optional = true }
+lang-graphql = { package = "arborium-graphql", version = "=2.18.2", optional = true }
+lang-haskell = { package = "arborium-haskell", version = "=2.18.2", optional = true }
+lang-hcl = { package = "arborium-hcl", version = "=2.18.2", optional = true }
+lang-html = { package = "arborium-html", version = "=2.18.2", optional = true }
+lang-ini = { package = "arborium-ini", version = "=2.18.2", optional = true }
+lang-java = { package = "arborium-java", version = "=2.18.2", optional = true }
+lang-javascript = { package = "arborium-javascript", version = "=2.18.2", optional = true }
+lang-json = { package = "arborium-json", version = "=2.18.2", optional = true }
+lang-just = { package = "arborium-just", version = "=2.18.2", optional = true }
+lang-kotlin = { package = "arborium-kotlin", version = "=2.18.2", optional = true }
+lang-lua = { package = "arborium-lua", version = "=2.18.2", optional = true }
+lang-make = { package = "arborium-make", version = "=2.18.2", optional = true }
+lang-markdown = { package = "arborium-markdown", version = "=2.18.2", optional = true }
+lang-meson = { package = "arborium-meson", version = "=2.18.2", optional = true }
+lang-ninja = { package = "arborium-ninja", version = "=2.18.2", optional = true }
+lang-nix = { package = "arborium-nix", version = "=2.18.2", optional = true }
+lang-objc = { package = "arborium-objc", version = "=2.18.2", optional = true }
+lang-ocaml = { package = "arborium-ocaml", version = "=2.18.2", optional = true }
+lang-perl = { package = "arborium-perl", version = "=2.18.2", optional = true }
+lang-php = { package = "arborium-php", version = "=2.18.2", optional = true }
+lang-powershell = { package = "arborium-powershell", version = "=2.18.2", optional = true }
+lang-proto = { package = "arborium-proto", version = "=2.18.2", optional = true }
+lang-python = { package = "arborium-python", version = "=2.18.2", optional = true }
+lang-r = { package = "arborium-r", version = "=2.18.2", optional = true }
+lang-rego = { package = "arborium-rego", version = "=2.18.2", optional = true }
+lang-ruby = { package = "arborium-ruby", version = "=2.18.2", optional = true }
+lang-rust = { package = "arborium-rust", version = "=2.18.2", optional = true }
+lang-scala = { package = "arborium-scala", version = "=2.18.2", optional = true }
+lang-scheme = { package = "arborium-scheme", version = "=2.18.2", optional = true }
+lang-scss = { package = "arborium-scss", version = "=2.18.2", optional = true }
+lang-solidity = { package = "arborium-solidity", version = "=2.18.2", optional = true }
+lang-sql = { package = "arborium-sql", version = "=2.18.2", optional = true }
+lang-starlark = { package = "arborium-starlark", version = "=2.18.2", optional = true }
+lang-svelte = { package = "arborium-svelte", version = "=2.18.2", optional = true }
+lang-swift = { package = "arborium-swift", version = "=2.18.2", optional = true }
+lang-toml = { package = "arborium-toml", version = "=2.18.2", optional = true }
+lang-tsx = { package = "arborium-tsx", version = "=2.18.2", optional = true }
+lang-typescript = { package = "arborium-typescript", version = "=2.18.2", optional = true }
+lang-vue = { package = "arborium-vue", version = "=2.18.2", optional = true }
+lang-x86asm = { package = "arborium-x86asm", version = "=2.18.2", optional = true }
+lang-xml = { package = "arborium-xml", version = "=2.18.2", optional = true }
+lang-yaml = { package = "arborium-yaml", version = "=2.18.2", optional = true }
+lang-zig = { package = "arborium-zig", version = "=2.18.2", optional = true }
+lang-zsh = { package = "arborium-zsh", version = "=2.18.2", optional = true }
 arborium-theme = "=2.18.2"
 rouge-theme.workspace = true
 serde.workspace = true

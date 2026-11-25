@@ -13,7 +13,7 @@ pub use highlight::{
     SyntaxStreamUpdate, analyze,
 };
 pub use incremental::SyntaxWorkStats;
-pub use language::resolve_language;
+pub use language::{languages, resolve_language};
 pub use symbols::{
     LineSpan, SymbolDefinition, SymbolKind, SymbolReference, SymbolTags, has_symbols,
 };

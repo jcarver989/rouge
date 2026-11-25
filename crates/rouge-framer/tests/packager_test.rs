@@ -2,8 +2,8 @@
 
 use framer::{DiskFs, Mode, Project};
 use rouge_framer::{
-    Action, Channel, GitHubReleases, Packager, PlayInternal, PublishError, RougePublish, Target,
-    TestFlight,
+    Action, Channel, GitHubPages, GitHubReleases, Packager, PlayInternal, PublishError,
+    RougePublish, Target, TestFlight, Web,
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use rouge_framer::{Device, Ios, Orientation};
@@ -355,6 +355,68 @@ jarsigner -keystore "$key" -storepass "$ANDROID_UPLOAD_STORE_PASSWORD" "$bundle"
 }
 
 const APP_ID: &str = "com.example.app";
+
+#[test]
+fn web_build_optimizes_precompresses_and_enforces_size_budgets() -> Result {
+    in_app(
+        "web_build_optimizes_precompresses_and_enforces_size_budgets",
+        |sh| {
+            sh.write_file(
+                "Cargo.lock",
+                "version = 4\n\n[[package]]\nname = \"wasm-bindgen\"\nversion = \"0.2.100\"\n",
+            )?;
+            tool(sh, "rustup", "")?;
+            tool(
+                sh,
+                "cargo",
+                r#"mkdir -p "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release"
+printf '0123456789abcdef0123456789abcdef' > "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/app.wasm""#,
+            )?;
+            tool(
+                sh,
+                "wasm-bindgen",
+                r#"if [ "$1" = --version ]; then echo 'wasm-bindgen 0.2.100'; exit; fi
+cp "$8" "$7/app_bg.wasm"
+printf 'export default function init() {}\n' > "$7/app.js""#,
+            )?;
+            tool(
+                sh,
+                "wasm-opt",
+                r#"[ "$1" = -O3 ]; printf '0123456789abcdef' > app_bg.wasm"#,
+            )?;
+            tool(
+                sh,
+                "brotli",
+                r#"shift 3; for asset do printf 'br:%s' "$asset" > "$asset.br"; done"#,
+            )?;
+            let passing = Packager::new(
+                RougePublish::new(APP_ID).web(
+                    Web::new(GitHubPages)
+                        .max_wasm_bytes(32)
+                        .max_brotli_bytes(32),
+                ),
+                ".",
+            );
+            passing.run(Action::Build, Target::Web)?;
+
+            assert_eq!(fs::metadata(".rouge/out/web/app_bg.wasm")?.len(), 16);
+            for asset in ["app_bg.wasm.br", "app.js.br", "index.html.br"] {
+                assert!(sh.path_exists(format!(".rouge/out/web/{asset}")), "{asset}");
+            }
+
+            for (web, asset) in [
+                (Web::new(GitHubPages).max_wasm_bytes(8), "app_bg.wasm"),
+                (Web::new(GitHubPages).max_brotli_bytes(4), "app_bg.wasm.br"),
+            ] {
+                let packager = Packager::new(RougePublish::new(APP_ID).web(web), ".");
+                assert!(
+                    matches!(packager.run(Action::Build, Target::Web), Err(PublishError::Invalid(message)) if message.starts_with(&format!("{asset} is ")))
+                );
+            }
+            Ok(())
+        },
+    )
+}
 
 fn in_app(test: &str, run: impl FnOnce(&Shell) -> Result) -> Result {
     let sh = Shell::new()?;

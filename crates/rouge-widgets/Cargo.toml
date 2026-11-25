@@ -14,14 +14,16 @@ categories = ["gui"]
 all-features = true
 
 [features]
+default = ["all-languages"]
+all-languages = ["rouge-syntax?/all-languages", "rouge-markdown?/all-languages"]
 markdown = ["syntax", "dep:rouge-markdown"]
 syntax = ["dep:rouge-syntax"]
 
 [dependencies]
 rouge-core.workspace = true
-rouge-markdown = { workspace = true, optional = true }
+rouge-markdown = { workspace = true, default-features = false, optional = true }
 rouge-reactive.workspace = true
-rouge-syntax = { workspace = true, optional = true }
+rouge-syntax = { workspace = true, default-features = false, optional = true }
 rouge-theme.workspace = true
 nucleo-matcher.workspace = true
 

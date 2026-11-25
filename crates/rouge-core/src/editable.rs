@@ -155,8 +155,8 @@ impl Editable {
         self
     }
 
-    pub fn font(mut self, family: impl Into<Cow<'static, str>>) -> Self {
-        self.text = self.text.font(family.into().into_owned());
+    pub fn font<U>(mut self, family: impl IntoProp<Cow<'static, str>, U>) -> Self {
+        self.text = self.text.font(family);
         self
     }
 

@@ -3,7 +3,7 @@ use rouge::core::{
     Corners, Div, Fill, Mask, Role, Styled, div, dynamic, each, scroll, show, text, view,
 };
 use rouge::reactive::{Signal, memo, signal};
-use rouge::widgets::tokens::{GROUP_HEIGHT, Pace, Radius, Space};
+use rouge::widgets::tokens::{GROUP_HEIGHT, Pace, Radii, Radius, Space};
 use rouge::widgets::{
     ButtonVariant, Icon, IconName, Material, MaterialExt, UiStyles, button, column_grid, grid_cell,
     icon_button, segmented_control, slider,
@@ -11,10 +11,10 @@ use rouge::widgets::{
 
 const TILE: f32 = 112.0;
 const SIDEBAR_CORNERS: Corners = Corners {
-    top_left: Radius::Floating.px(),
+    top_left: Radii::DEFAULT.px(Radius::Floating),
     top_right: 0.0,
     bottom_right: 0.0,
-    bottom_left: Radius::Floating.px(),
+    bottom_left: Radii::DEFAULT.px(Radius::Floating),
 };
 const THUMBNAIL: f32 = 40.0;
 const TRACK_SECONDS: f32 = 242.0;

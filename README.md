@@ -102,6 +102,10 @@ div()
     .child(text("Frosted glass"))
 ```
 
+### Brand shared widgets
+
+Install `UiStyle` inside the window's root view, before constructing its children. For example, `UiStyle { radii: Radii::SHARP, materials: Materials::Solid, ..UiStyle::default() }.provide()` gives shared panels square corners and opaque surfaces. Set `fonts.ui` and `fonts.code` to family names registered with `App::fonts`. The style is chosen at mount; the palette and a `floating_panel`’s emphasis remain reactive. Without a provider, widgets use the original rounded glass style and bundled font families.
+
 ### Keep data between launches
 
 Turn on the `persist` feature:
@@ -180,6 +184,8 @@ Use `mise tasks` to list workspace tasks, including the `platform:web:*`, `platf
 ### In the browser
 
 Install Python 3, the `wasm32-unknown-unknown` Rust target, and `wasm-bindgen-cli` at the same version as `wasm-bindgen` in `Cargo.lock`. After `mise run run todomvc web` starts the server, open <http://localhost:8000> in a browser that supports WebGPU or WebGL2. Add `?rouge_backend=gl` to the URL to use WebGL2 where WebGPU is available.
+
+To ship a smaller Markdown app, disable default features on `rouge` and enable `markdown`. Add `rouge-syntax` with `default-features = false` and only the grammar features you need (for example `lang-rust`). Other dependencies can still enable `all-languages` through Cargo feature unification. Web builds use `wasm-opt` and Brotli when installed; to serve `.br` files, configure the host to return `Content-Encoding: br` with the original asset’s content type.
 
 ### In the iOS simulator
 

@@ -43,6 +43,7 @@ mod skeleton;
 mod slider;
 mod snap;
 mod sortable;
+mod style;
 #[cfg(feature = "syntax")]
 mod syntax;
 mod tabs;
@@ -79,7 +80,7 @@ pub use data_table::{
 pub use date_picker::{Date, DatePicker, date_picker};
 pub use fab::{Fab, fab};
 pub use field::{Field, field};
-pub use fonts::{CODE_FONT, UI_FONT, bundled_fonts};
+pub use fonts::{CODE_FONT, FontRole, Fonts, UI_FONT, bundled_fonts};
 pub use grid::{column_grid, grid_cell, grid_overlay, reading_cell, reading_span};
 pub use icon::{Icon, IconName};
 pub use inline_edit::{InlineEdit, inline_edit};
@@ -90,7 +91,7 @@ pub use keyboard_bar::{KeyboardBar, keyboard_bar};
 pub use list_group::{ListGroup, icon_tile, list_group};
 #[cfg(feature = "markdown")]
 pub use markdown::{Markdown, MarkdownPaint, MarkdownRow, MarkdownRows, MarkdownSource, markdown};
-pub use material::{Material, MaterialExt};
+pub use material::{Material, MaterialExt, Materials};
 pub use menu::{ContextMenu, MenuFocus, MenuItem, context_menu, select};
 pub use menu_bar::menu_bar;
 pub use nav_bar::{NavBar, nav_bar};
@@ -114,11 +115,13 @@ pub use sheet::{Detent, Sheet, sheet};
 pub use skeleton::skeleton;
 pub use slider::{Slider, slider};
 pub use sortable::{Sortable, sortable};
+pub use style::UiStyle;
 #[cfg(feature = "syntax")]
 pub use syntax::{CODE_WRAP, syntax_spans};
 pub use tabs::{Tabs, tabs};
 pub use tag_input::{TagInput, tag_input};
 pub use toast::{Toast, Toasts, toast};
+pub use tokens::Radii;
 #[cfg(feature = "markdown")]
 pub use transcript::{Composer, Message, Transcript, composer, transcript};
 pub use tree::{TreeRow, indent, tree_row};

@@ -1,3 +1,5 @@
+#![cfg(feature = "all-languages")]
+
 mod support;
 
 use ast_grep_core::{
@@ -270,7 +272,7 @@ impl Language for Rust {
 
 impl LanguageExt for Rust {
     fn get_ts_language(&self) -> TSLanguage {
-        arborium_rust::language().into()
+        lang_rust::language().into()
     }
 }
 

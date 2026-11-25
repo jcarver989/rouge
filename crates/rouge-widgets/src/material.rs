@@ -1,5 +1,6 @@
+use crate::UiStyle;
 use crate::tokens::Radius;
-use rouge_core::{Div, Glass, Role, Styled, Theme};
+use rouge_core::{BoxShadow, Div, Glass, Role, Styled, Theme};
 
 /// The surface a panel is drawn with. Every layer that floats above the page is [`Material::Glass`],
 /// so menus, tooltips, pickers and the composer read as one material.
@@ -18,7 +19,17 @@ pub enum Material {
     Bare,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Materials {
+    #[default]
+    Glass,
+    Solid,
+}
+
 pub trait MaterialExt {
+    #[must_use]
+    fn floating_panel(self, emphasized: impl Fn() -> bool + 'static) -> Self;
+
     #[must_use]
     fn material(self, material: Material) -> Self;
 
@@ -29,98 +40,75 @@ pub trait MaterialExt {
 
 impl MaterialExt for Div {
     fn material(self, material: Material) -> Self {
-        match material {
-            Material::Glass => self.focusable_glass(|| false),
-            Material::GlassControl => {
-                overhead_glass(self.rounded(Radius::Control), FROSTED, 0.0, || false)
-            }
-            Material::Lens | Material::Clear => {
-                let recipe = if material == Material::Lens {
-                    LENS
-                } else {
-                    CLEAR
-                };
-                overhead_glass(
-                    self.rounded(Radius::Floating),
-                    recipe,
-                    FLOATING_SHADOW,
-                    || false,
-                )
-            }
-            Material::Surface => self
-                .bg(Role::Surface)
-                .border(1.0)
-                .border_color(Role::BorderSubtle)
-                .rounded(Radius::Control),
-            Material::Pigment => self.bg(Role::Accent).text_color(Role::AccentForeground),
-            Material::Bare => self,
-        }
+        UiStyle::current().materials.apply(self, material, || false)
+    }
+
+    fn floating_panel(self, emphasized: impl Fn() -> bool + 'static) -> Self {
+        UiStyle::current()
+            .materials
+            .apply(self, Material::Glass, emphasized)
     }
 
     fn focusable_glass(self, focused: impl Fn() -> bool + 'static) -> Self {
-        overhead_glass(
-            self.rounded(Radius::Floating),
-            FROSTED,
-            FLOATING_SHADOW,
-            focused,
-        )
+        Materials::Glass.apply(self, Material::Glass, focused)
     }
 }
 
-/// Flat frosted glass lit from overhead: the top edge catches the light, the sides fade and the bottom
-/// stays dark.
-fn overhead_glass(
-    div: Div,
-    recipe: Recipe,
-    shadow: f32,
-    focused: impl Fn() -> bool + 'static,
-) -> Div {
-    let theme = Theme::current();
-    div.backdrop(move || {
-        let highlight = if focused() {
-            FOCUSED_HIGHLIGHT
-        } else {
-            HIGHLIGHT
+impl Materials {
+    fn apply(self, div: Div, material: Material, emphasized: impl Fn() -> bool + 'static) -> Div {
+        let (radius, glass, tint) = match material {
+            Material::Glass => (Radius::Floating, FROSTED, 0.5),
+            Material::GlassControl => (Radius::Control, FROSTED, 0.5),
+            Material::Lens => (Radius::Floating, LENS, 0.08),
+            Material::Clear => (Radius::Floating, CLEAR, 0.0),
+            Material::Surface => {
+                return div
+                    .bg(Role::Surface)
+                    .border(1.0)
+                    .border_color(Role::BorderSubtle)
+                    .rounded(Radius::Control);
+            }
+            Material::Pigment => return div.bg(Role::Accent).text_color(Role::AccentForeground),
+            Material::Bare => return div,
         };
-        recipe
-            .glass
-            .shadow(shadow)
-            .tint(theme.get().elevated.with_alpha(recipe.tint))
-            .highlight(highlight)
-    })
+        let div = div.rounded(radius);
+        let floating = radius == Radius::Floating;
+        match self {
+            Self::Solid => {
+                let div = div.bg(Role::Elevated).border(1.0);
+                if floating {
+                    div.shadow(BoxShadow::md()).border_color(move || {
+                        if emphasized() {
+                            Role::Accent
+                        } else {
+                            Role::Border
+                        }
+                    })
+                } else {
+                    div.border_color(Role::BorderSubtle)
+                }
+            }
+            Self::Glass => {
+                let theme = Theme::current();
+                let glass = glass.shadow(if floating { 0.2 } else { 0.0 });
+                div.backdrop(move || {
+                    glass
+                        .tint(theme.get().elevated.with_alpha(tint))
+                        .highlight(if emphasized() { 0.28 } else { 0.17 })
+                })
+            }
+        }
+    }
 }
 
-#[derive(Clone, Copy)]
-struct Recipe {
-    glass: Glass,
-    tint: f32,
-}
-
-const FROSTED: Recipe = Recipe {
-    glass: Glass::frosted(10.0).edge_width(1.5).rim_light(0.0, 0.0),
-    tint: 0.5,
-};
-
-const LENS: Recipe = Recipe {
-    glass: Glass::new()
-        .blur(6.0)
-        .refraction(0.55)
-        .dispersion(0.06)
-        .rim_light(0.0, 0.0),
-    tint: 0.08,
-};
-
-const CLEAR: Recipe = Recipe {
-    glass: Glass::new()
-        .blur(0.0)
-        .refraction(0.3)
-        .dispersion(0.0)
-        .rim_light(0.0, 0.0),
-    tint: 0.0,
-};
-
-const FLOATING_SHADOW: f32 = 0.2;
-
-const HIGHLIGHT: f32 = 0.17;
-
-const FOCUSED_HIGHLIGHT: f32 = 0.28;
+const FROSTED: Glass = Glass::frosted(10.0).edge_width(1.5).rim_light(0.0, 0.0);
+const LENS: Glass = Glass::new()
+    .blur(6.0)
+    .refraction(0.55)
+    .dispersion(0.06)
+    .rim_light(0.0, 0.0);
+const CLEAR: Glass = Glass::new()
+    .blur(0.0)
+    .refraction(0.3)
+    .dispersion(0.0)
+    .rim_light(0.0, 0.0);

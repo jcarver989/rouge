@@ -50,9 +50,9 @@ pub mod prelude {
     #[cfg(feature = "tokio-rt")]
     pub use rouge_reactive::{set_tokio, spawn_tokio};
     pub use rouge_widgets::{
-        ButtonVariant, CheckState, Hint, Material, MaterialExt, MenuFocus, ModalSize, Placement,
-        RovingFocus, Side, button, checkbox, context_menu, menu_bar, modal, popover, progress,
-        radio, resizable_panel, scroll_view, select, separator, slider, spinner, tabs, text_input,
-        toggle, tooltip, window_chrome,
+        ButtonVariant, CheckState, FontRole, Fonts, Hint, Material, MaterialExt, Materials,
+        MenuFocus, ModalSize, Placement, Radii, RovingFocus, Side, UiStyle, button, checkbox,
+        context_menu, menu_bar, modal, popover, progress, radio, resizable_panel, scroll_view,
+        select, separator, slider, spinner, tabs, text_input, toggle, tooltip, window_chrome,
     };
 }

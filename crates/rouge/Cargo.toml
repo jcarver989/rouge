@@ -14,6 +14,8 @@ categories = ["gui", "wasm"]
 all-features = true
 
 [features]
+default = ["all-languages"]
+all-languages = ["rouge-widgets/all-languages", "rouge-syntax?/all-languages", "rouge-markdown?/all-languages"]
 markdown = ["syntax", "rouge-widgets/markdown", "dep:rouge-markdown"]
 open-url = ["dep:open"]
 syntax = ["rouge-widgets/syntax", "dep:rouge-syntax"]
@@ -29,9 +31,9 @@ rouge-core.workspace = true
 wgpu.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-rouge-widgets.workspace = true
-rouge-markdown = { workspace = true, optional = true }
-rouge-syntax = { workspace = true, optional = true }
+rouge-widgets = { workspace = true, default-features = false }
+rouge-markdown = { workspace = true, default-features = false, optional = true }
+rouge-syntax = { workspace = true, default-features = false, optional = true }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 web-time.workspace = true

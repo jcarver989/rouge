@@ -251,6 +251,11 @@ impl Runner {
 
 impl ApplicationHandler<UserEvent> for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if Current::MOBILE {
+            for state in &mut self.windows {
+                state.driver.borrow_mut().ui().set_focused(true);
+            }
+        }
         if let Some(png) = self.pending_icon.take() {
             self.window_icon = Current::app_icon(&png);
         }
@@ -259,6 +264,14 @@ impl ApplicationHandler<UserEvent> for Runner {
                 self.error = Some(error);
                 event_loop.exit();
                 return;
+            }
+        }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if Current::MOBILE {
+            for state in &mut self.windows {
+                state.driver.borrow_mut().ui().set_focused(false);
             }
         }
     }

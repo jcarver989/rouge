@@ -1,3 +1,4 @@
+use crate::style::UiStyle;
 use rouge_core::{Corners, Ease, LayoutTransition, Length, PropFrom, Spring, Timing, Tween};
 use rouge_reactive::{Signal, provide_context, signal, use_context};
 
@@ -30,7 +31,7 @@ pub const GRAB_SCALE: f32 = 1.2;
 pub const POP_SCALE: f32 = 0.94;
 
 /// Inset that keeps a [`Radius::Inner`] row concentric inside a [`Radius::Floating`] panel.
-pub const FLOATING_INSET: f32 = Radius::Floating.px() - Radius::Inner.px();
+pub const FLOATING_INSET: f32 = Radii::DEFAULT.floating_inset();
 
 pub const CONTROL_PADDING_X_SMALL: f32 = Space::X2.px();
 pub const CONTROL_PADDING_X_MEDIUM: f32 = Space::X3.px();
@@ -110,21 +111,57 @@ pub enum Radius {
     Full,
 }
 
-impl Radius {
-    pub const fn px(self) -> f32 {
-        match self {
-            Radius::Inner => 4.0,
-            Radius::Control => 8.0,
-            Radius::Floating => 12.0,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Radii {
+    pub inner: f32,
+    pub control: f32,
+    pub floating: f32,
+}
+
+impl Radii {
+    pub const DEFAULT: Self = Self {
+        inner: 4.0,
+        control: 8.0,
+        floating: 12.0,
+    };
+
+    pub const SHARP: Self = Self {
+        inner: 0.0,
+        control: 0.0,
+        floating: 0.0,
+    };
+
+    pub const fn px(self, radius: Radius) -> f32 {
+        match radius {
+            Radius::Inner => self.inner,
+            Radius::Control => self.control,
+            Radius::Floating => self.floating,
             // Renderers clamp a radius to half the shorter side; finite so scaling it on the GPU can't overflow.
             Radius::Full => 1.0e6,
         }
+    }
+
+    pub const fn floating_inset(self) -> f32 {
+        let inset = self.floating - self.inner;
+        if inset > 0.0 { inset } else { 0.0 }
+    }
+}
+
+impl Default for Radii {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl Radius {
+    pub const fn px(self) -> f32 {
+        Radii::DEFAULT.px(self)
     }
 }
 
 impl From<Radius> for Corners {
     fn from(radius: Radius) -> Self {
-        Corners::all(radius.px())
+        Corners::all(UiStyle::current().radii.px(radius))
     }
 }
 

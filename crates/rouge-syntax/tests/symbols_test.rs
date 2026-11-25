@@ -1,3 +1,5 @@
+#![cfg(feature = "all-languages")]
+
 use rouge_syntax::{LineSpan, SymbolKind, SymbolTags, SyntaxError, analyze};
 use std::fmt::Write;
 

@@ -17,9 +17,11 @@ fn only_generates_enabled_targets() -> Result<(), Box<dyn std::error::Error>> {
     let workflow = fs.get(WORKFLOW).ok_or_else(|| missing(WORKFLOW))?;
     assert!(fs.get("PUBLISHING.md").is_none());
     assert!(workflow.contains("options: [all, web]"));
-    assert!(workflow.contains("actions/deploy-pages@"));
+    assert!(workflow.contains("actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e"));
     assert!(!workflow.contains("secrets."));
     let steps = [
+        "sudo apt-get update && sudo apt-get install -y binaryen brotli",
+        "run: cargo rouge build web",
         "run: cargo rouge stage web",
         "actions/upload-pages-artifact@",
         "actions/deploy-pages@",
@@ -129,6 +131,8 @@ fn validates_identity_and_platform_requirements() {
         RougePublish::new(APP_ID)
             .icon("icon.png")
             .ios(TestFlight::new("1234").invite_url("https://elsewhere.example")),
+        RougePublish::new(APP_ID).web(Web::new(GitHubPages).max_wasm_bytes(0)),
+        RougePublish::new(APP_ID).web(Web::new(GitHubPages).max_brotli_bytes(0)),
     ] {
         assert!(matches!(
             render_preset(bad),

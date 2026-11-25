@@ -38,79 +38,88 @@ impl LanguageId {
 }
 
 macro_rules! languages {
-    ($($name:literal => $module:ident [$($alias:literal),*] $(ext [$($ext:literal),*])? $(files [$($file:literal),*])?;)*) => {
-        pub(crate) const LANGUAGES: &[Language] = &[$(Language {
-            name: $name,
-            aliases: &[$name, $($alias),*],
-            extensions: &[$($($ext),*)?],
-            files: &[$($($file),*)?],
-            spec: || -> Spec { ($module::language().into(), &$module::HIGHLIGHTS_QUERY, &$module::INJECTIONS_QUERY) },
-        }),*];
+    ($($feature:literal: $name:literal => $module:ident [$($alias:literal),*] $(ext [$($ext:literal),*])? $(files [$($file:literal),*])?;)*) => {
+        pub(crate) const LANGUAGES: &[Language] = &[
+            $(
+                #[cfg(feature = $feature)]
+                Language {
+                    name: $name,
+                    aliases: &[$name, $($alias),*],
+                    extensions: &[$($($ext),*)?],
+                    files: &[$($($file),*)?],
+                    spec: || -> Spec { ($module::language().into(), &$module::HIGHLIGHTS_QUERY, &$module::INJECTIONS_QUERY) },
+                },
+            )*
+        ];
     };
 }
 
 languages! {
-    "asm" => arborium_asm ["assembly"] ext ["s"];
-    "bash" => arborium_bash ["sh", "shell"] files [".bashrc"];
-    "batch" => arborium_batch ["bat", "cmd"];
-    "c" => arborium_c ["h"];
-    "c-sharp" => arborium_c_sharp ["csharp", "c#", "cs"];
-    "clojure" => arborium_clojure ["clj", "cljs", "cljc", "edn"] files ["deps.edn"];
-    "cmake" => arborium_cmake [] files ["cmakelists.txt"];
-    "commonlisp" => arborium_commonlisp ["common-lisp", "lisp", "cl"];
-    "cpp" => arborium_cpp ["c++", "cc", "cxx", "hpp", "hh", "hxx"];
-    "css" => arborium_css [];
-    "dart" => arborium_dart [];
-    "diff" => arborium_diff ["patch"];
-    "dockerfile" => arborium_dockerfile ["docker"] files ["dockerfile", "containerfile"];
-    "elixir" => arborium_elixir ["ex", "exs"];
-    "erlang" => arborium_erlang ["erl", "hrl"];
-    "fish" => arborium_fish [];
-    "go" => arborium_go ["golang"] files ["go.mod", "go.sum"];
-    "graphql" => arborium_graphql ["gql"];
-    "haskell" => arborium_haskell ["hs"];
-    "hcl" => arborium_hcl ["terraform", "tf", "tfvars"] files [".terraformrc"];
-    "html" => arborium_html ["htm"];
-    "ini" => arborium_ini ["cfg", "conf"];
-    "java" => arborium_java [];
-    "javascript" => arborium_javascript ["js", "mjs", "cjs", "node", "jsx"];
-    "json" => arborium_json ["jsonc"];
-    "just" => arborium_just ["justfile"] files ["justfile"];
-    "kotlin" => arborium_kotlin ["kt", "kts"];
-    "lua" => arborium_lua [];
-    "make" => arborium_make ["makefile"] files ["makefile", "gnumakefile"];
-    "markdown" => arborium_markdown ["md", "mdx"];
-    "meson" => arborium_meson [] files ["meson.build", "meson_options.txt"];
-    "ninja" => arborium_ninja [] files ["build.ninja"];
-    "nix" => arborium_nix [] files ["flake.nix"];
-    "objc" => arborium_objc ["objective-c", "objectivec", "mm"] ext ["m"];
-    "ocaml" => arborium_ocaml ["ml", "mli"];
-    "perl" => arborium_perl ["pl", "pm"];
-    "php" => arborium_php [];
-    "powershell" => arborium_powershell ["pwsh", "ps1", "psm1"];
-    "proto" => arborium_proto ["protobuf"];
-    "python" => arborium_python ["py", "python3", "py3"];
-    "r" => arborium_r ["rlang"];
-    "rego" => arborium_rego ["opa"];
-    "ruby" => arborium_ruby ["rb"];
-    "rust" => arborium_rust ["rs"];
-    "scala" => arborium_scala ["sc"] files ["build.sbt"];
-    "scheme" => arborium_scheme ["scm", "ss", "rkt"];
-    "scss" => arborium_scss ["sass"];
-    "solidity" => arborium_solidity ["sol"];
-    "sql" => arborium_sql ["mysql", "postgres", "postgresql", "sqlite"];
-    "starlark" => arborium_starlark ["bzl", "bazel"] files ["workspace"];
-    "svelte" => arborium_svelte [];
-    "swift" => arborium_swift [];
-    "toml" => arborium_toml [];
-    "tsx" => arborium_tsx [];
-    "typescript" => arborium_typescript ["ts", "mts", "cts"];
-    "vue" => arborium_vue [];
-    "x86asm" => arborium_x86asm ["x86-asm", "nasm", "x86"];
-    "xml" => arborium_xml ["xhtml", "svg", "xsl", "xslt"];
-    "yaml" => arborium_yaml ["yml"];
-    "zig" => arborium_zig [];
-    "zsh" => arborium_zsh [] files [".zshrc"];
+    "lang-asm": "asm" => lang_asm ["assembly"] ext ["s"];
+    "lang-bash": "bash" => lang_bash ["sh", "shell"] files [".bashrc"];
+    "lang-batch": "batch" => lang_batch ["bat", "cmd"];
+    "lang-c": "c" => lang_c ["h"];
+    "lang-c-sharp": "c-sharp" => lang_c_sharp ["csharp", "c#", "cs"];
+    "lang-clojure": "clojure" => lang_clojure ["clj", "cljs", "cljc", "edn"] files ["deps.edn"];
+    "lang-cmake": "cmake" => lang_cmake [] files ["cmakelists.txt"];
+    "lang-commonlisp": "commonlisp" => lang_commonlisp ["common-lisp", "lisp", "cl"];
+    "lang-cpp": "cpp" => lang_cpp ["c++", "cc", "cxx", "hpp", "hh", "hxx"];
+    "lang-css": "css" => lang_css [];
+    "lang-dart": "dart" => lang_dart [];
+    "lang-diff": "diff" => lang_diff ["patch"];
+    "lang-dockerfile": "dockerfile" => lang_dockerfile ["docker"] files ["dockerfile", "containerfile"];
+    "lang-elixir": "elixir" => lang_elixir ["ex", "exs"];
+    "lang-erlang": "erlang" => lang_erlang ["erl", "hrl"];
+    "lang-fish": "fish" => lang_fish [];
+    "lang-go": "go" => lang_go ["golang"] files ["go.mod", "go.sum"];
+    "lang-graphql": "graphql" => lang_graphql ["gql"];
+    "lang-haskell": "haskell" => lang_haskell ["hs"];
+    "lang-hcl": "hcl" => lang_hcl ["terraform", "tf", "tfvars"] files [".terraformrc"];
+    "lang-html": "html" => lang_html ["htm"];
+    "lang-ini": "ini" => lang_ini ["cfg", "conf"];
+    "lang-java": "java" => lang_java [];
+    "lang-javascript": "javascript" => lang_javascript ["js", "mjs", "cjs", "node", "jsx"];
+    "lang-json": "json" => lang_json ["jsonc"];
+    "lang-just": "just" => lang_just ["justfile"] files ["justfile"];
+    "lang-kotlin": "kotlin" => lang_kotlin ["kt", "kts"];
+    "lang-lua": "lua" => lang_lua [];
+    "lang-make": "make" => lang_make ["makefile"] files ["makefile", "gnumakefile"];
+    "lang-markdown": "markdown" => lang_markdown ["md", "mdx"];
+    "lang-meson": "meson" => lang_meson [] files ["meson.build", "meson_options.txt"];
+    "lang-ninja": "ninja" => lang_ninja [] files ["build.ninja"];
+    "lang-nix": "nix" => lang_nix [] files ["flake.nix"];
+    "lang-objc": "objc" => lang_objc ["objective-c", "objectivec", "mm"] ext ["m"];
+    "lang-ocaml": "ocaml" => lang_ocaml ["ml", "mli"];
+    "lang-perl": "perl" => lang_perl ["pl", "pm"];
+    "lang-php": "php" => lang_php [];
+    "lang-powershell": "powershell" => lang_powershell ["pwsh", "ps1", "psm1"];
+    "lang-proto": "proto" => lang_proto ["protobuf"];
+    "lang-python": "python" => lang_python ["py", "python3", "py3"];
+    "lang-r": "r" => lang_r ["rlang"];
+    "lang-rego": "rego" => lang_rego ["opa"];
+    "lang-ruby": "ruby" => lang_ruby ["rb"];
+    "lang-rust": "rust" => lang_rust ["rs"];
+    "lang-scala": "scala" => lang_scala ["sc"] files ["build.sbt"];
+    "lang-scheme": "scheme" => lang_scheme ["scm", "ss", "rkt"];
+    "lang-scss": "scss" => lang_scss ["sass"];
+    "lang-solidity": "solidity" => lang_solidity ["sol"];
+    "lang-sql": "sql" => lang_sql ["mysql", "postgres", "postgresql", "sqlite"];
+    "lang-starlark": "starlark" => lang_starlark ["bzl", "bazel"] files ["workspace"];
+    "lang-svelte": "svelte" => lang_svelte [];
+    "lang-swift": "swift" => lang_swift [];
+    "lang-toml": "toml" => lang_toml [];
+    "lang-tsx": "tsx" => lang_tsx [];
+    "lang-typescript": "typescript" => lang_typescript ["ts", "mts", "cts"];
+    "lang-vue": "vue" => lang_vue [];
+    "lang-x86asm": "x86asm" => lang_x86asm ["x86-asm", "nasm", "x86"];
+    "lang-xml": "xml" => lang_xml ["xhtml", "svg", "xsl", "xslt"];
+    "lang-yaml": "yaml" => lang_yaml ["yml"];
+    "lang-zig": "zig" => lang_zig [];
+    "lang-zsh": "zsh" => lang_zsh [] files [".zshrc"];
+}
+
+pub fn languages() -> impl Iterator<Item = &'static str> {
+    LANGUAGES.iter().map(|language| language.name)
 }
 
 pub fn resolve_language(hint: &str, source: &str) -> Option<&'static str> {

@@ -35,7 +35,7 @@ description = "Run browser tests in headless Chrome (requires matching chromedri
 run = 'CHROMEDRIVER="$(command -v chromedriver)" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner cargo test --locked --target wasm32-unknown-unknown -p rouge --test platform_web_test --test platform_web_host_test --test platform_web_host_webgl_test'
 
 [tasks."platform:web:build"]
-description = "Build a browser example into target/web (requires wasm-bindgen; uses wasm-opt when installed)"
+description = "Build a browser example into target/web (requires wasm-bindgen; uses wasm-opt and brotli when installed)"
 usage = '''
 arg "[example]" default="component_gallery"
 arg "[package]" default="rouge"
@@ -44,10 +44,8 @@ run = '''
 out="target/web/$usage_example"
 cargo build --locked --profile wasm-release --target wasm32-unknown-unknown -p "$usage_package" --example "$usage_example"
 wasm-bindgen --target web --no-typescript --out-dir "$out" "target/wasm32-unknown-unknown/wasm-release/examples/$usage_example.wasm"
-if command -v wasm-opt >/dev/null; then
-    wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals --enable-reference-types --enable-multivalue "$out/${usage_example}_bg.wasm" -o "$out/${usage_example}_bg.wasm"
-fi
 sed "s/MODULE/$usage_example/g" web/index.html > "$out/index.html"
+sh crates/rouge-framer/src/platform/web/postprocess.sh "$out" "$usage_example"
 '''
 
 [tasks."platform:web:run"]
@@ -157,6 +155,11 @@ usage = 'arg "[profile]" default="default"'
 [tasks.test-ci]
 description = "Run tests with nextest's CI profile, which writes JUnit results"
 depends = ["test ci"]
+run = [
+    "cargo test --locked -p rouge-syntax --no-default-features --test features_test",
+    "cargo test --locked -p rouge-syntax --no-default-features --features lang-rust --test features_test",
+    "cargo test --locked -p rouge-syntax --no-default-features --features lang-sql --test features_test",
+]
 
 [tasks.lint]
 description = "Run Clippy, failing on any rustc, Clippy or Cargo warning"

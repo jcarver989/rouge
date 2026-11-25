@@ -1,6 +1,5 @@
-use crate::fonts::{CODE_FONT, UI_FONT};
-use rouge_core::Role;
-use rouge_core::{Styled, Typography};
+use crate::fonts::{CODE_FONT, FontRole, UI_FONT};
+use rouge_core::{Role, Styled, Typography};
 
 pub const CAPTION: Typography = preset(UI_FONT, 11.0, 16.0, 400.0);
 pub const SMALL: Typography = preset(UI_FONT, 12.0, 16.0, 400.0);
@@ -27,45 +26,54 @@ pub(crate) const fn preset(
     }
 }
 
+pub(crate) fn apply_preset<T: Styled>(target: T, preset: Typography, role: FontRole) -> T {
+    target
+        .typography(Typography {
+            font: None,
+            ..preset
+        })
+        .font(role)
+}
+
 pub trait UiStyles: Styled {
     fn caption(self) -> Self {
-        self.typography(CAPTION)
+        apply_preset(self, CAPTION, FontRole::Ui)
     }
 
     fn small(self) -> Self {
-        self.typography(SMALL)
+        apply_preset(self, SMALL, FontRole::Ui)
     }
 
     fn label(self) -> Self {
-        self.typography(LABEL)
+        apply_preset(self, LABEL, FontRole::Ui)
     }
 
     fn body(self) -> Self {
-        self.typography(BODY)
+        apply_preset(self, BODY, FontRole::Ui)
     }
 
     fn body_strong(self) -> Self {
-        self.typography(BODY_STRONG)
+        apply_preset(self, BODY_STRONG, FontRole::Ui)
     }
 
     fn title(self) -> Self {
-        self.typography(TITLE)
+        apply_preset(self, TITLE, FontRole::Ui)
     }
 
     fn heading(self) -> Self {
-        self.typography(HEADING)
+        apply_preset(self, HEADING, FontRole::Ui)
     }
 
     fn display(self) -> Self {
-        self.typography(DISPLAY)
+        apply_preset(self, DISPLAY, FontRole::Ui)
     }
 
     fn code(self) -> Self {
-        self.typography(CODE)
+        apply_preset(self, CODE, FontRole::Code)
     }
 
     fn reading(self) -> Self {
-        self.typography(READING)
+        apply_preset(self, READING, FontRole::Ui)
     }
 
     #[track_caller]

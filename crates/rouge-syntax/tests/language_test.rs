@@ -1,3 +1,5 @@
+#![cfg(feature = "all-languages")]
+
 use rouge_syntax::{SyntaxError, SyntaxStream, analyze, resolve_language};
 
 #[test]

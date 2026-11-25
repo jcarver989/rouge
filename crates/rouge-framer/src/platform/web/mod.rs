@@ -1,13 +1,14 @@
 mod pages;
 
 use crate::error::{Result, ensure, invalid};
-use crate::packager::Build;
+use crate::packager::{Build, need};
 use crate::platform::Platform;
 use crate::workflow::{self, CHECKOUT, Ci, PUBLISHING, ci_options};
 use crate::{Channel, RougePublish, Target};
 use framer::github::{Job, Step};
 use framer::yaml::Yaml;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use xshell::cmd;
 
@@ -16,6 +17,7 @@ const PAGE_URL: &str = "${{ steps.deployment.outputs.page_url }}";
 const PAGES_ARTIFACT: &str =
     "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b";
 const PAGES_DEPLOY: &str = "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e";
+const POSTPROCESS: &str = include_str!("postprocess.sh");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GitHubPages;
@@ -23,11 +25,27 @@ pub struct GitHubPages;
 #[derive(Clone, Debug)]
 pub struct Web {
     ci: Ci,
+    max_wasm_bytes: Option<u64>,
+    max_brotli_bytes: Option<u64>,
 }
 
 impl Web {
     pub fn new(_destination: GitHubPages) -> Self {
-        Self { ci: Ci::default() }
+        Self {
+            ci: Ci::default(),
+            max_wasm_bytes: None,
+            max_brotli_bytes: None,
+        }
+    }
+
+    pub fn max_wasm_bytes(mut self, bytes: u64) -> Self {
+        self.max_wasm_bytes = Some(bytes);
+        self
+    }
+
+    pub fn max_brotli_bytes(mut self, bytes: u64) -> Self {
+        self.max_brotli_bytes = Some(bytes);
+        self
     }
 }
 
@@ -44,6 +62,16 @@ impl Platform for Web {
         Target::Web
     }
 
+    fn validate(&self, _config: &RougePublish) -> Result<(), String> {
+        if self.max_wasm_bytes == Some(0) {
+            return Err("web max_wasm_bytes must be greater than zero".into());
+        }
+        if self.max_brotli_bytes == Some(0) {
+            return Err("web max_brotli_bytes must be greater than zero".into());
+        }
+        Ok(())
+    }
+
     fn job(&self, _config: &RougePublish) -> Job {
         let target = self.target();
         let checkout = Step::uses(CHECKOUT).with("persist-credentials", PUBLISHING);
@@ -56,6 +84,10 @@ impl Platform for Web {
                 workflow::rouge("Check Pages setup", "doctor", target)
                     .condition(PUBLISHING)
                     .env("GH_TOKEN", "${{ github.token }}"),
+            )
+            .step(
+                Step::run("sudo apt-get update && sudo apt-get install -y binaryen brotli")
+                    .name("Install web build tools"),
             )
             .step(workflow::rouge("Build web package", "build", target))
             .step(workflow::inspect(target, "*"))
@@ -111,7 +143,37 @@ impl Platform for Web {
         let bindgen = resolve_bindgen(build)?;
         let wasm = compile_wasm(build)?;
         generate_bindings(build, &bindgen, &wasm)?;
-        write_site(build)
+        write_site(build)?;
+        if self.max_brotli_bytes.is_some() {
+            need("brotli")?;
+        }
+        let (sh, out) = (&build.sh, &build.out);
+        build
+            .isolated(cmd!(sh, "sh -c {POSTPROCESS} postprocess {out} app"))
+            .run()?;
+        for (asset, limit, required) in [
+            ("app_bg.wasm", self.max_wasm_bytes, true),
+            (
+                "app_bg.wasm.br",
+                self.max_brotli_bytes,
+                self.max_brotli_bytes.is_some(),
+            ),
+        ] {
+            let path = out.join(asset);
+            if !required && !path.try_exists()? {
+                continue;
+            }
+            let bytes = fs::metadata(path)?.len();
+            build.summarize(&format!("Web bundle: `{asset}` {bytes} bytes"))?;
+            if let Some(limit) = limit
+                && bytes > limit
+            {
+                return invalid(format!(
+                    "{asset} is {bytes} bytes, exceeding its {limit} byte budget"
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn stage(&self, build: &Build) -> Result<()> {

@@ -1,8 +1,8 @@
-use crate::fonts::{CODE_FONT, UI_FONT};
+use crate::fonts::{FontRole, UI_FONT};
 use crate::syntax::{CODE_WRAP, syntax_spans};
 use crate::tokens::{HAIRLINE, Radius, Space};
-use crate::typography::{CODE, READING, TITLE, preset};
-use crate::{IconName, UiStyles, icon_button};
+use crate::typography::{CODE, READING, TITLE, apply_preset, preset};
+use crate::{IconName, UiStyle, UiStyles, icon_button};
 use rouge_core::Role;
 use rouge_core::{
     BuildCx, Color, Corners, Cursor, DelegateStyle, Div, IntoProp, SpanStyle, StyleDelta, Styled,
@@ -17,6 +17,7 @@ use rouge_markdown::{
 use rouge_reactive::{Callback, Memo, ReadSignal, Signal, effect, memo, signal};
 use rouge_syntax::SyntaxTheme;
 use rouge_theme::{MarkdownPalette, Rgba};
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::slice::from_ref;
 use std::sync::Arc;
@@ -425,15 +426,17 @@ impl MarkdownRow {
     pub fn block(&self, paint: &MarkdownPaint) -> Div {
         let mut fragments = self.fragments().map(|fragment| fragment.view(paint));
         match &self.kind {
-            Kind::Heading { level, .. } => paint
-                .prose()
-                .typography(if paint.compact {
+            Kind::Heading { level, .. } => apply_preset(
+                paint.prose(),
+                if paint.compact {
                     TITLE
                 } else {
                     heading(*level)
-                })
-                .text_color(paint.markdown(|m| m.heading))
-                .child(fragments.next()),
+                },
+                FontRole::Ui,
+            )
+            .text_color(paint.markdown(|m| m.heading))
+            .child(fragments.next()),
             Kind::Paragraph { .. } => paint.prose().child(fragments.next()),
             Kind::ListItem { .. } => paint
                 .prose()
@@ -598,15 +601,14 @@ fn prose() -> Div {
 }
 
 fn corners(top: bool, bottom: bool) -> Corners {
-    let (top, bottom) = (
-        if top { Radius::Control.px() } else { 0.0 },
-        if bottom { Radius::Control.px() } else { 0.0 },
-    );
+    let radius = UiStyle::current().radii.px(Radius::Control);
+    let top = if top { radius } else { 0.0 };
+    let bottom = if bottom { radius } else { 0.0 };
     Corners {
         top_left: top,
         top_right: top,
-        bottom_right: bottom,
         bottom_left: bottom,
+        bottom_right: bottom,
     }
 }
 
@@ -683,17 +685,26 @@ fn table_row(
             cell
         }
     });
-    let row = view! {
-        <div flex row border_l=1.0 border_r=1.0 border_b=1.0 border_color=Role::Border
-             rounded=corners(first, last) typography=TABLE>
-            {..cells}
-        </div>
-    };
+    let row = apply_preset(
+        view! {
+            <div flex row border_l=1.0 border_r=1.0 border_b=1.0 border_color=Role::Border
+                 rounded=corners(first, last)>
+                {..cells}
+            </div>
+        },
+        TABLE,
+        FontRole::Ui,
+    );
     let row = if header { row.font_weight(600.0) } else { row };
     if first { row.border_t(1.0) } else { row }
 }
 
-fn mark_style(marks: Marks, markdown: &MarkdownPalette, muted: Color) -> SpanStyle {
+fn mark_style(
+    marks: Marks,
+    markdown: &MarkdownPalette,
+    muted: Color,
+    code_font: impl FnOnce() -> Cow<'static, str>,
+) -> SpanStyle {
     let link = Color::from(markdown.link);
     let code = marks.contains(Marks::CODE);
     let foreground = if marks.contains(Marks::LINK) {
@@ -715,7 +726,7 @@ fn mark_style(marks: Marks, markdown: &MarkdownPalette, muted: Color) -> SpanSty
             thickness: 1.0,
         }),
         strikethrough: marks.contains(Marks::STRIKETHROUGH).then_some(true),
-        family: code.then(|| CODE_FONT.into()),
+        family: code.then(code_font),
     }
 }
 
@@ -725,13 +736,19 @@ fn inline_text(content: &Arc<MarkdownText>, paint: &MarkdownPaint) -> Text {
         text(source)
     } else {
         let (palette, muted) = (paint.palette, Theme::current().color(Role::TextMuted));
+        let code_font = FontRole::Code.name();
         let marked = Arc::clone(content);
         let spans = move || {
             let muted = muted.get();
             palette.with(|palette| {
                 let marks = marked.marks().iter();
                 marks
-                    .map(|mark| (mark.range.clone(), mark_style(mark.marks, palette, muted)))
+                    .map(|mark| {
+                        (
+                            mark.range.clone(),
+                            mark_style(mark.marks, palette, muted, || code_font.clone()),
+                        )
+                    })
                     .collect()
             })
         };
