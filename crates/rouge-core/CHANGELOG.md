@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/jcarver989/rouge/compare/rouge-core-v0.5.0...rouge-core-v0.6.0) - 2026-11-25
+
+### Added
+
+- *(widgets)* handle overlay collisions at window edges
+- support host-styled widgets, optional grammars, and web size budgets
+
+### Fixed
+
+- *(render)* snap shared row edges in device space
+
 ## [0.5.0](https://github.com/jcarver989/rouge/compare/rouge-core-v0.4.1...rouge-core-v0.5.0) - 2026-11-24
 
 ### Added
