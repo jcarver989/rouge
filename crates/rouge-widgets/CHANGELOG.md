@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.5.0...rouge-widgets-v0.6.0) - 2026-11-25
+
+### Added
+
+- *(widgets)* handle overlay collisions at window edges
+- support host-styled widgets, optional grammars, and web size budgets
+
+### Fixed
+
+- *(ci)* resolve Clippy warning in popover test
+
 ## [0.4.1](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.4.0...rouge-widgets-v0.4.1) - 2026-11-24
 
 ### Fixed
