@@ -571,6 +571,11 @@ impl Ui {
         self.tree.bounds_of_all(name)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn visible_bounds_of(&self, name: &str) -> Option<Rect> {
+        self.tree.visible_bounds_of(name)
+    }
+
     pub fn named_bounds(&self) -> Vec<(String, Rect)> {
         self.tree.named_bounds()
     }

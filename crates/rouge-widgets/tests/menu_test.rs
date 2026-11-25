@@ -1,18 +1,17 @@
 mod common;
 
-use common::{builder, handheld_test};
+use common::{builder, handheld_test, viewport};
 use rouge_core::access::{Action, Role};
 use rouge_core::testing::{TestResult, TestUi};
 use rouge_core::{
-    Chord, Div, EditAction, Key, Menu, MenuItem, Modifiers, Point, PointerButton, Styled, Theme,
-    TouchPhase, WindowCommand, div, editable, focus_handle, view,
+    Chord, Div, EditAction, Key, Menu, MenuItem, Modifiers, Point, Styled, Theme, TouchPhase,
+    WindowCommand, div, editable, focus_handle, view,
 };
 use rouge_reactive::{Runtime, Signal, signal};
 use rouge_theme::UiPalette;
 use rouge_widgets::testing::component_test;
+use rouge_widgets::tokens::CONTROL_HEIGHT_LARGE;
 use rouge_widgets::{MenuFocus, button, context_menu, select};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[test]
 fn a_select_is_a_combo_box_whose_menu_items_choose() -> TestResult {
@@ -38,73 +37,90 @@ fn a_select_is_a_combo_box_whose_menu_items_choose() -> TestResult {
 }
 
 #[test]
-fn select_opens_a_menu_and_picks_by_click_or_keyboard() {
+fn select_opens_a_menu_and_picks_by_click_or_keyboard() -> TestResult {
     let _entered = Runtime::new().enter();
     let (mut ui, value) = select_fixture();
-    let closed = ui.stats().elements;
-    ui.click_at(30.0, 22.0);
+    ui.click_on("select")?;
     ui.run(0.6);
-    assert!(ui.stats().elements > closed, "the menu is mounted");
-    ui.click_at(30.0, 128.0);
+    ui.click_on("menu-item-Three")?;
     assert_eq!(value.get(), 3, "the third row");
     ui.run(0.6);
-    assert_eq!(ui.stats().elements, closed, "choosing closes the menu");
-    ui.click_at(30.0, 22.0);
+    assert!(
+        ui.bounds_of("menu-item-Three").is_none(),
+        "choosing closes the menu"
+    );
+    ui.click_on("select")?;
     ui.run(0.6);
-    ui.click_at(30.0, 68.0);
+    ui.click_on("menu-item-One")?;
     assert_eq!(value.get(), 1, "the first row");
     ui.run(0.6);
 
     assert!(
         ui.press("down"),
-        "the trigger has focus again and opens on arrow down"
+        "focus returns to the trigger, which opens on arrow down"
     );
     ui.run(0.6);
-    ui.press("down");
-    ui.press("down");
-    ui.press("enter");
+    ui.press("down down enter");
     assert_eq!(value.get(), 3, "arrow keys walk the rows and enter picks");
     ui.run(0.6);
     ui.press("enter");
     ui.run(0.6);
-    ui.press("up");
-    ui.press("escape");
+    ui.press("up escape");
     ui.run(0.6);
-    assert_eq!(
-        (value.get(), ui.stats().elements),
-        (3, closed),
-        "escape closes without choosing"
-    );
+    assert_eq!(value.get(), 3, "escape closes without choosing");
+    assert!(ui.bounds_of("menu-item-Three").is_none());
+    Ok(())
 }
 
 #[test]
 fn context_menu_opens_at_the_pointer_on_secondary_click() -> TestResult {
     let _entered = Runtime::new().enter();
-    let chosen = Rc::new(RefCell::new(Vec::new()));
-    let (copy, paste) = (chosen.clone(), chosen.clone());
+    let chosen = signal(None);
     let mut ui = builder().build(move || {
         let items = [
-            MenuItem::callback("Copy", move || copy.borrow_mut().push("copy")),
-            MenuItem::callback("Paste", move || paste.borrow_mut().push("paste")),
+            MenuItem::callback("Copy", move || chosen.set(Some("copy"))),
+            MenuItem::callback("Paste", move || chosen.set(Some("paste"))),
         ];
-        context_menu(div().size_full(), items).size_full()
+        context_menu(viewport().child(context_target()), items).size_full()
     });
-    let closed = ui.stats().elements;
-    ui.click_at(100.0, 80.0);
-    assert_eq!(ui.stats().elements, closed, "a primary click does nothing");
-    ui.pointer_moved(Point::new(100.0, 80.0));
-    ui.pointer_down(PointerButton::Secondary);
-    ui.pointer_up(PointerButton::Secondary);
-    ui.run(0.6);
-    let row = ui.bounds(110.0, 92.0)?;
+    let pointer = ui.center_of("context-target")?;
+    ui.click_on("context-target")?;
     assert!(
-        row.origin.x >= 100.0 && row.origin.y >= 80.0,
-        "the menu starts at the pointer: {row:?}"
+        ui.bounds_of("menu-item-Copy").is_none(),
+        "a primary click does nothing"
     );
-    ui.click_at(110.0, row.origin.y + row.size.height + 10.0);
+    ui.right_click_on("context-target")?;
     ui.run(0.6);
-    assert_eq!(*chosen.borrow(), ["paste"]);
-    assert_eq!(ui.stats().elements, closed);
+    let row = ui.rect_of("menu-item-Copy")?;
+    assert!(
+        row.origin.x >= pointer.x && row.origin.y >= pointer.y,
+        "starts at the pointer"
+    );
+    ui.click_on("menu-item-Paste")?;
+    ui.run(0.6);
+    assert_eq!(chosen.get(), Some("paste"));
+    assert!(ui.bounds_of("menu-item-Copy").is_none());
+    Ok(())
+}
+
+#[test]
+fn a_context_menu_near_a_corner_flips_and_shifts_but_remains_clickable() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let chosen = signal(false);
+    let mut ui = builder().build(move || {
+        let items = [MenuItem::callback("Copy", move || chosen.set(true))];
+        let target = context_target().absolute().right(0.0).bottom(0.0);
+        context_menu(viewport().child(target), items).size_full()
+    });
+    let pointer = ui.center_of("context-target")?;
+    ui.right_click_on("context-target")?;
+    ui.run(0.6);
+    let row = ui.rect_of("menu-item-Copy")?;
+    assert!(row.max().y <= pointer.y, "flips above the pointer");
+    assert!(row.origin.x < pointer.x, "shifts away from the right edge");
+    assert_eq!(ui.visible_rect_of("menu-item-Copy")?, row);
+    ui.click_on("menu-item-Copy")?;
+    assert!(chosen.get());
     Ok(())
 }
 
@@ -114,7 +130,7 @@ fn nested_context_menus_are_keyboard_reachable_and_close_the_entire_chain() -> T
     let chosen = signal(0);
     let mut ui = builder().size(600.0, 400.0).build(move || {
         context_menu(
-            div().size_full(),
+            viewport().child(context_target()),
             [
                 MenuItem::Separator,
                 MenuItem::Submenu(Menu::new(
@@ -126,19 +142,15 @@ fn nested_context_menus_are_keyboard_reachable_and_close_the_entire_chain() -> T
         )
         .size_full()
     });
-    let closed = ui.stats().elements;
-    ui.pointer_moved(Point::new(20.0, 20.0));
-    ui.pointer_down(PointerButton::Secondary);
-    ui.pointer_up(PointerButton::Secondary);
+    ui.right_click_on("context-target")?;
     ui.run(0.2);
     ui.press("up");
     ui.press("enter");
     ui.run(0.2);
     assert_eq!(chosen.get(), 3, "up wraps past the submenu to the last row");
-    assert_eq!(ui.stats().elements, closed);
+    assert!(ui.bounds_of("menu-More").is_none());
 
-    ui.pointer_down(PointerButton::Secondary);
-    ui.pointer_up(PointerButton::Secondary);
+    ui.right_click_on("context-target")?;
     ui.run(0.2);
     ui.press("right");
     ui.run(0.2);
@@ -161,7 +173,11 @@ fn nested_context_menus_are_keyboard_reachable_and_close_the_entire_chain() -> T
     ui.press("enter");
     ui.run(0.2);
     assert_eq!(chosen.get(), 2);
-    assert_eq!(ui.stats().elements, closed, "a leaf closes every ancestor");
+    assert!(
+        ui.bounds_of("menu-More").is_none(),
+        "a leaf closes every ancestor"
+    );
+    assert!(ui.bounds_of("menu-item-Nested").is_none());
     Ok(())
 }
 
@@ -181,17 +197,22 @@ fn context_menu_focus_policy_preserves_editor_for_nested_actions_and_callbacks()
             ],
         ))];
         (
-            context_menu(editable(value).track_focus(focus).w_full(), items)
-                .focus_policy(MenuFocus::Preserve)
-                .size_full(),
+            context_menu(
+                editable(value)
+                    .test_id("editor")
+                    .track_focus(focus)
+                    .w(160.0),
+                items,
+            )
+            .focus_policy(MenuFocus::Preserve)
+            .size_full(),
             focus,
         )
     });
-    ui.click_at(20.0, 10.0);
+    ui.click_on("editor")?;
     assert!(focus.is_focused());
     for title in ["Callback", "Select All"] {
-        ui.pointer_down(PointerButton::Secondary);
-        ui.pointer_up(PointerButton::Secondary);
+        ui.right_click_on("editor")?;
         ui.run(0.2);
         ui.click_on("menu-Commands")?;
         ui.run(0.2);
@@ -221,7 +242,8 @@ fn menu_flips_and_clamps_at_window_edges_and_activates_by_keyboard() -> TestResu
             MenuItem::callback("Delete", move || chosen.set(2)).destructive(),
         ];
         let root = view! {
-            <div size_full flex col items_end justify_end>
+            <div size_full test_id="viewport" flex col items_end justify_end>
+                <div test_id="outside" size=20.0 absolute left=0.0 top=0.0/>
                 <context_menu items dropdown><button test_id="trigger" label="Menu"/></context_menu>
             </div>
         };
@@ -230,11 +252,12 @@ fn menu_flips_and_clamps_at_window_edges_and_activates_by_keyboard() -> TestResu
     assert!(ui.bounds_of("menu-item-Edit").is_none());
     ui.click_on("trigger")?;
     ui.run(0.2);
-    let trigger = ui.center_of("trigger")?;
+    let trigger = ui.rect_of("trigger")?;
     let entry = ui.rect_of("menu-item-Delete")?;
+    assert!(entry.max().y <= trigger.origin.y, "flips above the trigger");
     assert!(
-        entry.max().y < trigger.y && entry.max().x <= 320.0,
-        "{entry:?}"
+        entry.max().x <= ui.rect_of("viewport")?.max().x,
+        "shifts into the window"
     );
     ui.press("end");
     ui.press("enter");
@@ -248,7 +271,7 @@ fn menu_flips_and_clamps_at_window_edges_and_activates_by_keyboard() -> TestResu
     ui.run(0.2);
     ui.press("enter");
     ui.run(0.2);
-    ui.click_at(3.0, 3.0);
+    ui.click_on("outside")?;
     ui.run(0.2);
     assert!(ui.bounds_of("menu-item-Edit").is_none());
     Ok(())
@@ -285,11 +308,8 @@ fn hovering_a_dropdown_item_highlights_its_row() -> TestResult {
     });
     ui.click_on("trigger")?;
     ui.run(0.3);
-    let row = ui.bounds_of("second").expect("the menu is open");
-    let (x, y) = (
-        (row.origin.x + 4.0) as u32,
-        (row.origin.y + row.size.height / 2.0) as u32,
-    );
+    let row = ui.rect_of("second")?;
+    let (x, y) = ((row.origin.x + 4.0) as u32, row.center().y as u32);
     let resting = ui.pixel(x, y)?;
     ui.hover_on("second")?;
     ui.run(0.3);
@@ -327,9 +347,8 @@ fn group_labels_are_skipped_by_the_keyboard_and_shortcuts_sit_in_a_key_cap() -> 
     ui.run(0.3);
     ui.click_on("trigger")?;
     ui.run(0.3);
-    let label = ui.text_bounds("Library").ok_or("the label is drawn")?;
     chosen.set(0);
-    ui.click_at(label.center().x, label.center().y);
+    ui.click_text("Library")?;
     ui.run(0.3);
     assert_eq!(chosen.get(), 0, "a label does nothing");
     assert!(
@@ -346,18 +365,24 @@ fn select_lists_its_options_in_a_sheet_on_a_handheld() -> TestResult {
     let mut ui = handheld_test().build(move || {
         let options = [(1, "One".to_owned()), (2, "Two".to_owned())];
         view! {
-            <div size_full p=10.0>
-                <select value=value options=options w=140.0/>
+            <div size_full p=10.0 test_id="viewport">
+                {select_target(value, options)}
             </div>
         }
     });
-    ui.tap(Point::new(30.0, 22.0));
+    ui.tap_on("select")?;
     ui.run(2.0);
     let row = ui.rect_of("menu-item-Two")?;
-    assert_eq!(
-        (row.size.height, row.size.width > 300.0, row.max().y > 600.0),
-        (44.0, true, true),
-        "touch sized rows across the bottom of the window: {row:?}"
+    let trigger = ui.rect_of("select")?;
+    let viewport = ui.rect_of("viewport")?;
+    assert_eq!(row.size.height, CONTROL_HEIGHT_LARGE, "a touch-sized row");
+    assert!(
+        row.origin.y > viewport.center().y,
+        "opens at the bottom of the window"
+    );
+    assert!(
+        row.size.width > trigger.size.width,
+        "not constrained to the trigger width"
     );
     ui.tap_on("menu-item-Two")?;
     assert_eq!(value.get(), 2);
@@ -378,23 +403,25 @@ fn on_touch_a_long_press_opens_the_context_menu_and_a_tap_or_a_pan_does_not() ->
         .build(move || {
             let items = [MenuItem::callback("Flag", move || flagged.set(true))];
             view! {
-                <div size_full>
+                <div size_full test_id="viewport">
                     <context_menu items>
                         <div test_id="row" h=60.0 on_click={move |_| opened.update(|count| *count += 1)}/>
                     </context_menu>
                 </div>
             }
         });
-    let at = Point::new(100.0, 30.0);
-    ui.tap(at);
+    let row = ui.rect_of("row")?;
+    let at = row.center();
+    let pan = Point::new(at.x, row.max().y + row.size.height);
+    ui.tap_on("row")?;
     ui.run(1.0);
     assert_eq!(opened.get(), 1, "a tap is still a tap");
     assert_eq!(ui.bounds_of("menu-item-Flag"), None);
     ui.touch(TouchPhase::Start, at);
     ui.run(0.3);
-    ui.touch(TouchPhase::Move, Point::new(100.0, 80.0));
+    ui.touch(TouchPhase::Move, pan);
     ui.run(1.0);
-    ui.touch(TouchPhase::End, Point::new(100.0, 80.0));
+    ui.touch(TouchPhase::End, pan);
     ui.run(0.5);
     assert_eq!(
         ui.bounds_of("menu-item-Flag"),
@@ -407,8 +434,8 @@ fn on_touch_a_long_press_opens_the_context_menu_and_a_tap_or_a_pan_does_not() ->
     ui.run(1.5);
     let row = ui.rect_of("menu-item-Flag")?;
     assert!(
-        row.max().y > 600.0,
-        "it opens as a sheet on a handheld: {row:?}"
+        row.origin.y > ui.rect_of("viewport")?.center().y,
+        "it opens at the bottom as a sheet: {row:?}"
     );
     ui.touch(TouchPhase::End, at);
     ui.run(0.5);
@@ -440,10 +467,18 @@ fn select_fixture() -> (TestUi, Signal<u32>) {
             (2, "Two".to_owned()),
             (3, "Three".to_owned()),
         ];
-        div()
-            .size_full()
-            .p(10.0)
-            .child(select(value, options).access_label("Quality").w(140.0))
+        viewport().p(10.0).child(select_target(value, options))
     });
     (ui, value)
+}
+
+fn context_target() -> Div {
+    div().test_id("context-target").size(20.0)
+}
+
+fn select_target(value: Signal<u32>, options: impl IntoIterator<Item = (u32, String)>) -> Div {
+    div()
+        .test_id("select")
+        .w(140.0)
+        .child(select(value, options).access_label("Quality").w_full())
 }

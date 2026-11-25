@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use rouge_core::testing::TestUiBuilder;
-use rouge_core::{Color, InputKind};
+use rouge_core::{Color, Div, InputKind, Styled, div};
 use rouge_widgets::testing::component_test;
 
 pub(crate) fn builder() -> TestUiBuilder {
@@ -12,6 +12,10 @@ pub(crate) fn builder() -> TestUiBuilder {
 
 pub(crate) fn handheld_test() -> TestUiBuilder {
     component_test().size(390.0, 700.0).input(InputKind::Touch)
+}
+
+pub(crate) fn viewport() -> Div {
+    div().test_id("viewport").size_full()
 }
 
 pub(crate) fn line_widths(pixels: impl IntoIterator<Item = [u8; 4]>, color: [u8; 4]) -> Vec<usize> {

@@ -365,6 +365,13 @@ impl TestUi {
             .ok_or_else(|| TestError::NoTestId(name.to_owned()))
     }
 
+    pub fn visible_rect_of(&mut self, name: &str) -> Result<Rect, TestError> {
+        self.advance(0.0);
+        self.ui
+            .visible_bounds_of(name)
+            .ok_or_else(|| TestError::NoTestId(name.to_owned()))
+    }
+
     pub fn center_of(&mut self, name: &str) -> Result<Point, TestError> {
         Ok(self.rect_of(name)?.center())
     }

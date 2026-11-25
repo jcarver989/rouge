@@ -7,8 +7,8 @@ use rouge_core::Role;
 use rouge_core::component;
 use rouge_core::view;
 use rouge_core::{
-    AnyView, BuildCx, Chord, DelegateStyle, Div, IntoChord, Key, PointerEvent, Pose, Rect, Styled,
-    View, div, dynamic, overlay, presentation, show, text, window_size,
+    AnyView, BuildCx, Chord, DelegateStyle, Div, IntoChord, Key, Point, PointerEvent, Pose, Rect,
+    Size, Styled, View, div, dynamic, overlay, presentation, scroll, show, text, window_size,
 };
 use rouge_reactive::{Signal, Task, memo, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -31,48 +31,122 @@ pub enum Placement {
 
 impl Placement {
     pub(crate) fn place(self, panel: Div, anchor: Signal<Rect>) -> Div {
+        self.place_near(panel, move || anchor.get(), GAP)
+    }
+
+    pub(crate) fn place_at(self, panel: Div, point: Signal<Point>) -> Div {
+        self.place_near(
+            panel,
+            move || Rect {
+                origin: point.get(),
+                size: Size::ZERO,
+            },
+            0.0,
+        )
+    }
+
+    fn place_near(self, panel: Div, anchor: impl Fn() -> Rect + 'static, gap: f32) -> Div {
         let window = window_size();
-        let measured = signal(Rect::ZERO);
-        let position = move || {
-            let anchor = anchor.get();
-            let size = measured.get().size;
-            let window = window.get();
-            let right = anchor.max().x + GAP;
-            let left = anchor.origin.x - size.width - GAP;
-            let below = anchor.max().y + GAP;
-            let above = anchor.origin.y - size.height - GAP;
-            let (x, y) = match self {
-                Self::Below if below + size.height > window.height && above >= 0.0 => {
-                    (anchor.origin.x, above)
-                }
-                Self::Above if above < 0.0 && below + size.height <= window.height => {
-                    (anchor.origin.x, below)
-                }
-                Self::Right if right + size.width > window.width && left >= 0.0 => {
-                    (left, anchor.origin.y)
-                }
-                Self::Left if left < 0.0 && right + size.width <= window.width => {
-                    (right, anchor.origin.y)
-                }
-                Self::Below => (anchor.origin.x, below),
-                Self::Above => (anchor.origin.x, above),
-                Self::Right => (right, anchor.origin.y),
-                Self::Left => (left, anchor.origin.y),
-            };
-            (
-                x.clamp(0.0, (window.width - size.width).max(0.0)),
-                y.clamp(0.0, (window.height - size.height).max(0.0)),
-            )
-        };
+        let measured = signal(Size::ZERO);
+        let space = memo(move || PlacementSpace::new(self, anchor(), window.get(), gap));
+        let limit = memo(move || space.get().limit());
+        let position = memo(move || space.get().position(measured.get()));
         panel
             .absolute()
-            .max_w(move || window.get().width)
-            .max_h(move || window.get().height)
-            .track_bounds(measured)
+            .max_w(move || limit.get().width)
+            .max_h(move || limit.get().height)
+            .when(
+                move || {
+                    let (size, limit) = (measured.get(), limit.get());
+                    size.width > limit.width || size.height > limit.height
+                },
+                Styled::invisible,
+            )
+            .track_size(measured)
             .left(0.0)
             .top(0.0)
-            .translate_x(move || position().0)
-            .translate_y(move || position().1)
+            .translate_x(move || position.get().x)
+            .translate_y(move || position.get().y)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct PlacementSpace {
+    horizontal: bool,
+    prefer_after: bool,
+    main_extent: f32,
+    cross_extent: f32,
+    before: f32,
+    after: f32,
+    cross_start: f32,
+}
+
+impl PlacementSpace {
+    fn new(placement: Placement, anchor: Rect, window: Size, gap: f32) -> Self {
+        let horizontal = matches!(placement, Placement::Left | Placement::Right);
+        let (start, end, cross_start, main_extent, cross_extent) = if horizontal {
+            (
+                anchor.origin.x,
+                anchor.max().x,
+                anchor.origin.y,
+                window.width,
+                window.height,
+            )
+        } else {
+            (
+                anchor.origin.y,
+                anchor.max().y,
+                anchor.origin.x,
+                window.height,
+                window.width,
+            )
+        };
+        Self {
+            horizontal,
+            prefer_after: matches!(placement, Placement::Below | Placement::Right),
+            main_extent,
+            cross_extent,
+            before: (start - gap).clamp(0.0, main_extent),
+            after: (end + gap).clamp(0.0, main_extent),
+            cross_start,
+        }
+    }
+
+    fn limit(self) -> Size {
+        let main = self.before.max(self.main_extent - self.after).floor();
+        let cross = self.cross_extent.floor();
+        if self.horizontal {
+            Size::new(main, cross)
+        } else {
+            Size::new(cross, main)
+        }
+    }
+
+    fn position(self, size: Size) -> Point {
+        let (main_size, cross_size) = if self.horizontal {
+            (size.width, size.height)
+        } else {
+            (size.height, size.width)
+        };
+        let after_space = self.main_extent - self.after;
+        let use_after = if self.prefer_after {
+            main_size <= after_space || after_space >= self.before
+        } else {
+            main_size > self.before && after_space > self.before
+        };
+        let main = if use_after {
+            self.after
+        } else {
+            self.before - main_size
+        };
+        let cross = self
+            .cross_start
+            .clamp(0.0, (self.cross_extent - cross_size).max(0.0));
+        if self.horizontal {
+            Point::new(main, cross)
+        } else {
+            Point::new(cross, main)
+        }
     }
 }
 
@@ -110,7 +184,7 @@ pub(crate) fn popup(
     open: Signal<bool>,
     backdrop: impl Fn(Div) -> Div + 'static,
     place: impl Fn(Div) -> Div + 'static,
-    content: impl Fn() -> Div + 'static,
+    content: impl Fn(Div) -> Div + 'static,
 ) -> impl View {
     let presentation = presentation();
     let handheld = memo(move || presentation.get().is_handheld());
@@ -121,13 +195,13 @@ pub(crate) fn popup(
                 let (backdrop, place, content) = (backdrop.clone(), place.clone(), content.clone());
                 if handheld.get() {
                     Presenter::new(open)
-                        .present(move || content().into_any())
+                        .present(move || content(div()).into_any())
                         .into_any()
                 } else {
                     floating(
                         move || open.get(),
                         POPPED,
-                        move || dismissable(backdrop(view! { <div/> }), place(content()), move || open.set(false)),
+                        move || dismissable(backdrop(view! { <div/> }), place(content(scroll())), move || open.set(false)),
                     )
                     .into_any()
                 }
@@ -189,7 +263,7 @@ impl View for Popover {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (anchor, placement, content, material) =
             (self.anchor, self.placement, self.content, self.material);
-        let body = move || view! { <div focus_scope autofocus>{content()}</div> };
+        let body = move |panel: Div| panel.focus_scope().autofocus().child(content());
         let place = move |body: Div| placement.place(body.material(material), anchor);
         self.root
             .child(popup(self.open, |layer| layer, place, body))
@@ -291,7 +365,7 @@ impl View for Tooltip {
                         {keys}
                     </div>
                 };
-                Placement::Below.place(bubble, anchor)
+                Placement::Below.place(bubble.overflow_hidden(), anchor)
             },
         );
         self.root
@@ -358,7 +432,7 @@ impl View for HoverCard {
             material,
         } = self;
         floating(open, POPPED, move || {
-            let panel = div()
+            let panel = scroll()
                 .material(material)
                 .on_pointer_down(PointerEvent::stop_propagation)
                 .child(content());

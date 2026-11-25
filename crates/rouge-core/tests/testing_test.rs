@@ -2,7 +2,8 @@ use rouge_core::testing::{
     BLUE, LINEAR, RED, TestError, TestResult, TestUi, TestUiBuilder, WHITE, assert_near,
 };
 use rouge_core::{
-    Color, Keyframes, Menu, MenuItem, Point, PointerButton, Rect, Styled, div, dynamic,
+    Color, Keyframes, Menu, MenuItem, Point, PointerButton, Rect, Styled, canvas, div, dynamic,
+    scroll,
 };
 use rouge_reactive::{Runtime, signal};
 use std::assert_matches;
@@ -96,6 +97,51 @@ fn test_ids_follow_dynamic_replacements_and_keep_paint_order() -> TestResult {
     assert_eq!(ui.bounds_of_all("row").len(), 2);
     ui.hover_on("row")?;
     assert_matches!(ui.center_of("missing"), Err(TestError::NoTestId(_)));
+    Ok(())
+}
+
+#[test]
+fn visible_rect_of_distinguishes_clipped_content_from_missing_content() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::new(|| {
+        scroll()
+            .test_id("scroller")
+            .w(100.0)
+            .h(45.0)
+            .children(["first", "middle", "last"].map(|name| div().test_id(name).h(30.0)))
+    });
+    assert_eq!(ui.visible_rect_of("first")?, ui.rect_of("first")?);
+    let middle = ui.rect_of("middle")?;
+    let scroller = ui.rect_of("scroller")?;
+    assert!(middle.origin.y < scroller.max().y && middle.max().y > scroller.max().y);
+    assert_eq!(ui.visible_rect_of("middle")?, middle.intersect(&scroller));
+    assert!(ui.visible_rect_of("last")?.is_empty());
+    assert_matches!(ui.visible_rect_of("missing"), Err(TestError::NoTestId(_)));
+
+    ui.scroll_into_view("scroller", "last")?;
+    assert_eq!(ui.visible_rect_of("last")?, ui.rect_of("last")?);
+    assert!(ui.visible_rect_of("first")?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn visible_rect_of_clips_named_canvas_regions_to_the_window() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let mut ui = TestUi::new(|| {
+        div().test_id("viewport").size_full().child(
+            canvas(|painter| painter.region("region", Rect::new(20.0, 20.0, 40.0, 40.0)))
+                .absolute()
+                .right(0.0)
+                .bottom(0.0)
+                .size(40.0),
+        )
+    });
+    let region = ui.rect_of("region")?;
+    let viewport = ui.rect_of("viewport")?;
+    let visible = ui.visible_rect_of("region")?;
+    assert!(!visible.is_empty());
+    assert_ne!(visible, region);
+    assert_eq!(visible, region.intersect(&viewport));
     Ok(())
 }
 

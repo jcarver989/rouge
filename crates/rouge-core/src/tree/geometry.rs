@@ -47,28 +47,36 @@ impl Tree {
     }
 
     pub(crate) fn bounds_of_all(&self, name: &str) -> Vec<Rect> {
-        let mut bounds = Vec::new();
-        for id in self.visible_preorder(self.root) {
+        self.named_rects(name)
+            .map(|(id, rect)| self.to_window(id, rect))
+            .collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn visible_bounds_of(&self, name: &str) -> Option<Rect> {
+        let (id, rect) = self.named_rects(name).next()?;
+        Some(self.clipped_region(id, self.to_window(id, rect)).bounds)
+    }
+
+    fn named_rects<'a>(&'a self, name: &'a str) -> impl Iterator<Item = (ElementId, Rect)> + 'a {
+        self.visible_preorder(self.root).flat_map(move |id| {
             let element = &self.elements[id];
-            if self.test_id(id).as_deref() == Some(name) {
-                bounds.push(self.window_bounds(id));
-            }
-            let ops = element
+            let own = (self.test_id(id).as_deref() == Some(name)).then_some(element.bounds);
+            let canvas = element
                 .kind
                 .canvas()
                 .into_iter()
-                .flat_map(|canvas| &canvas.ops);
-            for op in ops {
-                let rect = match op {
-                    PaintOp::Region { name: region, rect } if region == name => *rect,
-                    PaintOp::Text(run) if run.run.name.as_deref() == Some(name) => run.bounds(),
-                    _ => continue,
-                };
-                let rect = rect.translate(element.bounds.origin);
-                bounds.push(self.to_window(id, rect));
-            }
-        }
-        bounds
+                .flat_map(|canvas| &canvas.ops)
+                .filter_map(move |op| {
+                    let rect = match op {
+                        PaintOp::Region { name: region, rect } if region == name => *rect,
+                        PaintOp::Text(run) if run.run.name.as_deref() == Some(name) => run.bounds(),
+                        _ => return None,
+                    };
+                    Some(rect.translate(element.bounds.origin))
+                });
+            own.into_iter().chain(canvas).map(move |rect| (id, rect))
+        })
     }
 
     pub(crate) fn text_of(&self, name: &str) -> Option<String> {
@@ -145,17 +153,16 @@ impl Tree {
     }
 
     pub(super) fn paint_region(&self, id: ElementId) -> PaintRegion {
+        self.clipped_region(id, self.window_bounds(id))
+    }
+
+    fn clipped_region(&self, id: ElementId, rect: Rect) -> PaintRegion {
         let chain = self.chain(id);
-        let mut bounds = self.window_bounds(id).intersect(&Rect::new(
-            0.0,
-            0.0,
-            self.size.width,
-            self.size.height,
-        ));
+        let mut bounds = rect.intersect(&Rect::new(0.0, 0.0, self.size.width, self.size.height));
         let mut order = Vec::with_capacity(chain.len());
         for (i, &node) in chain.iter().enumerate() {
             let element = &self.elements[node];
-            if element.hidden() || bounds.is_empty() {
+            if element.unseen() || bounds.is_empty() {
                 return PaintRegion::default();
             }
             let Some(child) = chain.get(i + 1) else {

@@ -11,7 +11,7 @@ use rouge_core::Role;
 use rouge_core::access;
 use rouge_core::{
     Apply, BuildCx, DelegateStyle, Div, Key, Menu, Point, PointerButton, Rect, Styled, View,
-    component, div, pct, text, view,
+    component, div, text, view, window_size,
 };
 use rouge_reactive::{Signal, signal};
 use std::rc::Rc;
@@ -66,7 +66,7 @@ fn trigger(
                 open,
                 Div::preserve_focus,
                 move |panel| placement.place(floating_menu(panel), anchor),
-                move || render_items(&menu.items, open, focus, close.clone()),
+                move |panel| render_items(panel, &menu.items, open, focus, close.clone()),
             )}
         </div>
     };
@@ -74,6 +74,7 @@ fn trigger(
 }
 
 fn render_items(
+    panel: Div,
     items: &[MenuItem],
     open: Signal<bool>,
     focus: MenuFocus,
@@ -163,7 +164,7 @@ fn render_items(
         row
     });
     focus
-        .apply(view! { <div role=access::Role::Menu/> })
+        .apply(panel.role(access::Role::Menu))
         .flex()
         .col()
         .p(Space::X1)
@@ -171,10 +172,7 @@ fn render_items(
 }
 
 fn floating_menu(panel: Div) -> Div {
-    panel
-        .material(Material::Glass)
-        .w(MENU_WIDTH)
-        .max_w(pct(100.0))
+    panel.material(Material::Glass).w(MENU_WIDTH)
 }
 
 pub struct ContextMenu {
@@ -223,16 +221,16 @@ impl View for ContextMenu {
     fn build(self, cx: &mut BuildCx<'_>) {
         let (items, focus, dropdown) = (self.items, self.focus, self.dropdown);
         let (open, at, anchor) = (signal(false), signal(Point::ZERO), signal(Rect::ZERO));
-        let body = move || render_items(&items, open, focus, Rc::new(move || open.set(false)));
+        let body =
+            move |panel| render_items(panel, &items, open, focus, Rc::new(move || open.set(false)));
         let place = move |menu: Div| {
             let menu = floating_menu(menu);
             if dropdown {
-                let width = move || anchor.get().size.width;
+                let window = window_size();
+                let width = move || anchor.get().size.width.min(window.get().width.floor());
                 Placement::Below.place(menu.min_w(width), anchor)
             } else {
-                menu.absolute()
-                    .left(move || at.get().x)
-                    .top(move || at.get().y)
+                Placement::Below.place_at(menu, at)
             }
         };
         let name = if dropdown {
