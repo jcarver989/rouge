@@ -13,6 +13,7 @@ use crate::text::TextStats;
 use crate::theme::{Palette, Theme};
 use crate::view::Queue;
 use access::Access;
+use blocks::{Block, Blocks, LOOSE};
 use events::Listener;
 use focus::ReplacedFocus;
 use fragment::Fragment;
@@ -30,6 +31,7 @@ use std::rc::Rc;
 use taffy::{Position, Rect as Sides, Style as Layout};
 
 mod access;
+mod blocks;
 mod cascade;
 mod content;
 pub(crate) mod edit;
@@ -255,6 +257,8 @@ struct Element {
     states: [bool; STATES],
     cursor: Option<Cursor>,
     flags: Flags,
+    blocks: Option<Box<Blocks>>,
+    block: u32,
 }
 
 impl Element {
@@ -264,6 +268,14 @@ impl Element {
 
     fn layer(&self, slot: Slot) -> Option<&LayerState> {
         self.layers[slot as usize].as_deref()
+    }
+
+    fn block(&self, index: u32) -> Option<&Block> {
+        self.blocks.as_ref()?.blocks.get(index as usize)
+    }
+
+    fn block_mut(&mut self, index: u32) -> Option<&mut Block> {
+        self.blocks.as_mut()?.blocks.get_mut(index as usize)
     }
 
     fn disabled(&self) -> bool {
@@ -292,6 +304,7 @@ pub struct FrameStats {
     pub layouts: u64,
     pub paints: u64,
     pub layer_paints: u64,
+    pub block_paints: u64,
     pub relayouts: u64,
     pub patches: u64,
     pub style_resolutions: u64,
@@ -312,6 +325,7 @@ impl Sub for FrameStats {
             layouts: self.layouts - earlier.layouts,
             paints: self.paints - earlier.paints,
             layer_paints: self.layer_paints - earlier.layer_paints,
+            block_paints: self.block_paints - earlier.block_paints,
             relayouts: self.relayouts - earlier.relayouts,
             patches: self.patches - earlier.patches,
             style_resolutions: self.style_resolutions - earlier.style_resolutions,
@@ -339,7 +353,7 @@ pub(crate) struct Tree {
     capture: Option<Vec<ElementId>>,
     pub(crate) stats: FrameStats,
     pub(crate) layers: Layers,
-    repaint_all: bool,
+    next_block: u64,
     observers: Vec<ElementId>,
     dirty_styles: Vec<ElementId>,
     themes: Vec<(Theme, Palette)>,
@@ -381,7 +395,7 @@ impl Tree {
             capture: None,
             stats: FrameStats::default(),
             layers: Layers::new(),
-            repaint_all: true,
+            next_block: 0,
             observers: Vec::new(),
             dirty_styles: Vec::new(),
             themes: Vec::new(),
@@ -504,7 +518,12 @@ impl Tree {
                 layer.dirty = true;
                 return;
             }
+            let block = element.block;
             (current, inside) = (element.parent, true);
+            if let Some(block) = current.and_then(|id| self.elements.get_mut(id)?.block_mut(block))
+            {
+                block.dirty = true;
+            }
         }
     }
 
@@ -525,7 +544,16 @@ impl Tree {
     }
 
     pub(crate) fn invalidate_paint(&mut self) {
-        self.repaint_all = true;
+        for element in self.elements.values_mut() {
+            for layer in element.layers.iter_mut().flatten() {
+                layer.dirty = true;
+            }
+            if let Some(blocks) = &mut element.blocks {
+                for block in &mut blocks.blocks {
+                    block.dirty = true;
+                }
+            }
+        }
         self.mark(Dirty::Paint);
     }
 
@@ -583,6 +611,8 @@ impl Tree {
             states: [false; STATES],
             cursor: None,
             flags: spec.flags,
+            blocks: None,
+            block: LOOSE,
         });
         self.layouts.insert(id, LayoutNode::new(spec.layout));
         if watched {
@@ -648,15 +678,28 @@ impl Tree {
         let p = &mut self.elements[parent];
         let index = index.min(p.children.len());
         p.children.insert(index, child);
-        self.invalidate_layout(parent);
         self.elements[child].parent = Some(parent);
+        self.elements[child].block = LOOSE;
         if self.is_connected(parent) {
-            self.refresh_variant_subtree(child);
-            self.refresh_text_subtree(child);
-            self.sync_backing_subtree(child);
-            self.mark_access_subtree(child);
+            self.connect(child);
+        }
+        self.restructured(parent);
+    }
+
+    fn connect(&mut self, child: ElementId) {
+        self.refresh_variant_subtree(child);
+        self.refresh_text_subtree(child);
+        self.sync_backing_subtree(child);
+        self.mark_access_subtree(child);
+    }
+
+    fn restructured(&mut self, parent: ElementId) {
+        if let Some(blocks) = &mut self.elements[parent].blocks {
+            blocks.stale = true;
         }
         self.mark_layer(parent, true);
+        self.mark_access(parent);
+        self.invalidate_layout(parent);
         self.mark(Dirty::Layout);
     }
 
@@ -664,11 +707,8 @@ impl Tree {
         let Some(parent) = self.elements.get_mut(child).and_then(|c| c.parent.take()) else {
             return;
         };
-        self.mark_layer(parent, true);
-        self.mark_access(parent);
         self.elements[parent].children.retain(|c| *c != child);
-        self.invalidate_layout(parent);
-        self.mark(Dirty::Layout);
+        self.restructured(parent);
     }
 
     fn is_connected(&self, mut id: ElementId) -> bool {

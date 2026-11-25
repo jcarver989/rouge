@@ -89,10 +89,7 @@ const OPS: [(f64, Op); 4] = [
         let nested = [l[1], l[2]].map(|layer| Nested { layer, clip: None });
         c.set_content(
             l[0],
-            Content {
-                lists: vec![DrawList::new(), DrawList::new()],
-                nested: nested.to_vec(),
-            },
+            Content::new(vec![DrawList::new(), DrawList::new()], nested.to_vec()),
         );
         c.set_transition(l[1], Some(Spring::bouncy().into()));
         c.set_layout_transition(l[1], Some(LayoutTransition::new(Spring::smooth()).size()));

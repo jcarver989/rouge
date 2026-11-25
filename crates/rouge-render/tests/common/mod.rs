@@ -41,6 +41,10 @@ impl Canvas {
         self.lists.insert(list)
     }
 
+    pub(crate) fn remove(&mut self, key: ListKey) -> Option<DrawList> {
+        self.lists.remove(key)
+    }
+
     pub(crate) fn list(&mut self, key: ListKey) -> Result<&mut DrawList, &'static str> {
         self.lists.get_mut(key).ok_or("the list was never added")
     }

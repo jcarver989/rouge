@@ -1,9 +1,10 @@
+use super::blocks::{BlockRef, Piece, shifted};
 use super::content::TextData;
 use super::edit::CARET_WIDTH;
-use super::layers::{LayerRef, LayerState, Slot};
+use super::layers::{LayerRef, LayerState, Placements, Slot};
 use super::{Element, ElementId, Kind, Tree, theme_at};
 use crate::canvas::{PaintOp, ShapedRun};
-use crate::compositor::{Content, Layers, Nested};
+use crate::compositor::{Layers, ListDelta, ListId, Nested, PlacedList};
 use crate::image::{Fit, ImageSpec};
 use crate::path::Path;
 use crate::style::Dirty;
@@ -58,31 +59,123 @@ impl PaintCache {
 struct PaintCx<'a> {
     cache: &'a mut PaintCache,
     text_system: &'a mut TextSystem,
-    repaint_all: bool,
     layer_paints: u64,
+    block_paints: u64,
     focused: Option<ElementId>,
     palette: Palette,
     fallback: Palette,
 }
 
+struct Sheet {
+    block: u64,
+    shift: Point,
+    lists: u32,
+    open: Option<usize>,
+    pieces: Vec<Piece>,
+}
+
+impl Sheet {
+    fn new(block: u64, shift: Point) -> Self {
+        Sheet {
+            block,
+            shift,
+            lists: 0,
+            open: None,
+            pieces: Vec::new(),
+        }
+    }
+}
+
+struct PaintedBlock {
+    block: BlockRef,
+    phase: Point,
+    clip: Rect,
+    pieces: Vec<Piece>,
+}
+
+struct Pen<'a> {
+    list: &'a mut DrawList,
+    back: Point,
+}
+
+impl Pen<'_> {
+    fn quad(&mut self, quad: Quad) {
+        self.list.push_quad(Quad {
+            bounds: quad.bounds.translate(self.back),
+            clip: shifted(quad.clip, self.back),
+            ..quad
+        });
+    }
+
+    fn shadow(&mut self, shadow: Shadow) {
+        self.list.push_shadow(Shadow {
+            bounds: shadow.bounds.translate(self.back),
+            clip: shifted(shadow.clip, self.back),
+            ..shadow
+        });
+    }
+
+    fn image(&mut self, image: ImageQuad) {
+        self.list.push_image(ImageQuad {
+            bounds: image.bounds.translate(self.back),
+            clip: shifted(image.clip, self.back),
+            ..image
+        });
+    }
+
+    fn glyph(&mut self, glyph: Glyph) {
+        self.list.push_glyph(Glyph {
+            origin: glyph.origin + self.back,
+            clip: shifted(glyph.clip, self.back),
+            ..glyph
+        });
+    }
+}
+
 struct LayerTarget {
     root: LayerRef,
     origin: Point,
-    lists: Vec<DrawList>,
-    nested: Vec<(LayerRef, Option<Rect>)>,
+    sheet: Sheet,
+    lists: Vec<(ListId, DrawList)>,
+    blocks: Vec<PaintedBlock>,
+    held: Placements,
 }
 
 impl LayerTarget {
-    fn out(&mut self) -> &mut DrawList {
-        if self.lists.len() <= self.nested.len() {
-            self.lists.resize_with(self.nested.len() + 1, DrawList::new);
+    fn pen(&mut self) -> Pen<'_> {
+        let Self { sheet, lists, .. } = self;
+        let open = *sheet.open.get_or_insert_with(|| {
+            let id = ListId {
+                block: sheet.block,
+                index: sheet.lists,
+            };
+            sheet.lists += 1;
+            let offset = sheet.shift;
+            sheet.pieces.push(Piece::List { id, offset });
+            lists.push((id, DrawList::new()));
+            lists.len() - 1
+        });
+        Pen {
+            list: &mut lists[open].1,
+            back: Point::ZERO - sheet.shift,
         }
-        &mut self.lists[self.nested.len()]
     }
 
     fn nest(&mut self, layer: LayerRef, clip: Rect) {
-        self.nested
-            .push((layer, (clip != Rect::EVERYTHING).then_some(clip)));
+        self.sheet.open = None;
+        self.sheet.pieces.push(Piece::Nested { layer, clip });
+    }
+
+    fn place(&mut self, pieces: impl Iterator<Item = Piece>) {
+        self.sheet.open = None;
+        self.sheet.pieces.extend(pieces);
+    }
+
+    fn holds(&self, pieces: &[Piece]) -> bool {
+        pieces.iter().all(|piece| match piece {
+            Piece::List { id, .. } => self.held.contains_key(id),
+            Piece::Nested { .. } => true,
+        })
     }
 }
 
@@ -96,13 +189,12 @@ impl Tree {
         }
         if dirty.needs_paint() {
             let _paint = trace_span!("paint").entered();
-            let repaint_all = take(&mut self.repaint_all);
             let focused = self.focused;
             let mut cx = PaintCx {
                 cache,
                 text_system,
-                repaint_all,
                 layer_paints: 0,
+                block_paints: 0,
                 focused,
                 palette: self.palette_at(self.root),
                 fallback: self.palette_at(self.root),
@@ -114,6 +206,7 @@ impl Tree {
                 &mut self.layers,
             );
             self.stats.layer_paints += cx.layer_paints;
+            self.stats.block_paints += cx.block_paints;
             self.stats.paints += 1;
         }
         dirty != Dirty::None
@@ -141,41 +234,47 @@ fn paint_layers(
         return;
     };
     let layer_id = state.id;
-    if replace(&mut state.dirty, false) || cx.repaint_all {
+    if replace(&mut state.dirty, false) {
+        let held = take(&mut state.lists);
         let (id, slot) = layer;
         cx.palette = theme_at(elements, id).map_or(cx.fallback, |theme| theme.get_untracked());
         let element = &elements[id];
         let mut target = LayerTarget {
             root: layer,
             origin: element.bounds.origin,
+            sheet: Sheet::new(0, Point::ZERO),
             lists: Vec::new(),
-            nested: Vec::new(),
+            blocks: Vec::new(),
+            held,
         };
+        target.pen();
         match slot {
             Slot::Own => paint(elements, id, Rect::EVERYTHING, &mut target, cx),
             Slot::Content => paint_children(elements, id, Rect::EVERYTHING, &mut target, cx),
         }
-        target
-            .lists
-            .resize_with(target.nested.len() + 1, DrawList::new);
-        let nested = target.nested.iter().filter_map(|(nested, clip)| {
-            Some(Nested {
-                layer: layer_ref(elements, *nested)?.id,
-                clip: *clip,
-            })
-        });
-        let content = Content {
-            nested: nested.collect(),
-            lists: target.lists,
-        };
-        layers.set_content(layer_id, content);
+        let mut lists = target.held;
+        let (nested, children, delta) =
+            place_lists(elements, target.sheet.pieces, target.lists, &mut lists);
+        layers.update_content(layer_id, children, delta);
         cx.layer_paints += 1;
+        cx.block_paints += target.blocks.len() as u64;
+        for PaintedBlock {
+            block: (host, index),
+            phase,
+            clip,
+            pieces,
+        } in target.blocks
+        {
+            if let Some(block) = elements[host].block_mut(index) {
+                block.dirty = false;
+                block.phase = phase;
+                block.clip = clip;
+                block.pieces = pieces;
+            }
+        }
         if let Some(state) = layer_mut(elements, layer) {
-            state.nested = target
-                .nested
-                .into_iter()
-                .map(|(nested, _)| nested)
-                .collect();
+            state.nested = nested;
+            state.lists = lists;
         }
     }
     let nested = |elements: &SlotMap<ElementId, Element>, i: usize| {
@@ -186,6 +285,63 @@ fn paint_layers(
         paint_layers(elements, layer, cx, layers);
         index += 1;
     }
+}
+
+fn place_lists(
+    elements: &SlotMap<ElementId, Element>,
+    pieces: Vec<Piece>,
+    painted: Vec<(ListId, DrawList)>,
+    held: &mut Placements,
+) -> (Vec<LayerRef>, Vec<Nested>, ListDelta) {
+    let order = pieces.iter().filter_map(|piece| match piece {
+        Piece::List { id, .. } => Some(held.get(id).map(|placement| placement.0)),
+        Piece::Nested { .. } => None,
+    });
+    let mut delta = if order.eq((0..held.len()).map(Some)) {
+        ListDelta::Patch(Vec::new())
+    } else {
+        held.clear();
+        ListDelta::Replace(Vec::new())
+    };
+    let mut painted: FxHashMap<_, _> = painted.into_iter().collect();
+    let (mut nested, mut children, mut index) = (Vec::new(), Vec::new(), 0);
+    for piece in pieces {
+        match piece {
+            Piece::List { id, offset } => {
+                let placement = (index, nested.len(), offset);
+                let placed = PlacedList {
+                    id,
+                    segment: placement.1,
+                    offset,
+                    list: painted.remove(&id),
+                };
+                match &mut delta {
+                    ListDelta::Patch(patch)
+                        if placed.list.is_some() || held.get(&id) != Some(&placement) =>
+                    {
+                        held.insert(id, placement);
+                        patch.push((index, placed));
+                    }
+                    ListDelta::Replace(lists) => {
+                        held.insert(id, placement);
+                        lists.push(placed);
+                    }
+                    ListDelta::Patch(_) => {}
+                }
+                index += 1;
+            }
+            Piece::Nested { layer, clip } => {
+                if let Some(state) = layer_ref(elements, layer) {
+                    nested.push(layer);
+                    children.push(Nested {
+                        layer: state.id,
+                        clip: (clip != Rect::EVERYTHING).then_some(clip),
+                    });
+                }
+            }
+        }
+    }
+    (nested, children, delta)
 }
 
 fn paint(
@@ -234,7 +390,7 @@ fn paint_element(
         size: element.bounds.size,
     };
     for shadow in style.shadows.iter() {
-        target.out().push_shadow(Shadow {
+        target.pen().shadow(Shadow {
             bounds: bounds.translate(shadow.offset).inflate(shadow.spread),
             clip,
             corner_radii: radii.map(|r| {
@@ -253,7 +409,7 @@ fn paint_element(
     let has_border = !element.border.is_zero() && style.border_color.is_visible();
     let background = style.background.filter(|fill| backing || fill.is_visible());
     if background.is_some() || has_border {
-        target.out().push_quad(Quad {
+        target.pen().quad(Quad {
             bounds,
             clip,
             background: background.map_or(Color::TRANSPARENT, |fill| fill.resolve(&cx.palette)),
@@ -276,7 +432,7 @@ fn paint_element(
             } = &**image
             {
                 let (fitted, source) = fit_image(*fit, bounds, data);
-                target.out().push_image(ImageQuad {
+                target.pen().image(ImageQuad {
                     clip: clip.intersect(&bounds),
                     corner_radii: radii,
                     source,
@@ -284,7 +440,9 @@ fn paint_element(
                 });
             }
         }
-        Kind::Canvas(canvas) => paint_canvas(&canvas.ops, bounds.origin, clip, target.out(), cx),
+        Kind::Canvas(canvas) => {
+            paint_canvas(&canvas.ops, bounds.origin, clip, &mut target.pen(), cx);
+        }
         Kind::Text(text) => {
             let focused = cx.focused == Some(id);
             paint_text(
@@ -292,7 +450,7 @@ fn paint_element(
                 bounds.origin + text.inset,
                 clip,
                 focused,
-                target.out(),
+                &mut target.pen(),
                 cx,
             );
         }
@@ -325,10 +483,47 @@ fn paint_children(
     target: &mut LayerTarget,
     cx: &mut PaintCx<'_>,
 ) {
-    if !clip.is_empty() {
-        for child in &elements[id].children {
+    if clip.is_empty() {
+        return;
+    }
+    let element = &elements[id];
+    let Some(blocks) = &element.blocks else {
+        for child in &element.children {
             paint(elements, *child, clip, target, cx);
         }
+        return;
+    };
+    let scale = cx.cache.scale;
+    for (index, block) in blocks.blocks.iter().enumerate() {
+        let Some(lead) = block.lead() else {
+            continue;
+        };
+        let origin = elements[lead].bounds.origin - target.origin;
+        let device = Point::new(origin.x * scale, origin.y * scale);
+        let whole = Point::new(device.x.floor(), device.y.floor());
+        let shift = Point::new(whole.x / scale, whole.y / scale);
+        let phase = device - whole;
+        let local = shifted(clip, Point::ZERO - shift);
+        if !block.dirty
+            && (block.phase, block.clip) == (phase, local)
+            && target.holds(&block.pieces)
+        {
+            target.place(block.pieces.iter().map(|piece| piece.shifted(shift)));
+            continue;
+        }
+        let outer = replace(&mut target.sheet, Sheet::new(block.id, shift));
+        for child in &block.children {
+            paint(elements, *child, clip, target, cx);
+        }
+        let Sheet { pieces, .. } = replace(&mut target.sheet, outer);
+        target.place(pieces.iter().copied());
+        let back = Point::ZERO - shift;
+        target.blocks.push(PaintedBlock {
+            block: (id, index as u32),
+            phase,
+            clip: local,
+            pieces: pieces.iter().map(|piece| piece.shifted(back)).collect(),
+        });
     }
 }
 
@@ -421,14 +616,14 @@ fn paint_canvas(
     ops: &[PaintOp],
     origin: Point,
     clip: Rect,
-    out: &mut DrawList,
+    out: &mut Pen<'_>,
     cx: &mut PaintCx<'_>,
 ) {
     for op in ops {
         match op {
             PaintOp::Quad(quad) => {
                 let clip = clip.intersect(&quad.clip.translate(origin));
-                out.push_quad(Quad {
+                out.quad(Quad {
                     bounds: quad.bounds.translate(origin),
                     clip,
                     ..*quad
@@ -436,7 +631,7 @@ fn paint_canvas(
             }
             PaintOp::Image(image) => {
                 let clip = clip.intersect(&image.clip.translate(origin));
-                out.push_image(ImageQuad {
+                out.image(ImageQuad {
                     bounds: image.bounds.translate(origin),
                     clip,
                     ..image.clone()
@@ -448,7 +643,7 @@ fn paint_canvas(
                 color,
             } => {
                 if let Some((image, bounds)) = path_mask(cx.cache, path, *stroke, origin) {
-                    out.push_image(ImageQuad {
+                    out.image(ImageQuad {
                         clip,
                         tint: *color,
                         ..ImageQuad::new(bounds, image)
@@ -476,7 +671,7 @@ fn paint_text(
     mut origin: Point,
     mut clip: Rect,
     focused: bool,
-    out: &mut DrawList,
+    out: &mut Pen<'_>,
     cx: &mut PaintCx<'_>,
 ) {
     let Some(layout) = text.layout.as_ref() else {
@@ -533,14 +728,14 @@ fn paint_text(
     {
         let line = rect(&composed);
         let underline = Rect::new(line.origin.x, line.max().y - 1.5, line.size.width, 1.0);
-        out.push_quad(Quad {
+        out.quad(Quad {
             clip,
             ..Quad::line(underline, text.color.resolve(&cx.palette))
         });
     }
     if selection.is_collapsed() && edit.caret_visible {
         let caret = rect(&layout.caret(selection, CARET_WIDTH));
-        out.push_quad(Quad {
+        out.quad(Quad {
             clip,
             ..Quad::line(
                 caret,
@@ -568,10 +763,10 @@ fn paint_selection(
     origin: Point,
     clip: Rect,
     color: Color,
-    out: &mut DrawList,
+    out: &mut Pen<'_>,
 ) {
     for rect in &layout.selection_rects(selection) {
-        out.push_quad(Quad {
+        out.quad(Quad {
             clip,
             ..Quad::new(text_rect(origin, rect), color)
         });
@@ -592,11 +787,11 @@ fn paint_glyphs(
     origin: Point,
     clip: Rect,
     color: Color,
-    out: &mut DrawList,
+    out: &mut Pen<'_>,
     cx: &mut PaintCx<'_>,
 ) {
     layout.for_each_rect(false, |rect, fill| {
-        out.push_quad(Quad {
+        out.quad(Quad {
             clip,
             ..Quad::new(text_rect(origin, &rect), fill.unwrap_or(color))
         });
@@ -628,7 +823,7 @@ fn paint_glyphs(
             (pen_x + cached.left) as f32 / scale,
             (pen_y - cached.top) as f32 / scale,
         );
-        out.push_glyph(Glyph {
+        out.glyph(Glyph {
             origin,
             clip,
             color,
@@ -636,7 +831,7 @@ fn paint_glyphs(
         });
     });
     layout.for_each_rect(true, |rect, stroke| {
-        out.push_quad(Quad {
+        out.quad(Quad {
             clip,
             ..Quad::line(text_rect(origin, &rect), stroke.unwrap_or(color))
         });

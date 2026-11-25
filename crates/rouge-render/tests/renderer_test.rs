@@ -1,8 +1,8 @@
 mod common;
 
 use common::{
-    BLUE, CLEAR, Canvas, RED, WHITE, backdrop, full, quads, render_layers, render_layers_on,
-    split_scene,
+    BLUE, CLEAR, Canvas, RED, TestResult, WHITE, backdrop, full, quads, render_layers,
+    render_layers_on, split_scene,
 };
 use rouge_render::headless::{Image, assert_near};
 use rouge_render::{
@@ -459,7 +459,11 @@ fn unchanged_lists_are_not_uploaded_again() -> Result<(), Box<dyn Error>> {
         2 * INSTANCE_BYTES,
         "both lists uploaded once"
     );
-    assert_eq!((first.layers, first.draw_calls), (2, 2));
+    assert_eq!((first.layers, first.draw_calls), (2, 1));
+    assert_eq!(canvas.image()?.pixel(15, 15), BLUE);
+    let reverse = canvas.frame(&[LayerDraw::new(b), LayerDraw::new(a)]);
+    assert_eq!(reverse.draw_calls, 2);
+    assert_eq!(canvas.image()?.pixel(15, 15), RED);
     for x in 1..10 {
         assert_eq!(
             frame(&mut canvas, x as f32).instance_bytes_uploaded,
@@ -557,6 +561,67 @@ fn lists_uploaded_before_the_instance_buffer_grows_still_draw() -> Result<(), Gp
         "the earlier list survives the growth",
     );
     assert_near(img.pixel(49, 59), RED, "the new list is drawn");
+    Ok(())
+}
+
+#[test]
+fn the_room_of_a_removed_list_is_used_again() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let kept = canvas.add(square(Color::BLUE));
+    let mut memory = Vec::new();
+    for color in [Color::RED, Color::GREEN].repeat(100) {
+        let keys: Vec<_> = (0..8).map(|row| canvas.add(strip(row, color))).collect();
+        let draws = keys.iter().copied().map(LayerDraw::new);
+        let draws: Vec<_> = [LayerDraw::new(kept)].into_iter().chain(draws).collect();
+        canvas.frame(&draws);
+        memory.push(canvas.memory().instances);
+        for key in keys {
+            canvas.remove(key);
+        }
+    }
+    let settled = memory.get(2).copied();
+    assert_eq!(memory.last().copied(), settled, "the buffer stops growing");
+    let img = canvas.image()?;
+    assert_near(img.pixel(20, 20), BLUE, "the kept list is untouched");
+    assert_near(
+        img.pixel(60, 45),
+        [0, 255, 0, 255],
+        "the last strips are drawn",
+    );
+    Ok(())
+}
+
+#[test]
+fn a_list_that_outgrows_its_room_leaves_it_to_others() -> TestResult {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let growing = canvas.add(strip(0, Color::RED));
+    canvas.frame(&[LayerDraw::new(growing)]);
+    let list = canvas.list(growing)?;
+    for x in 0..200 {
+        let at = Rect::new((x % 64) as f32, 0.0, 1.0, 4.0);
+        list.push_quad(Quad::new(at, Color::RED));
+    }
+    let next = canvas.add(strip(1, Color::BLUE));
+    canvas.frame(&[LayerDraw::new(growing), LayerDraw::new(next)]);
+    let img = canvas.image()?;
+    assert_near(img.pixel(30, 2), RED, "the grown list is drawn");
+    assert_near(img.pixel(30, 45), BLUE, "and so is the one after it");
+    Ok(())
+}
+
+#[test]
+fn replacing_a_list_with_the_same_content_uploads_and_draws_nothing() -> TestResult {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let key = canvas.add(square(Color::BLUE));
+    canvas.frame(&[LayerDraw::new(key)]);
+    let list = canvas.list(key)?;
+    list.replace(square(Color::BLUE));
+    let same = canvas.frame(&[LayerDraw::new(key)]);
+    assert_eq!((same.instance_bytes_uploaded, same.damaged), (0, 0));
+    let list = canvas.list(key)?;
+    list.replace(square(Color::RED));
+    let changed = canvas.frame(&[LayerDraw::new(key)]);
+    assert!(changed.instance_bytes_uploaded > 0 && changed.damaged > 0);
     Ok(())
 }
 
@@ -1185,3 +1250,17 @@ fn square(color: Color) -> DrawList {
 }
 
 const INSTANCE_BYTES: u64 = 84;
+
+fn strip(row: usize, color: Color) -> DrawList {
+    let mut list = DrawList::new();
+    for index in 0..500 {
+        let at = Rect::new(
+            (index % 64) as f32,
+            (40 + row + index / 64) as f32,
+            1.0,
+            1.0,
+        );
+        list.push_quad(Quad::new(at, color));
+    }
+    list
+}

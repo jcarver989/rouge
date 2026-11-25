@@ -34,8 +34,9 @@ pub use canvas::{Canvas, Continuation, Icon, Measure, Painter, TextHit, TextRun,
 pub use clipboard::{Clipboard, ClipboardMedia, MemoryClipboard, PasteRequest};
 pub use compositor::{
     Commit, CompositorActor, CompositorEvent, Content, EffectSlot, Events, LayerChanges,
-    LayerDelta, LayerId, LayerModel, LayerPose, Layers, Mailbox, Message, MotionId, Nested,
-    ScrollLinked, ScrollState, SurfaceOp, WindowConfig, WindowId, mailbox,
+    LayerDelta, LayerId, LayerModel, LayerPose, Layers, ListDelta, ListId, Mailbox, Message,
+    MotionId, Nested, PlacedList, ScrollLinked, ScrollState, SurfaceOp, WindowConfig, WindowId,
+    mailbox,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use compositor::{ThreadError, spawn};

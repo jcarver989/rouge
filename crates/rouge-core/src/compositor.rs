@@ -11,7 +11,7 @@ use rouge_render::{
     Affine, Command, Corners, DrawList, DrawLists, EffectDraw, Group, LayerDraw, ListKey, Point,
     Rect, Scene, SurfaceDraw, Surfaces, device_rect,
 };
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHasher};
 use slotmap::secondary::Entry;
 use slotmap::{Key, SecondaryMap};
 use std::hash::Hasher;
@@ -19,7 +19,7 @@ use std::mem::take;
 use tracing::trace_span;
 
 pub use actor::{CompositorActor, Message, WindowConfig, WindowId};
-pub use commit::{Commit, CompositorEvent, SurfaceOp};
+pub use commit::{Commit, CompositorEvent, Content, ListDelta, ListId, PlacedList, SurfaceOp};
 pub use layers::Layers;
 pub use link::{Events, Mailbox, mailbox};
 pub use model::{
@@ -31,18 +31,23 @@ pub use thread::{ThreadError, spawn};
 
 const STAGE_BITS: u32 = 8;
 
-#[derive(Default)]
-pub struct Content {
-    pub lists: Vec<DrawList>,
-    pub nested: Vec<Nested>,
+struct Held {
+    id: ListId,
+    key: ListKey,
+    segment: usize,
+    offset: Point,
 }
 
 #[derive(Default)]
 pub(crate) struct Compositor {
     model: LayerModel,
     lists: DrawLists,
-    keys: SecondaryMap<LayerId, Vec<ListKey>>,
+    held: SecondaryMap<LayerId, Vec<Held>>,
     commands: Vec<Command>,
+    built: Option<(f32, Option<f64>)>,
+    surface_commands: Vec<usize>,
+    grouped: bool,
+    revision: u64,
 }
 
 impl Compositor {
@@ -53,17 +58,28 @@ impl Compositor {
     pub(crate) fn apply(
         &mut self,
         layers: LayerDelta,
-        content: Vec<(LayerId, Vec<DrawList>)>,
+        content: Vec<(LayerId, ListDelta)>,
         surfaces: &mut Surfaces,
     ) {
+        let root = self.model.root();
+        let structural = !layers.is_empty();
         let changes = self.model.apply(layers);
+        if structural || self.model.root() != root {
+            self.built = None;
+        }
         for id in changes.removed {
-            for key in self.keys.remove(id).into_iter().flatten() {
-                self.lists.remove(key);
+            for held in self.held.remove(id).into_iter().flatten() {
+                self.lists.remove(held.key);
             }
         }
         for (id, lists) in content {
-            self.set_lists(id, lists);
+            match lists {
+                ListDelta::Replace(lists) => {
+                    self.set_lists(id, lists);
+                    self.built = None;
+                }
+                ListDelta::Patch(patch) => self.patch_lists(id, patch),
+            }
         }
         for (id, bound) in changes.surfaces {
             if bound {
@@ -74,29 +90,97 @@ impl Compositor {
         }
     }
 
-    fn set_lists(&mut self, id: LayerId, content: Vec<DrawList>) {
-        if self.model.layer(id).is_none() {
-            return;
-        }
-        let Some(keys) = self.keys.entry(id).map(Entry::or_default) else {
+    fn patch_lists(&mut self, id: LayerId, patch: Vec<(usize, PlacedList)>) {
+        let Some(held) = self.held.get_mut(id) else {
             return;
         };
-        let lists = &mut self.lists;
-        for key in keys.drain(content.len().min(keys.len())..) {
-            lists.remove(key);
-        }
-        for (index, list) in content.into_iter().enumerate() {
-            match keys.get(index).and_then(|key| lists.get_mut(*key)) {
-                Some(existing) => existing.replace(list),
-                None => keys.push(lists.insert(list)),
+        for (index, placed) in patch {
+            let Some(slot) = held.get_mut(index).filter(|slot| slot.id == placed.id) else {
+                continue;
+            };
+            if (slot.segment, slot.offset) != (placed.segment, placed.offset) {
+                slot.segment = placed.segment;
+                slot.offset = placed.offset;
+                self.built = None;
+            }
+            if let Some(list) = placed.list
+                && let Some(existing) = self.lists.get_mut(slot.key)
+            {
+                let revision = existing.revision();
+                let resized = existing.len() != list.len();
+                existing.replace(list);
+                if existing.revision() != revision {
+                    self.revision += 1;
+                    if resized || self.grouped {
+                        self.built = None;
+                    }
+                }
             }
         }
     }
 
-    pub(crate) fn scene(&mut self, scale: f32, surfaces: &Surfaces, at: f64) -> Scene<'_> {
+    fn set_lists(&mut self, id: LayerId, content: Vec<PlacedList>) {
+        if self.model.layer(id).is_none() {
+            return;
+        }
+        let Some(held) = self.held.entry(id).map(Entry::or_default) else {
+            return;
+        };
+        let lists = &mut self.lists;
+        let mut known: FxHashMap<ListId, ListKey> =
+            held.drain(..).map(|held| (held.id, held.key)).collect();
+        for placed in content {
+            let key = match (known.remove(&placed.id), placed.list) {
+                (Some(key), Some(list)) => {
+                    if let Some(existing) = lists.get_mut(key) {
+                        existing.replace(list);
+                    }
+                    key
+                }
+                (Some(key), None) => key,
+                (None, Some(list)) => lists.insert(list),
+                (None, None) => {
+                    debug_assert!(false, "rouge: kept a draw list the layer does not hold");
+                    continue;
+                }
+            };
+            held.push(Held {
+                id: placed.id,
+                key,
+                segment: placed.segment,
+                offset: placed.offset,
+            });
+        }
+        for key in known.into_values() {
+            lists.remove(key);
+        }
+    }
+
+    pub(crate) fn scene(&mut self, scale: f32, surfaces: &Surfaces, at: f64) -> (u64, Scene<'_>) {
         let _scene = trace_span!("scene").entered();
-        self.build(scale, surfaces, at.max(self.model.time()));
-        Scene::new(&self.commands, &self.lists)
+        let at = at.max(self.model.time());
+        let stamp = (scale, self.model.settles_at().map(|end| at.min(end)));
+        if self.built == Some(stamp) {
+            for &index in &self.surface_commands {
+                if let Command::Surface(draw) = &mut self.commands[index] {
+                    let frame = surfaces.frame(draw.id);
+                    if draw.frame != frame {
+                        if self.grouped {
+                            self.built = None;
+                            break;
+                        }
+                        draw.frame = frame;
+                        self.revision += 1;
+                    }
+                }
+            }
+        }
+        if self.built != Some(stamp) {
+            self.build(scale, surfaces, at);
+            self.built = Some(stamp);
+            self.revision += 1;
+        }
+        (self.revision, Scene::new(&self.commands, &self.lists))
     }
 
     fn build(&mut self, scale: f32, surfaces: &Surfaces, at: f64) {
@@ -109,12 +193,21 @@ impl Compositor {
                 scissor: None,
             };
             let mut out = Out {
+                grouped: false,
                 commands: &mut commands,
                 surfaces,
                 scale,
                 at,
             };
             self.emit(root, None, &parent, &mut out);
+            self.grouped = out.grouped;
+        }
+        self.surface_commands.clear();
+        if self.model.has_surfaces() {
+            self.surface_commands
+                .extend(commands.iter().enumerate().filter_map(|(index, command)| {
+                    matches!(command, Command::Surface(_)).then_some(index)
+                }));
         }
         self.commands = commands;
     }
@@ -172,6 +265,7 @@ impl Compositor {
             self.emit_content(id, layer, style, &this, out);
             return;
         }
+        out.grouped = true;
         let offset = (
             (transform.tx * scale).round() as i32,
             (transform.ty * scale).round() as i32,
@@ -254,20 +348,23 @@ impl Compositor {
                 scissor: this.scissor,
             })
         });
-        for (segment, key) in self.lists_of(id).iter().enumerate() {
-            let empty = self.lists.get(*key).is_none_or(DrawList::is_empty);
-            if !empty || style.backdrop.is_some() {
-                out.commands.push(Command::Draw(LayerDraw {
-                    list: Some(*key),
-                    transform: this.transform,
-                    opacity: this.opacity,
-                    fill: style.fill,
-                    radii: style.radii,
-                    backdrop: style.backdrop.take(),
-                    scissor: this.scissor,
-                }));
+        let mut lists = self.lists_of(id).iter().peekable();
+        for segment in 0..=layer.nested.len() {
+            while let Some(held) = lists.next_if(|held| held.segment <= segment) {
+                let empty = self.lists.get(held.key).is_none_or(DrawList::is_empty);
+                if !empty || style.backdrop.is_some() {
+                    out.commands.push(Command::Draw(LayerDraw {
+                        list: Some(held.key),
+                        transform: held.transform(&this.transform),
+                        opacity: this.opacity,
+                        fill: style.fill,
+                        radii: style.radii,
+                        backdrop: style.backdrop.take(),
+                        scissor: this.scissor,
+                    }));
+                }
+                out.commands.extend(surface.take());
             }
-            out.commands.extend(surface.take());
             if let Some(nested) = layer.nested.get(segment) {
                 self.emit(nested.layer, nested.clip, this, out);
             }
@@ -278,8 +375,8 @@ impl Compositor {
         }
     }
 
-    fn lists_of(&self, id: LayerId) -> &[ListKey] {
-        self.keys.get(id).map_or(&[], Vec::as_slice)
+    fn lists_of(&self, id: LayerId) -> &[Held] {
+        self.held.get(id).map_or(&[], Vec::as_slice)
     }
 
     fn children<'a>(&'a self, layer: &'a Layer) -> impl Iterator<Item = (LayerId, &'a Layer)> {
@@ -295,7 +392,7 @@ impl Compositor {
         let lists = self
             .lists_of(id)
             .iter()
-            .filter_map(|key| self.lists.get(*key));
+            .filter_map(|held| self.lists.get(held.key));
         let mut count =
             lists.map(DrawList::len).sum::<usize>() + usize::from(layer.surface.is_some());
         for (child_id, child) in self.children(layer) {
@@ -318,7 +415,18 @@ impl Compositor {
     }
 }
 
+impl Held {
+    fn transform(&self, layer: &Affine) -> Affine {
+        if self.offset == Point::ZERO {
+            *layer
+        } else {
+            Affine::translate(self.offset.x, self.offset.y).then(layer)
+        }
+    }
+}
+
 struct Out<'a> {
+    grouped: bool,
     commands: &'a mut Vec<Command>,
     surfaces: &'a Surfaces,
     scale: f32,

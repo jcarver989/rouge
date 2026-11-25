@@ -217,7 +217,7 @@ impl Stage {
     }
 
     pub(crate) fn content(&mut self, id: LayerId, lists: Vec<DrawList>, nested: Vec<Nested>) {
-        self.layers.set_content(id, Content { lists, nested });
+        self.layers.set_content(id, Content::new(lists, nested));
     }
 
     pub(crate) fn run(&mut self, seconds: f32) {

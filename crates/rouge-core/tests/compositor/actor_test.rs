@@ -1,11 +1,22 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use common::{Stage, StageBuilder, WINDOW, square};
-use rouge_core::testing::{LINEAR, TestResult};
+use common::{Stage, StageBuilder, WINDOW, background, square};
+use rouge_core::testing::{LINEAR, RED, TestResult, WHITE};
 use rouge_core::{CompositorEvent, Keyframes, LayerProp, Message, MotionId};
 use rouge_render::headless::assert_near;
 use std::error::Error;
+
+#[test]
+fn trailing_lists_share_the_final_segment_in_paint_order() -> TestResult {
+    let mut stage = StageBuilder::default().build()?;
+    stage.content(stage.root, vec![background(), square()], vec![]);
+    stage.draw();
+    let image = stage.image()?;
+    assert_eq!(image.pixel(10, 10), RED);
+    assert_eq!(image.pixel(50, 50), WHITE);
+    Ok(())
+}
 
 #[test]
 fn a_commit_is_acknowledged_once_it_is_presented() -> TestResult {
@@ -253,6 +264,28 @@ fn an_attached_target_shows_what_was_committed_while_detached() -> TestResult {
         "moved square",
     );
     assert_eq!(stage.actor.next_wake(0.2), None, "and then it idles");
+    Ok(())
+}
+
+#[test]
+fn a_replacement_target_gets_the_retained_pixels_without_replanning() -> TestResult {
+    let mut stage = StageBuilder::default().child(square()).build()?;
+    stage.frame(0.0);
+    assert!(stage.actor.stats().commands_visited > 0);
+    assert!(stage.detach());
+    stage.attach();
+    stage.frame(0.1);
+    let stats = stage.actor.stats();
+    assert_eq!(
+        (
+            stats.commands_visited,
+            stats.records_built,
+            stats.damaged,
+            stats.presented
+        ),
+        (0, 0, 0, 1)
+    );
+    assert_eq!(stage.image()?.pixel(10, 10), RED);
     Ok(())
 }
 

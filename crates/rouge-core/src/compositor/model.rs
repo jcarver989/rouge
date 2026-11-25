@@ -983,6 +983,9 @@ impl LayerModel {
         let Some(layer) = layers.get_mut(id) else {
             return;
         };
+        if layer.nested == nested {
+            return;
+        }
         let kept = |old: &Nested| nested.iter().any(|new| new.layer == old.layer);
         let dropped: Vec<_> = layer
             .nested

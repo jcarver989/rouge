@@ -1,9 +1,13 @@
 use super::{ElementId, Tree};
 use crate::animation::{Keyframes, LayerProp, LayoutTransition, Pose, Timing};
-use crate::compositor::{EffectSlot, LayerId, MotionId, ScrollLinked};
+use crate::compositor::{EffectSlot, LayerId, ListId, MotionId, ScrollLinked};
 use crate::motion::{MotionOp, MotionProp};
 use crate::style::Dirty;
+use rouge_render::Point;
 use rouge_render::{Color, Corners, EffectInstance, Rect, SurfaceId};
+use rustc_hash::FxHashMap;
+
+pub(super) type Placements = FxHashMap<ListId, (usize, usize, Point)>;
 
 #[derive(Default)]
 pub(crate) struct LayerSpec {
@@ -32,6 +36,7 @@ pub(super) struct LayerState {
     pub(super) dirty: bool,
     pub(super) frame: Option<Rect>,
     pub(super) nested: Vec<LayerRef>,
+    pub(super) lists: Placements,
     backing: Option<(Color, Corners)>,
 }
 
@@ -50,6 +55,7 @@ impl Tree {
             dirty: true,
             frame: None,
             nested: Vec::new(),
+            lists: Placements::default(),
             backing: None,
         }
     }

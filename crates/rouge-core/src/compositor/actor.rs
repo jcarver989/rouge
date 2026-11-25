@@ -51,6 +51,7 @@ struct Window {
     owed: bool,
     surfaced: bool,
     unshown: bool,
+    rendered: Option<(u64, Viewport, Color)>,
 }
 
 impl Window {
@@ -144,7 +145,7 @@ impl CompositorActor {
 
     pub fn commands(&mut self, window: WindowId, now: f64) -> Option<Vec<Command>> {
         let open = find(&mut self.windows, window)?;
-        let scene = (open.compositor).scene(open.scale, &self.surfaces, now);
+        let (_, scene) = (open.compositor).scene(open.scale, &self.surfaces, now);
         Some(scene.commands.to_vec())
     }
 
@@ -166,6 +167,7 @@ impl CompositorActor {
                     owed: false,
                     surfaced: false,
                     unshown: false,
+                    rendered: None,
                 });
             }
             Message::Configure(id, config) => {
@@ -178,6 +180,7 @@ impl CompositorActor {
                     resized
                 });
                 if resized {
+                    window.unshown = true;
                     window.presented = None;
                     window.follow();
                 }
@@ -218,6 +221,9 @@ impl CompositorActor {
             return;
         };
         let held = commit.is_empty();
+        if !commit.atlas.is_empty() {
+            window.rendered = None;
+        }
         window.renderer.upload_atlas(&commit.atlas);
         for op in commit.surfaces {
             match op {
@@ -301,12 +307,12 @@ impl CompositorActor {
         window.change = model.next_change(now);
         let (width, height) = target.size();
         let viewport = Viewport::new(width, height, window.scale);
-        let scene = window.compositor.scene(window.scale, &self.surfaces, now);
+        let (revision, scene) = window.compositor.scene(window.scale, &self.surfaces, now);
         let (gpu, unshown) = (&self.gpu, &mut window.unshown);
         let (mut frame, mut retry) = (None, false);
         {
             let _encode = trace_span!("encode").entered();
-            let acquire = |changed: bool| {
+            let mut acquire = |changed: bool| {
                 *unshown |= changed;
                 if !*unshown {
                     return None;
@@ -321,19 +327,27 @@ impl CompositorActor {
                     Acquire::Skip => None,
                 }
             };
-            (window.renderer).draw(viewport, window.clear, scene, &self.surfaces, acquire);
+            let key = (revision, viewport, window.clear);
+            if window.rendered == Some(key) {
+                window.renderer.present_retained(acquire(false));
+            } else {
+                window
+                    .renderer
+                    .draw(viewport, window.clear, scene, &self.surfaces, acquire);
+                window.rendered = Some(key);
+            }
         }
         if let Some(frame) = frame {
             let _present = trace_span!("present").entered();
             target.present(&self.gpu, frame);
             window.unshown = false;
         }
-        window.surfaced = false;
         self.stats = window.renderer.stats();
         trace!(target: "rouge::render", stats = ?self.stats, memory = ?window.renderer.memory());
         if retry {
             return;
         }
+        window.surfaced = false;
         (self.surfaces).presented(Instant::now(), window.config.interval);
         self.events.extend(window.acknowledge());
     }

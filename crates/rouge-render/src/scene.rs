@@ -1,7 +1,7 @@
 use crate::atlas::AtlasRect;
 use crate::image::{ImageData, ImageFormat};
 use crate::{Color, Corners, Edges, Point, Rect, Size};
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, cast_slice};
 use slotmap::{SlotMap, new_key_type};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,7 +14,10 @@ new_key_type! {
 }
 
 #[derive(Default)]
-pub struct DrawLists(SlotMap<ListKey, DrawList>);
+pub struct DrawLists {
+    lists: SlotMap<ListKey, DrawList>,
+    removals: u64,
+}
 
 impl DrawLists {
     pub fn new() -> Self {
@@ -22,19 +25,28 @@ impl DrawLists {
     }
 
     pub fn insert(&mut self, list: DrawList) -> ListKey {
-        self.0.insert(list)
+        self.lists.insert(list)
     }
 
     pub fn get(&self, key: ListKey) -> Option<&DrawList> {
-        self.0.get(key)
+        self.lists.get(key)
     }
 
     pub fn get_mut(&mut self, key: ListKey) -> Option<&mut DrawList> {
-        self.0.get_mut(key)
+        self.lists.get_mut(key)
     }
 
     pub fn remove(&mut self, key: ListKey) -> Option<DrawList> {
-        self.0.remove(key)
+        self.removals += 1;
+        self.lists.remove(key)
+    }
+
+    pub(crate) fn removals(&self) -> u64 {
+        self.removals
+    }
+
+    pub(crate) fn ids(&self) -> impl Iterator<Item = u64> + '_ {
+        self.lists.values().map(DrawList::id)
     }
 }
 
@@ -144,6 +156,7 @@ impl ImageQuad {
     }
 }
 
+#[derive(PartialEq)]
 pub(crate) struct Batch {
     pub image: Option<ImageData>,
     pub instances: Range<u32>,
@@ -220,6 +233,12 @@ impl DrawList {
     }
 
     pub fn replace(&mut self, other: DrawList) {
+        let same = self.batches == other.batches
+            && cast_slice::<Instance, u8>(&self.instances)
+                == cast_slice::<Instance, u8>(&other.instances);
+        if same {
+            return;
+        }
         self.instances = other.instances;
         self.batches = other.batches;
         self.extent = other.extent;

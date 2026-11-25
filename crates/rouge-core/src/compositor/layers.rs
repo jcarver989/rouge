@@ -1,15 +1,14 @@
 use super::model::{LayerId, LayerModel, MotionId};
-use super::{Commit, Content};
+use super::{Commit, Content, ListDelta, Nested};
 use crate::animation::{Animated, Decay, Timing};
 use crate::motion::Completion;
-use rouge_render::DrawList;
 use std::mem::take;
 use std::ops::{Deref, DerefMut};
 
 #[derive(Default)]
 pub struct Layers {
     model: LayerModel,
-    content: Vec<(LayerId, Vec<DrawList>)>,
+    content: Vec<(LayerId, ListDelta)>,
     waiting: Vec<(MotionId, Completion)>,
 }
 
@@ -53,8 +52,14 @@ impl Layers {
     }
 
     pub fn set_content(&mut self, id: LayerId, content: Content) {
-        self.model.set_nested(id, content.nested);
-        self.content.push((id, content.lists));
+        self.update_content(id, content.nested, ListDelta::Replace(content.lists));
+    }
+
+    pub(crate) fn update_content(&mut self, id: LayerId, nested: Vec<Nested>, delta: ListDelta) {
+        self.model.set_nested(id, nested);
+        if !matches!(&delta, ListDelta::Patch(patch) if patch.is_empty()) {
+            self.content.push((id, delta));
+        }
     }
 
     pub fn set_motion(&mut self, id: MotionId, value: f32) {

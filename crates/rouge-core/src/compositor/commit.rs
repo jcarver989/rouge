@@ -1,7 +1,44 @@
-use super::model::{LayerDelta, LayerId};
+use super::model::{LayerDelta, LayerId, Nested};
 use rouge_render::{
-    AtlasUploads, Color, DrawList, SurfaceConfig, SurfaceId, SurfaceSource, SurfaceStatus,
+    AtlasUploads, Color, DrawList, Point, SurfaceConfig, SurfaceId, SurfaceSource, SurfaceStatus,
 };
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ListId {
+    pub block: u64,
+    pub index: u32,
+}
+
+pub struct PlacedList {
+    pub id: ListId,
+    pub segment: usize,
+    pub offset: Point,
+    pub list: Option<DrawList>,
+}
+
+#[derive(Default)]
+pub struct Content {
+    pub lists: Vec<PlacedList>,
+    pub nested: Vec<Nested>,
+}
+
+impl Content {
+    pub fn new(lists: Vec<DrawList>, nested: Vec<Nested>) -> Self {
+        let place = |(segment, list)| PlacedList {
+            id: ListId {
+                block: 0,
+                index: segment as u32,
+            },
+            segment: nested.len().min(segment),
+            offset: Point::ZERO,
+            list: Some(list),
+        };
+        Content {
+            lists: lists.into_iter().enumerate().map(place).collect(),
+            nested,
+        }
+    }
+}
 
 pub enum SurfaceOp {
     Attach(SurfaceSource),
@@ -9,10 +46,15 @@ pub enum SurfaceOp {
     Detach(SurfaceId),
 }
 
+pub enum ListDelta {
+    Replace(Vec<PlacedList>),
+    Patch(Vec<(usize, PlacedList)>),
+}
+
 #[derive(Default)]
 pub struct Commit {
     pub layers: LayerDelta,
-    pub content: Vec<(LayerId, Vec<DrawList>)>,
+    pub content: Vec<(LayerId, ListDelta)>,
     pub atlas: AtlasUploads,
     pub surfaces: Vec<SurfaceOp>,
     pub clear: Option<Color>,

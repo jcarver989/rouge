@@ -7,10 +7,10 @@ use crate::{
     Affine, Atlas, AtlasUploads, Color, Corners, ImageData, ImageFormat, Inputs, Point, Rect,
 };
 use bytemuck::{Pod, Zeroable, bytes_of, cast_slice};
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
-use std::mem::take;
+use std::mem::{replace, take};
 use std::ops::Range;
 use std::ptr;
 use wgpu::{
@@ -276,6 +276,8 @@ impl<'a> Scene<'a> {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderStats {
+    pub commands_visited: u32,
+    pub records_built: u32,
     pub instance_bytes_uploaded: u64,
     pub damaged: u64,
     pub presented: u32,
@@ -530,11 +532,13 @@ impl Record {
 
 #[derive(Default)]
 struct Records {
+    count: u32,
     bytes: Vec<u8>,
 }
 
 impl Records {
     fn push<T: Pod>(&mut self, record: &T) -> Record {
+        self.count += 1;
         let record = bytes_of(record);
         let mut start = self.bytes.len();
         let page = start - start % PAGE_BYTES;
@@ -735,6 +739,7 @@ struct DrawBatch {
 
 enum Step {
     Draw {
+        layers: u32,
         record: Record,
         scissor: Scissor,
         batches: Range<u32>,
@@ -772,6 +777,7 @@ struct Plan {
 impl Plan {
     fn begin(&mut self, scale: f32, area: Area) {
         self.records.bytes.clear();
+        self.records.count = 0;
         self.pending.clear();
         self.steps.clear();
         self.passes.clear();
@@ -974,6 +980,8 @@ struct Instances {
     buffer: Buffer,
     used: u64,
     slots: FxHashMap<u64, Slot>,
+    free: FxHashMap<u32, Vec<u32>>,
+    removals: u64,
 }
 
 impl Instances {
@@ -982,6 +990,22 @@ impl Instances {
             buffer: instance_buffer(device, INSTANCE_MIN_BYTES),
             used: 0,
             slots: FxHashMap::default(),
+            free: FxHashMap::default(),
+            removals: 0,
+        }
+    }
+
+    fn release_removed(&mut self, lists: &DrawLists) {
+        if replace(&mut self.removals, lists.removals()) == lists.removals() {
+            return;
+        }
+        let live: FxHashSet<u64> = lists.ids().collect();
+        self.release(|id, _| !live.contains(&id));
+    }
+
+    fn release(&mut self, gone: impl Fn(u64, &Slot) -> bool) {
+        for (_, slot) in self.slots.extract_if(|id, slot| gone(*id, slot)) {
+            self.free.entry(slot.capacity).or_default().push(slot.start);
         }
     }
 
@@ -1001,24 +1025,28 @@ impl Instances {
             }
         }
         let capacity = len.next_power_of_two();
-        let offset = self.reserve(device, queue, u64::from(capacity) * Instance::SIZE);
+        let start = match self.free.get_mut(&capacity).and_then(Vec::pop) {
+            Some(start) => start,
+            None => self.reserve(device, queue, capacity),
+        };
+        let offset = u64::from(start) * Instance::SIZE;
         queue.write_buffer(&self.buffer, offset, bytes);
-        let start = (offset / Instance::SIZE) as u32;
-        self.slots.insert(
-            list.id(),
-            Slot {
-                start,
-                capacity,
-                revision: list.revision(),
-                used: frame,
-            },
-        );
+        let slot = Slot {
+            start,
+            capacity,
+            revision: list.revision(),
+            used: frame,
+        };
+        if let Some(outgrown) = self.slots.insert(list.id(), slot) {
+            let free = self.free.entry(outgrown.capacity).or_default();
+            free.push(outgrown.start);
+        }
         (start, uploaded)
     }
 
-    fn reserve(&mut self, device: &Device, queue: &Queue, bytes: u64) -> u64 {
+    fn reserve(&mut self, device: &Device, queue: &Queue, capacity: u32) -> u32 {
         let offset = self.used;
-        self.used += bytes;
+        self.used += u64::from(capacity) * Instance::SIZE;
         if self.used > self.buffer.size() {
             let buffer = instance_buffer(device, self.used.next_power_of_two());
             if offset > 0 {
@@ -1030,18 +1058,16 @@ impl Instances {
             }
             self.buffer = buffer;
         }
-        offset
+        (offset / Instance::SIZE) as u32
     }
 
     fn maintain(&mut self, frame: u64) {
-        let mut live = 0;
-        self.slots.retain(|_, slot| {
-            let keep = frame - slot.used < IDLE_FRAMES;
-            live += u64::from(keep) * u64::from(slot.capacity) * Instance::SIZE;
-            keep
-        });
+        self.release(|_, slot| frame - slot.used >= IDLE_FRAMES);
+        let capacities = self.slots.values().map(|slot| u64::from(slot.capacity));
+        let live = capacities.sum::<u64>() * Instance::SIZE;
         if self.used > INSTANCE_MIN_BYTES && self.used > live * 2 {
             self.slots.clear();
+            self.free.clear();
             self.used = 0;
         }
     }
@@ -1161,6 +1187,7 @@ pub struct Renderer {
     surface_binds: FxHashMap<SurfaceKey, BindGroup>,
     plan: Plan,
     damage: Option<Damage>,
+    blit: Option<Record>,
     frame: u64,
     stats: RenderStats,
 }
@@ -1277,6 +1304,7 @@ impl Renderer {
             surface_binds: FxHashMap::default(),
             plan: Plan::default(),
             damage: None,
+            blit: None,
             frame: 0,
             stats: RenderStats::default(),
             textures,
@@ -1428,10 +1456,21 @@ impl Renderer {
         let mark = plan.pending.len();
         let mut index = range.start;
         while index < range.end {
+            self.stats.commands_visited += 1;
             let next = scene.next(index);
             let shown = match &scene.commands[index] {
                 Command::Draw(draw) => {
-                    self.plan_layer(scene.lists, draw, area, behind.as_deref_mut(), plan)
+                    let adjacent = index > range.start
+                        && plan.pending.len() > mark
+                        && matches!(scene.commands[index - 1], Command::Draw(previous) if previous.backdrop.is_none());
+                    self.plan_layer(
+                        scene.lists,
+                        draw,
+                        area,
+                        behind.as_deref_mut(),
+                        plan,
+                        adjacent,
+                    )
                 }
                 Command::Surface(draw) => {
                     self.plan_surface(draw, area, plan, surfaces);
@@ -1475,6 +1514,7 @@ impl Renderer {
         area: Area,
         behind: Option<&mut Behind>,
         plan: &mut Plan,
+        adjacent: bool,
     ) -> bool {
         let Some(scissor) = area.scissor(draw.scissor).filter(|_| draw.opacity > 0.0) else {
             return false;
@@ -1514,10 +1554,35 @@ impl Renderer {
             (scissor, extent) => scissor.or(extent),
         };
         if let (Some(start), Some(list), Some(scissor)) = (start, list, area.scissor(bounded)) {
-            let record = plan.records.push(&DrawRecord {
+            let state = DrawRecord {
                 layer: Layer::new(&draw.transform, draw.opacity, area, plan.scale, draw.radii),
                 fill: draw.fill,
-            });
+            };
+            if adjacent
+                && draw.backdrop.is_none()
+                && let [batch] = list.batches()
+                && let Some(Step::Draw {
+                    record,
+                    scissor: previous,
+                    batches,
+                    layers,
+                }) = plan.pending.last_mut()
+                && *previous == scissor
+                && batches.len() == 1
+            {
+                let preceding = &mut plan.batches[batches.start as usize];
+                let offset = record.page as usize + record.row as usize * ROW_BYTES;
+                let bytes = bytes_of(&state);
+                if preceding.instances.end == start + batch.instances.start
+                    && preceding.image == batch.image.as_ref().map(ImageData::id)
+                    && &plan.records.bytes[offset..offset + bytes.len()] == bytes
+                {
+                    preceding.instances.end = start + batch.instances.end;
+                    *layers += 1;
+                    return true;
+                }
+            }
+            let record = plan.records.push(&state);
             let first = plan.batches.len() as u32;
             plan.batches
                 .extend(list.batches().iter().map(|batch| DrawBatch {
@@ -1525,6 +1590,7 @@ impl Renderer {
                     instances: start + batch.instances.start..start + batch.instances.end,
                 }));
             plan.pending.push(Step::Draw {
+                layers: 1,
                 record,
                 scissor,
                 batches: first..plan.batches.len() as u32,
@@ -1997,6 +2063,7 @@ impl Renderer {
                     stats.backdrop_passes += 1;
                 }
                 Step::Draw {
+                    layers,
                     record,
                     scissor,
                     batches,
@@ -2023,7 +2090,7 @@ impl Renderer {
                             stats.draw_calls += 1;
                         }
                     }
-                    stats.layers += 1;
+                    stats.layers += layers;
                 }
                 Step::Effect {
                     pipeline,
@@ -2085,6 +2152,7 @@ impl Renderer {
             origin: (0, 0),
             size: (viewport.width.max(1), viewport.height.max(1)),
         };
+        self.instances.release_removed(scene.lists);
         let mut plan = take(&mut self.plan);
         plan.begin(viewport.scale, area);
         let mut base = FxHasher::default();
@@ -2129,6 +2197,7 @@ impl Renderer {
             bounds: [0.0, 0.0, 1.0, 1.0],
             options: premultiplied,
         });
+        self.stats.records_built = plan.records.count;
         self.sync_records(&plan.records);
         if plan.blurs() {
             self.sync_scratch(plan.scratch);
@@ -2189,15 +2258,7 @@ impl Renderer {
         }
         let changed = !matches!(redraw, Redraw::Unchanged);
         if let (Some(scene), Some(target)) = (scene, acquire(changed)) {
-            let mut pass = begin_pass(
-                &mut encoder,
-                &target,
-                LoadOp::Clear(ClearColor::TRANSPARENT),
-            );
-            pass.set_pipeline(&self.fullscreen[BlurKind::Copy as usize]);
-            pass.set_bind_group(0, &scene.bind_group, &[]);
-            pass.set_bind_group(1, &self.records_group, &[blit.page]);
-            pass.draw(blit.vertices(), 0..1);
+            self.blit(&mut encoder, scene, &target, blit);
             stats.presented += 1;
         }
         self.queue.submit([encoder.finish()]);
@@ -2207,6 +2268,35 @@ impl Renderer {
             self.instances.maintain(frame);
         }
         self.plan = plan;
+        self.blit = Some(blit);
+    }
+
+    pub fn present_retained(&mut self, target: Option<TextureView>) {
+        self.stats = RenderStats::default();
+        if let (Some(scene), Some(blit), Some(target)) = (&self.scene, self.blit, target) {
+            let mut encoder = self
+                .device
+                .create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("rouge retained frame"),
+                });
+            self.blit(&mut encoder, scene, &target, blit);
+            self.queue.submit([encoder.finish()]);
+            self.stats.presented = 1;
+        }
+    }
+
+    fn blit(
+        &self,
+        encoder: &mut CommandEncoder,
+        scene: &Target,
+        target: &TextureView,
+        record: Record,
+    ) {
+        let mut pass = begin_pass(encoder, target, LoadOp::Clear(ClearColor::TRANSPARENT));
+        pass.set_pipeline(&self.fullscreen[BlurKind::Copy as usize]);
+        pass.set_bind_group(0, &scene.bind_group, &[]);
+        pass.set_bind_group(1, &self.records_group, &[record.page]);
+        pass.draw(record.vertices(), 0..1);
     }
 }
 

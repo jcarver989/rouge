@@ -549,11 +549,90 @@ fn steady_frames_neither_shape_nor_break_text() -> TestResult {
 
 const LABEL: &str = "Thread trailing commas through the grammar";
 
+#[test]
+fn text_that_fits_is_broken_once_whatever_room_it_has() {
+    let mut text = TextSystem::new();
+    let natural = text.layout("one line", &style(14.0), None).size().0;
+    let positions = glyphs(&text.layout("one line", &style(14.0), None));
+    for room in [natural.ceil(), natural.ceil() + 1.0, natural * 3.0, 1000.0] {
+        let layout = text.layout("one line", &style(14.0), Some(room));
+        assert_eq!(layout.line_count(), 1, "{room}");
+        assert_eq!(glyphs(&layout), positions, "{room}");
+    }
+    assert_eq!((text.stats().shapes, text.stats().breaks), (1, 0));
+    let narrow = text.layout("one line", &style(14.0), Some(natural * 0.7));
+    assert_eq!((narrow.line_count(), text.stats().breaks), (2, 1));
+}
+
+#[test]
+fn text_placed_by_its_width_is_placed_again_for_each_width() {
+    let mut text = TextSystem::new();
+    let centered = TextStyle {
+        align: TextAlign::Center,
+        ..style(14.0)
+    };
+    let cases = [
+        ("centered", &centered),
+        ("\u{5e9}\u{5dc}\u{5d5}\u{5dd}", &style(14.0)),
+    ];
+    for (content, style) in cases {
+        let natural = text.layout(content, style, None).size().0.ceil();
+        let near = first_glyph_x(&text.layout(content, style, Some(natural)));
+        let far = first_glyph_x(&text.layout(content, style, Some(natural + 100.0)));
+        assert!(far > near + 40.0, "{content}: {near} then {far}");
+    }
+}
+
+#[test]
+fn only_decorated_text_has_rects() {
+    let mut text = TextSystem::new();
+    let count = |layout: &TextLayout, foreground| {
+        let mut count = 0;
+        layout.for_each_rect(foreground, |_, _| count += 1);
+        count
+    };
+    let plain = text.layout("plain", &style(14.0), None);
+    assert_eq!((count(&plain, false), count(&plain, true)), (0, 0));
+    let struck = TextStyle {
+        strikethrough: true,
+        ..style(14.0)
+    };
+    let struck = text.layout("plain", &struck, None);
+    assert_eq!((count(&struck, false), count(&struck, true)), (0, 1));
+    let spans = vec![
+        (
+            0..2,
+            SpanStyle {
+                background: Some(Color::RED),
+                ..SpanStyle::default()
+            },
+        ),
+        (
+            2..5,
+            SpanStyle {
+                strikethrough: Some(true),
+                ..SpanStyle::default()
+            },
+        ),
+    ];
+    let spanned = TextStyle {
+        spans,
+        ..style(14.0)
+    };
+    let spanned = text.layout("plain", &spanned, None);
+    assert_eq!((count(&spanned, false), count(&spanned, true)), (1, 1));
+}
+
 fn truncated() -> TextStyle {
     TextStyle {
         wrap: TextWrap::Truncate,
         ..style(16.0)
     }
+}
+
+fn first_glyph_x(layout: &TextLayout) -> f32 {
+    let xs = glyphs(layout).into_iter().map(|(_, x)| x);
+    xs.fold(f32::INFINITY, f32::min)
 }
 
 fn glyphs(layout: &TextLayout) -> Vec<(u32, f32)> {

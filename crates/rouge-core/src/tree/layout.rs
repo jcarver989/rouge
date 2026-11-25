@@ -1,3 +1,4 @@
+use super::blocks::{Block, BlockRef};
 use super::content::TextData;
 use super::layers::{LayerRef, LayerState, Slot};
 use super::paint::layer_mut;
@@ -27,11 +28,29 @@ const WRAP_TOLERANCE: f32 = 1.0;
 struct Space {
     origin: Point,
     layer: LayerRef,
+    sheet: Point,
+    block: Option<BlockRef>,
+    leads: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Moved {
+    Layer(LayerRef),
+    Block(BlockRef),
+    Inside(ElementId),
 }
 
 struct LayoutCx<'a> {
     text_system: &'a mut TextSystem,
-    moved: Vec<LayerRef>,
+    moved: Vec<Moved>,
+}
+
+impl LayoutCx<'_> {
+    fn moved(&mut self, moved: Moved) {
+        if self.moved.last() != Some(&moved) {
+            self.moved.push(moved);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -99,6 +118,9 @@ impl Tree {
         let space = Space {
             origin: Point::ZERO,
             layer: (self.root, Slot::Own),
+            sheet: Point::ZERO,
+            block: None,
+            leads: false,
         };
         let parent = Parent {
             origin: Point::ZERO,
@@ -106,9 +128,15 @@ impl Tree {
             containing: Offset::ZERO,
         };
         self.resolve_bounds(self.root, parent, space, &mut cx);
-        for layer in cx.moved {
-            if let Some(layer) = layer_mut(&mut self.elements, layer) {
-                layer.dirty = true;
+        for moved in cx.moved {
+            match moved {
+                Moved::Layer(layer) => {
+                    if let Some(layer) = layer_mut(&mut self.elements, layer) {
+                        layer.dirty = true;
+                    }
+                }
+                Moved::Block(block) => self.mark_block(block),
+                Moved::Inside(host) => self.mark_layer(host, true),
             }
         }
         self.stats.layouts += 1;
@@ -157,6 +185,18 @@ impl Tree {
             }
         }
         let origin = parent.origin + Point::new(layout.location.x, layout.location.y);
+        if space.leads {
+            space.leads = false;
+            let offset = origin - space.sheet;
+            space.sheet = origin;
+            if let Some((host, index)) = space.block
+                && let Some(block) = self.elements[host].block_mut(index)
+                && replace(&mut block.offset, offset) != offset
+            {
+                cx.moved(Moved::Inside(host));
+            }
+        }
+        let element = &mut self.elements[id];
         let size = Size::new(layout.size.width, layout.size.height);
         let border = Edges {
             top: border.top,
@@ -172,27 +212,30 @@ impl Tree {
             access.dirty.push(id);
         }
         element.bounds = bounds;
-        let within = |space: &Space| Rect {
-            origin: origin - space.origin,
+        let within = |from: Point| Rect {
+            origin: origin - from,
             size,
         };
         let mut enter = |layer: &mut Option<Box<LayerState>>, slot: Slot, space: &mut Space| {
             let layer = layer.as_mut()?;
-            let frame = within(space);
+            let frame = within(space.origin);
             if layer.frame.replace(frame) != Some(frame) {
                 self.layers.set_frame(layer.id, frame);
             }
             *space = Space {
                 origin,
                 layer: (id, slot),
+                sheet: origin,
+                block: None,
+                leads: false,
             };
             Some(layer.id)
         };
         let [own, content] = &mut element.layers;
         enter(own, Slot::Own, &mut space);
-        let painted = within(&space);
+        let painted = within(space.sheet);
         if replace(&mut element.painted, painted) != painted || element.border != border {
-            cx.moved.push(space.layer);
+            cx.moved(space.block.map_or(Moved::Layer(space.layer), Moved::Block));
         }
         element.border = border;
         if let Some(scroller) = enter(content, Slot::Content, &mut space)
@@ -218,9 +261,30 @@ impl Tree {
             unrounded,
             containing,
         };
-        for i in 0..element.children.len() {
+        self.sync_blocks(id);
+        for i in 0..self.elements[id].children.len() {
             let child = self.elements[id].children[i];
+            let space = self.block_space(id, child, space);
             self.resolve_bounds(child, parent, space, cx);
+        }
+    }
+
+    fn block_space(&self, host: ElementId, child: ElementId, space: Space) -> Space {
+        let index = self.elements[child].block;
+        let block = self.elements[host].block(index);
+        let Some(lead) = block.and_then(Block::lead) else {
+            return space;
+        };
+        let leads = lead == child;
+        Space {
+            sheet: if leads {
+                space.sheet
+            } else {
+                self.elements[lead].bounds.origin
+            },
+            block: Some((host, index)),
+            leads,
+            ..space
         }
     }
 

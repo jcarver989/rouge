@@ -282,14 +282,13 @@ where
                         }
                     }
                 });
-                rows.retain(|k, row| {
-                    let keep = seen.contains(k);
-                    if !keep {
-                        cx.tree.remove_fragment(row.fragment, presence.exit);
-                        row.scope.dispose();
-                    }
-                    keep
-                });
+                let gone = rows.extract_if(|key, _| !seen.contains(key));
+                let gone: Vec<Row<T>> = gone.map(|(_, row)| row).collect();
+                let removed = gone.iter().map(|row| row.fragment).collect();
+                cx.tree.remove_children(fragment, &removed, presence.exit);
+                for row in gone {
+                    row.scope.dispose();
+                }
                 cx.tree.reorder(fragment, order);
             });
         });

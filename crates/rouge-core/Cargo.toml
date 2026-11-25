@@ -56,6 +56,10 @@ name = "tree_edit_test"
 path = "tests/tree/edit_test.rs"
 
 [[test]]
+name = "tree_blocks_test"
+path = "tests/tree/blocks_test.rs"
+
+[[test]]
 name = "tree_fragment_test"
 path = "tests/tree/fragment_test.rs"
 

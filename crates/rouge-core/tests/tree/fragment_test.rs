@@ -1,3 +1,7 @@
+#[path = "../common/random.rs"]
+mod random;
+
+use random::Random;
 use rouge_core::Wake;
 use rouge_core::testing::{LINEAR, RED, TestResult, TestUi, TestUiBuilder};
 use rouge_core::{
@@ -141,6 +145,135 @@ fn a_focused_field_rebuilt_inside_a_reordered_each_row_keeps_focus_and_its_caret
 }
 
 #[test]
+fn any_edit_to_an_each_leaves_its_rows_in_order_between_their_siblings() {
+    let _rt = Runtime::new().enter();
+    let items = signal(Vec::<u32>::new());
+    let hidden = signal(0u32);
+    let mut ui = TestUi::new(move || {
+        let row = move |id: ReadSignal<u32>| {
+            let id = id.get_untracked();
+            let boxes = move || {
+                let count = (id % 3) as usize;
+                (0..count)
+                    .map(|index| div().size(1.0).test_id(box_name(id, index)))
+                    .collect::<Vec<_>>()
+            };
+            show(move || hidden.get() != id % 5, boxes)
+        };
+        div()
+            .flex()
+            .col()
+            .child(div().size(1.0).test_id("above"))
+            .child(each(move || items.get(), |id| *id, row))
+            .child(div().size(1.0).test_id("below"))
+    });
+    let (mut random, mut next) = (Random(7), 0);
+    for step in 0..300 {
+        let mut ids = items.get_untracked();
+        for _ in 0..=random.below(3) {
+            edit(&mut ids, &mut next, &mut random);
+        }
+        items.set(ids.clone());
+        if random.below(4) == 0 {
+            hidden.set(random.below(5) as u32);
+        }
+        ui.update();
+        let shown = ids.iter().filter(|id| hidden.get_untracked() != **id % 5);
+        let boxes = shown.flat_map(|id| (0..(id % 3) as usize).map(|i| box_name(*id, i)));
+        let mut expected = vec!["above".to_owned()];
+        expected.extend(boxes);
+        expected.push("below".to_owned());
+        assert_eq!(names_down(&ui), expected, "step {step}: {ids:?}");
+        let elements = 2 + expected.len();
+        assert_eq!(ui.stats().elements, elements, "step {step}: {ids:?}");
+    }
+}
+
+#[test]
+fn swapping_distant_rows_rebuilds_nothing_and_keeps_focus() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let items = signal((0..200u32).collect::<Vec<_>>());
+    let (mut ui, focus) = TestUiBuilder::default().build_with(move || {
+        let focus = focus_handle();
+        let row = move |id: ReadSignal<u32>| {
+            let id = id.get_untracked();
+            let row = div().w(10.0).h(10.0).test_id(format!("row-{id}"));
+            if id == 1 { row.track_focus(focus) } else { row }
+        };
+        let rows = each(move || items.get(), |id| *id, row);
+        (div().flex().col().child(rows), focus)
+    });
+    focus.focus();
+    ui.advance(0.0);
+    let before = ui.stats();
+    items.update(|items| items.swap(1, 198));
+    ui.advance(0.0);
+    let work = ui.stats() - before;
+    assert_eq!((work.elements_created, work.elements_removed), (0, 0));
+    assert_eq!((work.style_resolutions, work.layouts), (0, 1));
+    assert!(focus.is_focused());
+    assert_eq!(ui.rect_of("row-198")?.origin, Point::new(0.0, 10.0));
+    assert_eq!(ui.rect_of("row-1")?.origin, Point::new(0.0, 1980.0));
+    assert_eq!(ui.rect_of("row-100")?.origin, Point::new(0.0, 1000.0));
+    Ok(())
+}
+
+#[test]
+fn rows_removed_together_all_animate_out() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let items = signal(vec![1u32, 2, 3]);
+    let mut ui = TestUi::new(move || {
+        let row = |id: ReadSignal<u32>| {
+            let color = if id.get_untracked() == 3 {
+                Color::BLUE
+            } else {
+                Color::RED
+            };
+            div().w(20.0).h(10.0).bg(color)
+        };
+        let rows =
+            each(move || items.get(), |id| *id, row).exit(Pose::new().translate_x(100.0), LINEAR);
+        div().flex().size_full().child(rows)
+    });
+    items.set(vec![3]);
+    ui.advance(0.0);
+    assert_eq!(row_widths(&mut ui), [20.0]);
+    assert_eq!(ui.stats().elements, 3, "root, container and the last row");
+    ui.run(0.5);
+    assert_eq!(ui.pixel(55, 5)?, RED, "the first row is on its way out");
+    assert_eq!(ui.pixel(75, 5)?, RED, "and so is the second");
+    ui.run(0.55);
+    assert_eq!(ui.first_x(RED, 5)?, 200, "until both are done");
+    assert_eq!(ui.next_frame(), Wake::Idle);
+    Ok(())
+}
+
+#[test]
+fn removing_the_focused_row_with_others_releases_focus() {
+    let _rt = Runtime::new().enter();
+    let items = signal(vec![1u32, 2, 3]);
+    let (mut ui, focus) = TestUiBuilder::default().build_with(move || {
+        let focus = focus_handle();
+        let row = move |id: ReadSignal<u32>| {
+            let row = div().w(20.0).h(10.0);
+            if id.get_untracked() == 2 {
+                row.track_focus(focus)
+            } else {
+                row
+            }
+        };
+        let rows = each(move || items.get(), |id| *id, row);
+        (div().child(rows), focus)
+    });
+    focus.focus();
+    ui.advance(0.0);
+    assert!(focus.is_focused());
+    items.set(vec![]);
+    ui.advance(0.0);
+    assert!(!focus.is_focused());
+}
+
+#[test]
 fn closing_an_autofocused_overlay_returns_focus_to_the_element_that_had_it() {
     let _rt = Runtime::new().enter();
     let open = signal(false);
@@ -243,4 +376,39 @@ fn row_widths(ui: &mut TestUi) -> Vec<f32> {
         x = b.origin.x + b.size.width + 0.5;
     }
     widths
+}
+
+fn box_name(id: u32, index: usize) -> String {
+    format!("{id}/{index}")
+}
+
+fn names_down(ui: &TestUi) -> Vec<String> {
+    let mut named = ui.named_bounds();
+    named.sort_by(|a, b| a.1.origin.y.total_cmp(&b.1.origin.y));
+    named.into_iter().map(|(name, _)| name).collect()
+}
+
+fn edit(ids: &mut Vec<u32>, next: &mut u32, random: &mut Random) {
+    let place = random.below(ids.len() + 1);
+    match random.below(8) {
+        0 => ids.reverse(),
+        1 if ids.len() > 1 => {
+            let (a, b) = (random.below(ids.len()), random.below(ids.len()));
+            ids.swap(a, b);
+        }
+        2 => ids.truncate(place),
+        3 => {
+            ids.drain(..place);
+        }
+        4 if place < ids.len() => {
+            ids.remove(place);
+        }
+        5 => ids.rotate_left(place),
+        _ => {
+            for _ in 0..=random.below(4) {
+                ids.insert(place, *next);
+                *next += 1;
+            }
+        }
+    }
 }

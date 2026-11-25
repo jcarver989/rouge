@@ -226,6 +226,7 @@ impl Tree {
             self.refresh_text_subtree(id);
         }
         if reshown {
+            self.mark_around(id);
             self.mark_access_subtree(id);
         }
     }

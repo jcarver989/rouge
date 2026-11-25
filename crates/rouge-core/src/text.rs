@@ -256,6 +256,7 @@ pub struct TextLayout {
 struct Shaped {
     layout: Layout<u16>,
     width: Option<f32>,
+    fits_from: Option<f32>,
     align: TextAlign,
     indent: f32,
     len: usize,
@@ -312,6 +313,10 @@ impl Cut {
 }
 
 impl Shaped {
+    fn broken_width(&self, width: Option<f32>) -> Option<f32> {
+        width.filter(|width| self.fits_from.is_none_or(|fits_from| *width < fits_from))
+    }
+
     fn break_at(&mut self, width: Option<f32>) {
         let indent = width.map_or(0.0, |width| self.indent.min(width / 2.0).max(0.0));
         self.layout.set_text_indent(
@@ -348,7 +353,8 @@ impl Shaped {
 
 impl TextLayout {
     pub(crate) fn fits(&self, max_width: Option<f32>) -> bool {
-        self.shaped.width == bound(max_width, self.shaped.wrap)
+        let width = bound(max_width, self.shaped.wrap);
+        self.shaped.width == self.shaped.broken_width(width)
     }
 
     fn cut(&self, line: usize) -> Option<Cut> {
@@ -364,7 +370,20 @@ impl TextLayout {
             .map(|(cluster, _)| cluster.text_range().start)
     }
 
+    fn is_decorated(&self, foreground: bool) -> bool {
+        self.paints.iter().any(|paint| {
+            if foreground {
+                paint.underline.is_some() || paint.strikethrough.unwrap_or(self.strikethrough)
+            } else {
+                paint.background.is_some()
+            }
+        })
+    }
+
     pub fn for_each_rect(&self, foreground: bool, mut f: impl FnMut(TextRect, Option<Color>)) {
+        if !self.is_decorated(foreground) {
+            return;
+        }
         for (index, line) in self.shaped.layout.lines().enumerate() {
             let cut = self.cut(index);
             let mut f = |rect: TextRect, color| {
@@ -681,7 +700,7 @@ impl TextSystem {
         }
         self.stats.shapes += 1;
         let mut shaped = self.shape(&request);
-        shaped.break_at(width);
+        shaped.break_at(shaped.broken_width(width));
         let shaped = Rc::new(shaped);
         let paints = request.palette.clone();
         self.cache.insert(hash, request.into_entry(shaped.clone()));
@@ -722,10 +741,16 @@ impl TextSystem {
             }
             _ => 0.0,
         };
+        let same_at_any_fit = style.wrap == TextWrap::Wrap
+            && style.align == TextAlign::Start
+            && indent == 0.0
+            && !layout.is_rtl();
+        let fits_from = same_at_any_fit.then(|| layout.calculate_content_widths().max);
         let ellipsis = (style.wrap == TextWrap::Truncate).then(|| Rc::new(self.ellipsis(style)));
         Shaped {
             layout,
             width: None,
+            fits_from,
             align: style.align,
             indent,
             len: text.len(),
@@ -925,6 +950,7 @@ impl Entry {
     }
 
     fn at(&mut self, width: Option<f32>, stats: &mut TextStats) -> Rc<Shaped> {
+        let width = self.widths[0].broken_width(width);
         if let Some(index) = self.widths.iter().position(|shaped| shaped.width == width) {
             stats.cache_hits += 1;
             self.widths[..=index].rotate_right(1);

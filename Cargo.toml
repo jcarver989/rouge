@@ -71,7 +71,7 @@ panic = "abort"
 
 [profile.profiling]
 inherits = "release"
-debug = "line-tables-only"
+debug = "limited"
 
 [profile.dev]
 debug = "line-tables-only"

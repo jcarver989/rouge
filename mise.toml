@@ -125,23 +125,44 @@ dir = "crates/rouge-framer/tests/fixtures/mobile"
 depends = [{ task = "platform:android:generate", args = ["{{ usage.example }}"] }]
 run = 'ROUGE_ANDROID_LOGS=1 cargo run --locked -p rouge-framer --example "$usage_example" -- run android'
 
+[tasks."perf:list"]
+description = "List the benchmark scenarios and the sizes they run at"
+run = "cargo run --quiet --release -p rouge-bench -- list"
+
 [tasks."perf:bench"]
-description = "Measure headless GPU benchmarks; accepts scenario filters, --save, and --runs <n>"
+description = "Measure the working tree; accepts scenario filters such as rows_swap@10000 and --passes <n>"
 raw_args = true
 run = "cargo run --release -p rouge-bench -- run"
 
+[tasks."perf:compare"]
+description = "Compare the working tree with main, or with --base <revision or saved build>; accepts scenario filters"
+raw_args = true
+run = "cargo run --release -p rouge-bench -- compare"
+
+[tasks."perf:save"]
+description = "Keep the working tree's build under a name for perf:compare --base <name>"
+raw_args = true
+run = "cargo run --release -p rouge-bench -- save"
+
+[tasks."perf:scale"]
+description = "Measure scenarios at several sizes and report what grows faster than the size"
+raw_args = true
+run = "cargo run --release -p rouge-bench -- scale"
+
 [tasks."perf:profile"]
-description = "Sample a benchmark scenario and print its hottest functions (macOS: sample; Linux: perf)"
-usage = '''
-arg "<scenario>"
-arg "[seconds]" default="10"
-'''
-run = 'scripts/profile "$usage_scenario" "$usage_seconds"'
+description = "Show where a scenario's CPU time goes; accepts --under <function>, --min <percent> and --seconds <n>"
+raw_args = true
+run = "cargo run --profile profiling -p rouge-bench --features profile -- profile"
 
 [tasks."perf:heap"]
-description = "Write a dhat heap profile for one scenario to target/bench/dhat-heap.json"
-usage = 'arg "<scenario>"'
-run = 'cargo run --release -p rouge-bench --features dhat -- run "$usage_scenario" --runs 0'
+description = "Show where a scenario's allocations come from; accepts --under <function> and --min <percent>"
+raw_args = true
+run = "cargo run --profile profiling -p rouge-bench --features profile -- heap"
+
+[tasks."perf:shot"]
+description = "Save a screenshot of a scenario's last frame to target/bench/shots"
+raw_args = true
+run = "cargo run --release -p rouge-bench -- shot"
 
 [tasks.check]
 description = "Type-check every crate and target"
