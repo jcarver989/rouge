@@ -369,7 +369,8 @@ fn web_build_optimizes_precompresses_and_enforces_size_budgets() -> Result {
             tool(
                 sh,
                 "cargo",
-                r#"mkdir -p "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release"
+                r#"if [ "$1" != build ]; then exec "$REAL_CARGO" "$@"; fi
+mkdir -p "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release"
 printf '0123456789abcdef0123456789abcdef' > "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/app.wasm""#,
             )?;
             tool(

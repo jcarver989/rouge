@@ -1,6 +1,7 @@
 use framer::Project;
 use framer::github::Step;
 use framer::rust::CargoWorkspace;
+use framer::toml_edit::Array;
 use framer_presets::{Ci, Release, ReleasePlz, Rust, RustMonorepo, Tools, Workspace};
 use std::mem;
 use std::process::ExitCode;
@@ -50,6 +51,14 @@ fn main() -> ExitCode {
         let lints = workspace.lints_mut();
         *lints = mem::take(lints).allow_clippy(ALLOWED_PEDANTIC_LINTS);
     }
+    project.toml("mise.toml").set(
+        "tasks.test-ci.run",
+        Array::from_iter([
+            "cargo test --locked -p rouge-syntax --no-default-features --test features_test",
+            "cargo test --locked -p rouge-syntax --no-default-features --features lang-rust --test features_test",
+            "cargo test --locked -p rouge-syntax --no-default-features --features lang-sql --test features_test",
+        ]),
+    );
     project.synth()
 }
 

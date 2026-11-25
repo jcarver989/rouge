@@ -155,11 +155,7 @@ usage = 'arg "[profile]" default="default"'
 [tasks.test-ci]
 description = "Run tests with nextest's CI profile, which writes JUnit results"
 depends = ["test ci"]
-run = [
-    "cargo test --locked -p rouge-syntax --no-default-features --test features_test",
-    "cargo test --locked -p rouge-syntax --no-default-features --features lang-rust --test features_test",
-    "cargo test --locked -p rouge-syntax --no-default-features --features lang-sql --test features_test",
-]
+run = ["cargo test --locked -p rouge-syntax --no-default-features --test features_test", "cargo test --locked -p rouge-syntax --no-default-features --features lang-rust --test features_test", "cargo test --locked -p rouge-syntax --no-default-features --features lang-sql --test features_test"]
 
 [tasks.lint]
 description = "Run Clippy, failing on any rustc, Clippy or Cargo warning"
