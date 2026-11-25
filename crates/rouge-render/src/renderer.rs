@@ -326,7 +326,11 @@ impl Area {
         let Some(rect) = rect else {
             return Some([0, 0, self.size.0, self.size.1]);
         };
-        let Area { origin, size } = self.within(&rect, f32::round, f32::round)?;
+        let snap = |v: f32| {
+            const SUBPIXELS: f32 = 256.0;
+            (v + (0.5 + 0.5 / SUBPIXELS)).floor()
+        };
+        let Area { origin, size } = self.within(&rect, snap, snap)?;
         Some([
             (origin.0 - self.origin.0) as u32,
             (origin.1 - self.origin.1) as u32,

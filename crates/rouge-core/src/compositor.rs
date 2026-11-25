@@ -146,7 +146,7 @@ impl Compositor {
         if scissor.is_some_and(|scissor| scissor.is_empty()) {
             return;
         }
-        let transform = layer.local(&pose, scale).then(&parent.transform);
+        let transform = layer.local(&pose).then(&parent.transform);
         let radii = layer.radii(self.model.motions(), at);
         let shaped = |applied: &Applied| EffectDraw {
             effect: applied.instance(at),
@@ -177,8 +177,11 @@ impl Compositor {
             (transform.ty * scale).round() as i32,
         );
         let shift = Point::new(offset.0 as f32, offset.1 as f32);
-        let local = transform.then(&Affine::translate(-transform.tx, -transform.ty));
-        let transform = local.then(&Affine::translate(shift.x / scale, shift.y / scale));
+        let local = Affine {
+            tx: (transform.tx * scale - shift.x) / scale,
+            ty: (transform.ty * scale - shift.y) / scale,
+            ..transform
+        };
         let local_scissor =
             scissor.map(|scissor| scissor.translate(Point::new(-shift.x, -shift.y)));
         if style.backdrop.is_some() {

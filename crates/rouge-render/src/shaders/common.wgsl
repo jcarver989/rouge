@@ -64,9 +64,9 @@ fn sd_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - radius;
 }
 
-fn clip_coverage(frag: vec2<f32>, clip: vec4<f32>) -> f32 {
-    let lo = clamp(frag - clip.xy + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
-    let hi = clamp(clip.zw - frag + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+fn clip_coverage(frag: vec2<f32>, clip: vec4<f32>, pixel: vec2<f32>) -> f32 {
+    let lo = clamp((frag - clip.xy) / pixel + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+    let hi = clamp((clip.zw - frag) / pixel + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
     return lo.x * lo.y * hi.x * hi.y;
 }
 

@@ -420,14 +420,10 @@ impl Layer {
         }
     }
 
-    pub(crate) fn local(&self, pose: &LayerPose, scale: f32) -> Affine {
-        let frame = self.frame.unwrap_or_default();
-        let snap = |v: f32| (v * scale).round() / scale;
-        let anchor = frame.origin - pose.scroll;
-        pose.shape(self.bounds()).then(&Affine::translate(
-            snap(anchor.x) + pose.translate.x,
-            snap(anchor.y) + pose.translate.y,
-        ))
+    pub(crate) fn local(&self, pose: &LayerPose) -> Affine {
+        let origin = self.frame.unwrap_or_default().origin;
+        pose.transform(self.bounds())
+            .then(&Affine::translate(origin.x, origin.y))
     }
 
     pub(crate) fn stages(&self) -> impl Iterator<Item = &Applied> {

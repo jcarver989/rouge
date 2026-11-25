@@ -1,6 +1,8 @@
 use rouge_core::Corners;
 use rouge_core::Wake;
-use rouge_core::testing::{BLACK, BLUE, GREEN, RED, TestResult, TestUi, WHITE, counter};
+use rouge_core::testing::{
+    BLACK, BLUE, GREEN, RED, TestResult, TestUi, TestUiBuilder, WHITE, assert_near, counter,
+};
 use rouge_core::{Color, Div, Glass, Point, Spring, Styled, div};
 use rouge_reactive::{Runtime, signal};
 use rouge_render::Command;
@@ -21,6 +23,48 @@ fn elements_get_layers_only_when_they_use_compositor_features() {
         4,
         "the root plus three promoted elements"
     );
+}
+
+#[test]
+fn adjacent_row_layers_share_device_pixel_edges() -> TestResult {
+    let _rt = Runtime::new().enter();
+    for (scale, top, start, end, rasterized) in [
+        (1.8125, 0.0, 0, 145, false),
+        (1.8125, 0.0, 0, 145, true),
+        (1.3, 5.0, 7, 111, false),
+        (1.3, 5.0, 7, 111, true),
+    ] {
+        let mut ui = TestUiBuilder::default().scale(scale).build(|| {
+            let rows = (0..4).map(|_| {
+                let row = div().h(20.0).bg(Color::RED.with_alpha(0.5));
+                if rasterized {
+                    row.rasterize()
+                } else {
+                    row.layer()
+                }
+            });
+            div()
+                .size_full()
+                .flex()
+                .col()
+                .pt(top)
+                .bg(Color::BLACK)
+                .children(rows)
+        });
+        let image = ui.render()?;
+        if start > 0 {
+            assert_eq!(image.pixel(10, start - 1), BLACK);
+        }
+        for y in start..end {
+            assert_near(
+                image.pixel(10, y),
+                [128, 0, 0, 255],
+                &format!("y={y}, scale={scale}, rasterized={rasterized}"),
+            );
+        }
+        assert_eq!(image.pixel(10, end), BLACK);
+    }
+    Ok(())
 }
 
 #[test]

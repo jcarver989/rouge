@@ -66,6 +66,30 @@ fn stacked_quads_meet_without_seams_at_fractional_scales() -> Result<(), GpuErro
 }
 
 #[test]
+fn translated_clipped_rows_share_device_pixel_edges() -> Result<(), GpuError> {
+    let mut canvas = Canvas::new(100, 1.0, Color::BLACK)?;
+    let list = canvas.add(quads((0_u8..4).map(|index| {
+        let bounds = Rect::new(0.0, f32::from(index) * 10.0, 20.0, 10.0);
+        Quad {
+            clip: bounds,
+            ..Quad::new(bounds, Color::RED)
+        }
+    })));
+    for (transform, bottom) in [(Affine::IDENTITY, 41), (Affine::scale(1.0, 2.0), 81)] {
+        let mut layer = LayerDraw::new(list);
+        layer.transform = transform.then(&Affine::translate(0.0, 0.5));
+        canvas.frame(&[layer]);
+        let image = canvas.image()?;
+        assert_eq!(image.pixel(10, 0), [0, 0, 0, 255]);
+        for y in 1..bottom {
+            assert_eq!(image.pixel(10, y), RED, "y={y}, transform={transform:?}");
+        }
+        assert_eq!(image.pixel(10, bottom), [0, 0, 0, 255]);
+    }
+    Ok(())
+}
+
+#[test]
 fn rounded_corners_are_cut_and_antialiased() -> Result<(), GpuError> {
     let list = quads([Quad {
         corner_radii: Corners::all(50.0),

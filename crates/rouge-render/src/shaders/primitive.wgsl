@@ -35,31 +35,56 @@ struct VsOut {
     @location(9) @interpolate(flat) opacity: f32,
 };
 
+fn pixel_grid() -> vec4<f32> {
+    let m = row(ROW_MATRIX);
+    if (all(m.yz == vec2<f32>(0.0)) && all(abs(m.xw) > vec2<f32>(1e-6))) {
+        return vec4<f32>(m.xw, row(ROW_PLACEMENT).xy);
+    }
+    return vec4<f32>(1.0, 1.0, 0.0, 0.0);
+}
+
+fn snap_edges(bounds: vec4<f32>, grid: vec4<f32>) -> vec4<f32> {
+    let edges = vec4<f32>(bounds.xy, bounds.xy + bounds.zw);
+    let device = (edges * grid.xyxy + grid.zwzw) * scale_factor();
+    return (snap(device) - grid.zwzw * scale_factor()) / grid.xyxy;
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOut {
     let unit = select_record(vertex_index);
     let kind = instance.flags & KIND;
+    let grid = pixel_grid();
     var origin = instance.bounds.xy * scale_factor();
     var size = instance.bounds.zw * scale_factor();
     var params = instance.params * scale_factor();
     var margin = vec2<f32>(1.0);
+    var radii = instance.radii;
+    if ((instance.flags & LAYER_RADII) != 0u) {
+        radii = max(row(ROW_RADII) + instance.radii, vec4<f32>(0.0));
+    }
     if (kind == SHADOW) {
         params.x = max(params.x, 0.01);
         margin = vec2<f32>(3.0 * params.x + 1.0);
     } else if (kind == GLYPH) {
-        origin = round(origin);
+        origin = snap_edges(instance.bounds, grid).xy;
         size = instance.params.zw;
         margin = vec2<f32>(0.0);
     } else if (kind == QUAD) {
-        let edges = snap(vec4<f32>(origin, (instance.bounds.xy + instance.bounds.zw) * scale_factor()));
-        let border = select(vec4<f32>(0.0), max(snap(params), vec4<f32>(1.0)), params > vec4<f32>(0.0));
+        var edges = snap_edges(instance.bounds, grid);
+        if (any(grid.xy != vec2<f32>(1.0)) && any(radii > vec4<f32>(0.0))) {
+            let local = snap(vec4<f32>(origin, (instance.bounds.xy + instance.bounds.zw) * scale_factor()));
+            let curved = max(radii.xxyz, radii.wyzw) > vec4<f32>(0.0);
+            edges = select(edges, local, curved);
+        }
+        let axes = abs(grid.yxyx);
+        let border = select(vec4<f32>(0.0), max(snap(params * axes), vec4<f32>(1.0)) / axes, params > vec4<f32>(0.0));
         let solid = instance.params.wx + instance.params.yz >= instance.bounds.zw;
         origin = edges.xy;
         size = select(edges.zw - edges.xy, border.wx + border.yz, solid);
         params = border;
     }
     let position = origin - margin + unit * (size + 2.0 * margin);
-    let clip = snap(vec4<f32>(instance.clip.xy, instance.clip.xy + instance.clip.zw) * scale_factor());
+    let clip = snap_edges(instance.clip, grid);
 
     var out: VsOut;
     out.position = device_to_clip(to_device(position));
@@ -77,10 +102,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOu
         out.border_color = instance.params;
         params = vec4<f32>(select(0.0, 1.0, (instance.flags & ALPHA_MASK) != 0u), 0.0, 0.0, 0.0);
     }
-    var radii = instance.radii;
-    if ((instance.flags & LAYER_RADII) != 0u) {
-        radii = max(row(ROW_RADII) + instance.radii, vec4<f32>(0.0));
-    }
     out.radii = radii * scale_factor();
     out.params = params;
     out.kind = kind;
@@ -89,7 +110,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, instance: Instance) -> VsOu
 }
 
 fn snap(v: vec4<f32>) -> vec4<f32> {
-    return floor(v + 0.5);
+    let subpixels = 256.0;
+    return floor(v + (0.5 + 0.5 / subpixels));
 }
 
 fn gaussian(x: f32, sigma: f32) -> f32 {
@@ -154,8 +176,9 @@ fn quad_color(in: VsOut, p: vec2<f32>, half_size: vec2<f32>, radius: f32, span: 
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let span = pixel_span(in.local);
-    let visible = clip_coverage(in.local, in.clip) * in.opacity;
+    let pixel = max(fwidth(in.local), vec2<f32>(1e-5));
+    let span = length(pixel) * 0.70710678;
+    let visible = clip_coverage(in.local, in.clip, pixel) * in.opacity;
     if (in.kind == GLYPH) {
         let uv = in.texel / vec2<f32>(textureDimensions(atlas));
         return in.color * textureSampleLevel(atlas, atlas_sampler, uv, 0.0).r * visible;
@@ -175,5 +198,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let color = select(sample * in.color, in.color * sample.r, in.params.x > 0.5);
         return color * coverage * visible;
     }
-    return quad_color(in, p, half_size, radius, span) * visible;
+    let edge = abs(p) - half_size;
+    let straight_span = select(pixel.y, pixel.x, edge.x > edge.y);
+    let quad_span = select(span, straight_span, min(edge.x, edge.y) <= -radius);
+    return quad_color(in, p, half_size, radius, quad_span) * visible;
 }
