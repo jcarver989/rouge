@@ -143,6 +143,7 @@ impl StageBuilder {
             nested.push(Nested {
                 layer: stage.child,
                 clip: self.clip,
+                segment: 0,
             });
         }
         let behind = self.background.unwrap_or_else(background);

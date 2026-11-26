@@ -293,7 +293,11 @@ fn glass_over_a_surface_does_not_reuse_a_stale_backdrop() -> TestResult {
         .set_frame(glass, Rect::new(20.0, 20.0, 60.0, 60.0));
     stage.effect(glass, EffectSlot::Backdrop, &Glass::frosted(8.0), false);
     stage.content(glass, vec![DrawList::new()], vec![]);
-    let nested = [stage.child, glass].map(|layer| Nested { layer, clip: None });
+    let nested = [(0, stage.child), (1, glass)].map(|(segment, layer)| Nested {
+        layer,
+        clip: None,
+        segment,
+    });
     stage.content(
         stage.root,
         Vec::from_fn(3, |_| DrawList::new()),

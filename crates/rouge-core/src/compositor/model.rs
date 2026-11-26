@@ -89,6 +89,7 @@ pub enum EffectSlot {
 pub struct Nested {
     pub layer: LayerId,
     pub clip: Option<Rect>,
+    pub segment: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

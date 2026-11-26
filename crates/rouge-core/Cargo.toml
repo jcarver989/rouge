@@ -66,3 +66,7 @@ path = "tests/macros/component_test.rs"
 [[test]]
 name = "macros_view_test"
 path = "tests/macros/view_test.rs"
+
+[[test]]
+name = "tree_paint_test"
+path = "tests/tree/paint_test.rs"

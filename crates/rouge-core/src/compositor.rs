@@ -254,6 +254,7 @@ impl Compositor {
                 scissor: this.scissor,
             })
         });
+        let mut nested = layer.nested.iter().peekable();
         for (segment, key) in self.lists_of(id).iter().enumerate() {
             let empty = self.lists.get(*key).is_none_or(DrawList::is_empty);
             if !empty || style.backdrop.is_some() {
@@ -268,11 +269,14 @@ impl Compositor {
                 }));
             }
             out.commands.extend(surface.take());
-            if let Some(nested) = layer.nested.get(segment) {
+            while let Some(nested) = nested.next_if(|nested| nested.segment <= segment) {
                 self.emit(nested.layer, nested.clip, this, out);
             }
         }
         out.commands.extend(surface);
+        for nested in nested {
+            self.emit(nested.layer, nested.clip, this, out);
+        }
         for orphan in &layer.orphans {
             self.emit(*orphan, None, this, out);
         }

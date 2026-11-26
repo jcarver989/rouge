@@ -1,6 +1,6 @@
 use super::content::TextData;
 use super::layers::{LayerRef, LayerState, Slot};
-use super::paint::layer_mut;
+use super::paint::{CACHED, layer_mut};
 use super::{Element, ElementId, Kind, Tree};
 use crate::canvas::CanvasMeasure;
 use crate::image::ImageSpec;
@@ -26,7 +26,8 @@ const WRAP_TOLERANCE: f32 = 1.0;
 #[derive(Clone, Copy)]
 struct Space {
     origin: Point,
-    layer: LayerRef,
+    anchor: Point,
+    cached: bool,
 }
 
 struct LayoutCx<'a> {
@@ -98,14 +99,17 @@ impl Tree {
         };
         let space = Space {
             origin: Point::ZERO,
-            layer: (self.root, Slot::Own),
+            anchor: Point::ZERO,
+            cached: false,
         };
         let parent = Parent {
             origin: Point::ZERO,
             unrounded: Offset::ZERO,
             containing: Offset::ZERO,
         };
-        self.resolve_bounds(self.root, parent, space, &mut cx);
+        if self.resolve_bounds(self.root, parent, space, &mut cx) {
+            cx.moved.push((self.root, Slot::Own));
+        }
         for layer in cx.moved {
             if let Some(layer) = layer_mut(&mut self.elements, layer) {
                 layer.dirty = true;
@@ -123,7 +127,7 @@ impl Tree {
         parent: Parent,
         mut space: Space,
         cx: &mut LayoutCx<'_>,
-    ) {
+    ) -> bool {
         let node = &self.layouts[id];
         let style = &node.style;
         let out_of_flow = style.position.is_out_of_flow() && style.display != Display::None;
@@ -172,30 +176,28 @@ impl Tree {
             access.dirty.push(id);
         }
         element.bounds = bounds;
-        let within = |space: &Space| Rect {
-            origin: origin - space.origin,
+        let within = |from: Point| Rect {
+            origin: origin - from,
             size,
         };
-        let mut enter = |layer: &mut Option<Box<LayerState>>, slot: Slot, space: &mut Space| {
+        let mut enter = |layer: &mut Option<Box<LayerState>>, space: &mut Space| {
             let layer = layer.as_mut()?;
-            let frame = within(space);
+            let frame = within(space.origin);
             if layer.frame.replace(frame) != Some(frame) {
                 self.layers.set_frame(layer.id, frame);
             }
-            *space = Space {
-                origin,
-                layer: (id, slot),
-            };
+            (space.origin, space.anchor) = (origin, origin);
             Some(layer.id)
         };
         let [own, content] = &mut element.layers;
-        enter(own, Slot::Own, &mut space);
-        let painted = within(&space);
-        if replace(&mut element.painted, painted) != painted || element.border != border {
-            cx.moved.push(space.layer);
-        }
+        let contained = content.is_some();
+        let layered = enter(own, &mut space).is_some();
+        let painted = within(space.anchor);
+        let was = replace(&mut element.painted, painted);
+        let resized = was.size != size || element.border != border;
+        let moved = resized || was.origin != painted.origin;
         element.border = border;
-        if let Some(scroller) = enter(content, Slot::Content, &mut space)
+        if let Some(scroller) = enter(content, &mut space)
             && let Some(scroll) = element.scroll_mut()
         {
             let viewport = Size::new(
@@ -218,10 +220,34 @@ impl Tree {
             unrounded,
             containing,
         };
-        for i in 0..element.children.len() {
+        let cached = space.cached;
+        let count = element.children.len();
+        let within = Space {
+            origin: space.origin,
+            anchor: if cached { origin } else { space.anchor },
+            cached: count >= CACHED,
+        };
+        let mut inner = false;
+        for i in 0..count {
             let child = self.elements[id].children[i];
-            self.resolve_bounds(child, parent, space, cx);
+            inner |= self.resolve_bounds(child, parent, within, cx);
         }
+        if contained {
+            if inner {
+                cx.moved.push((id, Slot::Content));
+            }
+            inner = false;
+        }
+        if layered {
+            if moved || inner {
+                cx.moved.push((id, Slot::Own));
+            }
+            return false;
+        }
+        if cached && (resized || inner) {
+            self.pieces.forget(id);
+        }
+        moved || inner
     }
 
     pub(super) fn invalidate_layout(&mut self, id: ElementId) {

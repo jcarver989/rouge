@@ -55,10 +55,59 @@ impl PaintCache {
     }
 }
 
+pub(super) const RUN: usize = 32;
+pub(super) const CACHED: usize = 2 * RUN;
+
+#[derive(Default)]
+struct Painted {
+    lists: Vec<DrawList>,
+    layers: Vec<(LayerRef, Option<Rect>, usize)>,
+}
+
+struct Piece {
+    at: Point,
+    clip: Rect,
+    stamp: u64,
+    painted: Painted,
+}
+
+#[derive(Default)]
+struct Run {
+    clip: Rect,
+    rows: Vec<(ElementId, u64, Point)>,
+    painted: Painted,
+}
+
+#[derive(Default)]
+pub(super) struct Pieces {
+    stamp: u64,
+    cached: FxHashMap<ElementId, Piece>,
+    runs: FxHashMap<ElementId, Vec<Run>>,
+}
+
+impl Pieces {
+    pub(super) fn forget(&mut self, id: ElementId) {
+        self.cached.remove(&id);
+    }
+
+    pub(super) fn release(&mut self, parent: ElementId, children: &[ElementId]) {
+        if self.runs.remove(&parent).is_some() {
+            for child in children {
+                self.cached.remove(child);
+            }
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.cached.clear();
+        self.runs.clear();
+    }
+}
+
 struct PaintCx<'a> {
     cache: &'a mut PaintCache,
+    pieces: &'a mut Pieces,
     text_system: &'a mut TextSystem,
-    repaint_all: bool,
     layer_paints: u64,
     focused: Option<ElementId>,
     palette: Palette,
@@ -68,21 +117,59 @@ struct PaintCx<'a> {
 struct LayerTarget {
     root: LayerRef,
     origin: Point,
-    lists: Vec<DrawList>,
-    nested: Vec<(LayerRef, Option<Rect>)>,
+    painted: Painted,
+    open: bool,
 }
 
 impl LayerTarget {
-    fn out(&mut self) -> &mut DrawList {
-        if self.lists.len() <= self.nested.len() {
-            self.lists.resize_with(self.nested.len() + 1, DrawList::new);
+    fn new(root: LayerRef, origin: Point) -> Self {
+        LayerTarget {
+            root,
+            origin,
+            painted: Painted::default(),
+            open: false,
         }
-        &mut self.lists[self.nested.len()]
     }
 
-    fn nest(&mut self, layer: LayerRef, clip: Rect) {
-        self.nested
-            .push((layer, (clip != Rect::EVERYTHING).then_some(clip)));
+    fn out(&mut self) -> &mut DrawList {
+        let lists = &mut self.painted.lists;
+        if !self.open {
+            lists.push(DrawList::new());
+            self.open = true;
+        }
+        let last = lists.len() - 1;
+        &mut lists[last]
+    }
+
+    fn nest(&mut self, layer: LayerRef, clip: Option<Rect>) {
+        let lists = &mut self.painted.lists;
+        if lists.is_empty() {
+            lists.push(DrawList::new());
+        }
+        self.painted.layers.push((layer, clip, lists.len() - 1));
+        self.open = false;
+    }
+
+    fn copy(&mut self, from: &Painted, delta: Point) {
+        let mut layers = from.layers.iter().peekable();
+        for (segment, list) in from.lists.iter().enumerate() {
+            if !list.is_empty() {
+                self.out().append(list, delta);
+            }
+            while let Some((layer, clip, _)) = layers.next_if(|(_, _, after)| *after <= segment) {
+                self.nest(*layer, clip.map(|clip| clip.translate(delta)));
+            }
+        }
+    }
+
+    fn share(&mut self, from: &Painted) {
+        let base = self.painted.lists.len();
+        self.painted.lists.extend(from.lists.iter().cloned());
+        let layers = from.layers.iter();
+        self.painted
+            .layers
+            .extend(layers.map(|(layer, clip, after)| (*layer, *clip, base + after)));
+        self.open = false;
     }
 }
 
@@ -96,16 +183,16 @@ impl Tree {
         }
         if dirty.needs_paint() {
             let _paint = trace_span!("paint").entered();
-            let repaint_all = take(&mut self.repaint_all);
             let focused = self.focused;
+            let palette = self.palette_at(self.root);
             let mut cx = PaintCx {
                 cache,
+                pieces: &mut self.pieces,
                 text_system,
-                repaint_all,
                 layer_paints: 0,
                 focused,
-                palette: self.palette_at(self.root),
-                fallback: self.palette_at(self.root),
+                palette,
+                fallback: palette,
             };
             paint_layers(
                 &mut self.elements,
@@ -141,41 +228,36 @@ fn paint_layers(
         return;
     };
     let layer_id = state.id;
-    if replace(&mut state.dirty, false) || cx.repaint_all {
+    if take(&mut state.dirty) {
         let (id, slot) = layer;
         cx.palette = theme_at(elements, id).map_or(cx.fallback, |theme| theme.get_untracked());
-        let element = &elements[id];
-        let mut target = LayerTarget {
-            root: layer,
-            origin: element.bounds.origin,
-            lists: Vec::new(),
-            nested: Vec::new(),
-        };
+        let mut target = LayerTarget::new(layer, elements[id].bounds.origin);
         match slot {
             Slot::Own => paint(elements, id, Rect::EVERYTHING, &mut target, cx),
             Slot::Content => paint_children(elements, id, Rect::EVERYTHING, &mut target, cx),
         }
-        target
-            .lists
-            .resize_with(target.nested.len() + 1, DrawList::new);
-        let nested = target.nested.iter().filter_map(|(nested, clip)| {
+        let Painted {
+            mut lists,
+            layers: inner,
+        } = target.painted;
+        if lists.is_empty() {
+            lists.push(DrawList::new());
+        }
+        let nested = inner.iter().filter_map(|(nested, clip, segment)| {
             Some(Nested {
                 layer: layer_ref(elements, *nested)?.id,
                 clip: *clip,
+                segment: *segment,
             })
         });
         let content = Content {
             nested: nested.collect(),
-            lists: target.lists,
+            lists,
         };
         layers.set_content(layer_id, content);
         cx.layer_paints += 1;
         if let Some(state) = layer_mut(elements, layer) {
-            state.nested = target
-                .nested
-                .into_iter()
-                .map(|(nested, _)| nested)
-                .collect();
+            state.nested = inner.into_iter().map(|(nested, _, _)| nested).collect();
         }
     }
     let nested = |elements: &SlotMap<ElementId, Element>, i: usize| {
@@ -186,6 +268,78 @@ fn paint_layers(
         paint_layers(elements, layer, cx, layers);
         index += 1;
     }
+}
+
+fn paint_runs(
+    elements: &SlotMap<ElementId, Element>,
+    id: ElementId,
+    clip: Rect,
+    target: &mut LayerTarget,
+    cx: &mut PaintCx<'_>,
+) {
+    let children = &elements[id].children;
+    let mut runs = cx.pieces.runs.remove(&id).unwrap_or_default();
+    runs.resize_with(children.len().div_ceil(RUN), Run::default);
+    let origin = target.origin;
+    let at = |row: &ElementId| elements[*row].bounds.origin - origin;
+    for (rows, run) in children.chunks(RUN).zip(&mut runs) {
+        let pieces = &cx.pieces.cached;
+        let kept = |(row, (id, stamp, was)): (&ElementId, &(ElementId, u64, Point))| {
+            row == id
+                && at(row) == *was
+                && pieces.get(row).is_some_and(|piece| piece.stamp == *stamp)
+        };
+        if run.clip != clip || run.rows.len() != rows.len() || !rows.iter().zip(&run.rows).all(kept)
+        {
+            let mut out = LayerTarget::new(target.root, origin);
+            run.rows.clear();
+            for row in rows {
+                let stamp = paint_piece(elements, *row, clip, &mut out, cx);
+                run.rows.push((*row, stamp, at(row)));
+            }
+            run.clip = clip;
+            run.painted = out.painted;
+        }
+        target.share(&run.painted);
+    }
+    cx.pieces.runs.insert(id, runs);
+}
+
+fn paint_piece(
+    elements: &SlotMap<ElementId, Element>,
+    id: ElementId,
+    clip: Rect,
+    target: &mut LayerTarget,
+    cx: &mut PaintCx<'_>,
+) -> u64 {
+    let at = elements[id].bounds.origin - target.origin;
+    let scale = cx.cache.scale;
+    let whole = |distance: f32| (distance * scale).fract() == 0.0;
+    if let Some(piece) = cx.pieces.cached.get(&id) {
+        let delta = at - piece.at;
+        let clipped = if piece.clip == Rect::EVERYTHING {
+            piece.clip
+        } else {
+            piece.clip.translate(delta)
+        };
+        if clipped == clip && whole(delta.x) && whole(delta.y) {
+            target.copy(&piece.painted, delta);
+            return piece.stamp;
+        }
+    }
+    let mut out = LayerTarget::new(target.root, target.origin);
+    paint(elements, id, clip, &mut out, cx);
+    target.copy(&out.painted, Point::ZERO);
+    cx.pieces.stamp += 1;
+    let stamp = cx.pieces.stamp;
+    let piece = Piece {
+        at,
+        clip,
+        stamp,
+        painted: out.painted,
+    };
+    cx.pieces.cached.insert(id, piece);
+    stamp
 }
 
 fn paint(
@@ -201,7 +355,7 @@ fn paint(
     }
     let backing = target.root == (id, Slot::Own);
     if element.layer(Slot::Own).is_some() && !backing {
-        target.nest((id, Slot::Own), clip);
+        target.nest((id, Slot::Own), bounded(clip));
         return;
     }
     let outer = element
@@ -312,7 +466,7 @@ fn paint_element(
         clip
     };
     if element.layer(Slot::Content).is_some() {
-        target.nest((id, Slot::Content), child_clip);
+        target.nest((id, Slot::Content), bounded(child_clip));
         return;
     }
     paint_children(elements, id, child_clip, target, cx);
@@ -325,11 +479,20 @@ fn paint_children(
     target: &mut LayerTarget,
     cx: &mut PaintCx<'_>,
 ) {
-    if !clip.is_empty() {
-        for child in &elements[id].children {
-            paint(elements, *child, clip, target, cx);
-        }
+    if clip.is_empty() {
+        return;
     }
+    let children = &elements[id].children;
+    if children.len() >= CACHED {
+        return paint_runs(elements, id, clip, target, cx);
+    }
+    for child in children {
+        paint(elements, *child, clip, target, cx);
+    }
+}
+
+fn bounded(clip: Rect) -> Option<Rect> {
+    (clip != Rect::EVERYTHING).then_some(clip)
 }
 
 fn fit_image(fit: Fit, bounds: Rect, data: &ImageData) -> (Rect, Rect) {

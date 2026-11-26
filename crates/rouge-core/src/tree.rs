@@ -18,6 +18,7 @@ use focus::ReplacedFocus;
 use fragment::Fragment;
 use layers::{LayerState, Slot};
 use layout::{LayoutNode, root_layout};
+use paint::{CACHED, Pieces};
 use rouge_reactive::{Memo, ReactiveStats, Signal};
 use rouge_render::{Color, Edges, Rect, Size, SurfaceId};
 use rouge_theme::UiPalette;
@@ -339,7 +340,7 @@ pub(crate) struct Tree {
     capture: Option<Vec<ElementId>>,
     pub(crate) stats: FrameStats,
     pub(crate) layers: Layers,
-    repaint_all: bool,
+    pieces: Pieces,
     observers: Vec<ElementId>,
     dirty_styles: Vec<ElementId>,
     themes: Vec<(Theme, Palette)>,
@@ -381,7 +382,7 @@ impl Tree {
             capture: None,
             stats: FrameStats::default(),
             layers: Layers::new(),
-            repaint_all: true,
+            pieces: Pieces::default(),
             observers: Vec::new(),
             dirty_styles: Vec::new(),
             themes: Vec::new(),
@@ -498,12 +499,16 @@ impl Tree {
 
     fn mark_layer(&mut self, id: ElementId, mut inside: bool) {
         let mut current = Some(id);
-        while let Some(element) = current.and_then(|id| self.elements.get_mut(id)) {
+        while let Some(id) = current {
+            let Some(element) = self.elements.get_mut(id) else {
+                break;
+            };
             let slots = element.layers.iter_mut().rev().skip(usize::from(!inside));
             if let Some(layer) = slots.flatten().next() {
                 layer.dirty = true;
                 return;
             }
+            self.pieces.forget(id);
             (current, inside) = (element.parent, true);
         }
     }
@@ -525,7 +530,12 @@ impl Tree {
     }
 
     pub(crate) fn invalidate_paint(&mut self) {
-        self.repaint_all = true;
+        for element in self.elements.values_mut() {
+            for layer in element.layers.iter_mut().flatten() {
+                layer.dirty = true;
+            }
+        }
+        self.pieces.clear();
         self.mark(Dirty::Paint);
     }
 
@@ -648,15 +658,28 @@ impl Tree {
         let p = &mut self.elements[parent];
         let index = index.min(p.children.len());
         p.children.insert(index, child);
-        self.invalidate_layout(parent);
         self.elements[child].parent = Some(parent);
         if self.is_connected(parent) {
-            self.refresh_variant_subtree(child);
-            self.refresh_text_subtree(child);
-            self.sync_backing_subtree(child);
-            self.mark_access_subtree(child);
+            self.connect(child);
+        }
+        self.restructured(parent);
+    }
+
+    fn connect(&mut self, child: ElementId) {
+        self.refresh_variant_subtree(child);
+        self.refresh_text_subtree(child);
+        self.sync_backing_subtree(child);
+        self.mark_access_subtree(child);
+    }
+
+    fn restructured(&mut self, parent: ElementId) {
+        let children = &self.elements[parent].children;
+        if children.len() < CACHED {
+            self.pieces.release(parent, children);
         }
         self.mark_layer(parent, true);
+        self.mark_access(parent);
+        self.invalidate_layout(parent);
         self.mark(Dirty::Layout);
     }
 
@@ -664,11 +687,9 @@ impl Tree {
         let Some(parent) = self.elements.get_mut(child).and_then(|c| c.parent.take()) else {
             return;
         };
-        self.mark_layer(parent, true);
-        self.mark_access(parent);
         self.elements[parent].children.retain(|c| *c != child);
-        self.invalidate_layout(parent);
-        self.mark(Dirty::Layout);
+        self.pieces.forget(child);
+        self.restructured(parent);
     }
 
     fn is_connected(&self, mut id: ElementId) -> bool {

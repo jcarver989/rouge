@@ -86,7 +86,11 @@ const OPS: [(f64, Op); 4] = [
     (0.0, |c, l| {
         c.set_root(l[0]);
         c.set_frame(l[0], Rect::new(0.0, 0.0, 200.0, 200.0));
-        let nested = [l[1], l[2]].map(|layer| Nested { layer, clip: None });
+        let nested = [(0, l[1]), (1, l[2])].map(|(segment, layer)| Nested {
+            layer,
+            clip: None,
+            segment,
+        });
         c.set_content(
             l[0],
             Content {
