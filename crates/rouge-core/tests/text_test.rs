@@ -32,11 +32,8 @@ fn utf16_and_byte_offsets_convert_and_floor_inside_a_character() {
 #[test]
 fn layout_measures_scales_and_wraps() {
     let mut text = TextSystem::new();
-    let layout = text.layout(
-        "The quick brown fox jumps over the lazy dog",
-        &style(16.0),
-        None,
-    );
+    let phrase = "The quick brown fox jumps over the lazy dog";
+    let layout = text.layout(phrase, &style(16.0), None);
     let (width, height) = layout.size();
     assert!(
         width > 100.0 && width < 600.0,
@@ -48,11 +45,14 @@ fn layout_measures_scales_and_wraps() {
         "one line of 1.4 line height, got {height}"
     );
 
-    let layout = text.layout(
-        "The quick brown fox jumps over the lazy dog",
-        &style(16.0),
-        Some(width / 3.0),
-    );
+    for room in [width.ceil(), width.ceil() + 1.0, width * 3.0] {
+        let fits = text.layout(phrase, &style(16.0), Some(room));
+        assert_eq!(glyphs(&fits), glyphs(&layout));
+        assert_eq!(fits.line_count(), 1);
+    }
+    assert_eq!((text.stats().shapes, text.stats().breaks), (1, 0));
+    let layout = text.layout(phrase, &style(16.0), Some(width / 3.0));
+    assert_eq!(text.stats().breaks, 1);
     assert!(layout.line_count() >= 3);
     assert!(layout.size().0 <= width / 3.0 + 0.5);
     assert!(layout.size().1 > height * 2.5);
@@ -61,11 +61,7 @@ fn layout_measures_scales_and_wraps() {
     assert!((max - width).abs() < 0.5);
     assert!(min > 10.0 && min < width / 3.0, "longest word, got {min}");
 
-    let large = text.layout(
-        "The quick brown fox jumps over the lazy dog",
-        &style(32.0),
-        None,
-    );
+    let large = text.layout(phrase, &style(32.0), None);
     let ratio = large.size().0 / width;
     assert!(
         (1.6..2.2).contains(&ratio),
@@ -230,6 +226,7 @@ fn overlapping_spans_compose_per_field_and_later_values_win() {
                 3..5,
                 SpanStyle {
                     color: Some(Color::GREEN),
+                    strikethrough: Some(true),
                     ..Default::default()
                 },
             ),
@@ -237,6 +234,16 @@ fn overlapping_spans_compose_per_field_and_later_values_win() {
         ..Default::default()
     };
     let layout = TextSystem::new().layout("abcdef", &style, None);
+    for foreground in [false, true] {
+        let mut rects = Vec::new();
+        layout.for_each_rect(foreground, |_, color| rects.push(color));
+        let expected = if foreground {
+            Color::GREEN
+        } else {
+            Color::BLUE
+        };
+        assert!(!rects.is_empty() && rects.iter().all(|color| *color == Some(expected)));
+    }
     let mut seen = Vec::new();
     layout.for_each_glyph(|glyph| seen.push(glyph.style.clone()));
     assert_eq!(seen.len(), 6);
@@ -447,9 +454,12 @@ fn truncated_text_keeps_decorations_and_selections_within_what_it_shows() {
         ..truncated()
     };
     let layout = system.layout(LABEL, &style, Some(80.0));
+    let mut strokes = 0;
     layout.for_each_rect(true, |rect, _| {
+        strokes += 1;
         assert!(rect.x + rect.width <= 80.0, "{rect:?}");
     });
+    assert!(strokes > 0);
     let rects = layout.selection_rects(layout.select(0, LABEL.len()));
     assert_ne!(rects, []);
     assert!(
@@ -505,6 +515,11 @@ fn hits_share_one_shaping_and_span_colors_apply_at_paint() {
     assert_eq!(colors(&red)[..3], [Some(Color::RED); 3]);
     assert_eq!(colors(&blue)[..3], [Some(Color::BLUE); 3]);
     assert_eq!(colors(&blue)[3..], [None; 3]);
+    for foreground in [false, true] {
+        blue.for_each_rect(foreground, |_, _| {
+            panic!("undecorated text has no rectangles")
+        });
+    }
     let wide = text.layout("abcdef", &tinted(Color::GREEN), Some(300.0));
     assert_eq!((text.stats().shapes, text.stats().breaks), (1, 1));
     assert_eq!(wide.line_count(), 1);
@@ -549,11 +564,36 @@ fn steady_frames_neither_shape_nor_break_text() -> TestResult {
 
 const LABEL: &str = "Thread trailing commas through the grammar";
 
+#[test]
+fn text_placed_by_its_width_is_placed_again_for_each_width() {
+    let mut text = TextSystem::new();
+    let centered = TextStyle {
+        align: TextAlign::Center,
+        ..style(14.0)
+    };
+    let cases = [
+        ("centered", &centered),
+        ("\u{5e9}\u{5dc}\u{5d5}\u{5dd}", &style(14.0)),
+        ("שלום Rouge", &style(14.0)),
+    ];
+    for (content, style) in cases {
+        let natural = text.layout(content, style, None).size().0.ceil();
+        let near = first_glyph_x(&text.layout(content, style, Some(natural)));
+        let far = first_glyph_x(&text.layout(content, style, Some(natural + 100.0)));
+        assert!(far > near + 40.0, "{content}: {near} then {far}");
+    }
+}
+
 fn truncated() -> TextStyle {
     TextStyle {
         wrap: TextWrap::Truncate,
         ..style(16.0)
     }
+}
+
+fn first_glyph_x(layout: &TextLayout) -> f32 {
+    let xs = glyphs(layout).into_iter().map(|(_, x)| x);
+    xs.fold(f32::INFINITY, f32::min)
 }
 
 fn glyphs(layout: &TextLayout) -> Vec<(u32, f32)> {
