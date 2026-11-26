@@ -3765,12 +3765,13 @@ dependencies = [
 name = "rouge-bench"
 version = "0.6.0"
 dependencies = [
+ "clap",
  "dhat",
  "rouge",
- "rustc-demangle",
+ "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
- "tracing",
  "tracing-subscriber",
 ]
 

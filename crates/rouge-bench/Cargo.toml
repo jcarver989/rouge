@@ -11,17 +11,17 @@ keywords = ["gui", "benchmark", "profiling", "wgpu", "ui"]
 categories = ["development-tools::profiling"]
 publish = false
 
-[features]
-dhat = ["dep:dhat"]
-
-[dependencies]
-rouge = { path = "../rouge", version = "0.6.0", features = ["markdown"] }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap = { version = "4", features = ["derive"] }
 dhat = { version = "0.3", optional = true }
-rustc-demangle = "0.1"
+rouge = { path = "../rouge", features = ["markdown"] }
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
-tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
