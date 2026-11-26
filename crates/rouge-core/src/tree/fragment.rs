@@ -1,7 +1,8 @@
 use super::layers::Slot;
+use super::paint::CACHED;
 use super::{ElementId, Exit, Kind, Presence, Tree};
 use crate::compositor::SurfaceOp;
-use crate::style::Dirty;
+use rustc_hash::FxHashSet;
 use slotmap::new_key_type;
 use std::mem::take;
 
@@ -98,10 +99,31 @@ impl Tree {
         let start = self.start(fragment);
         let mut desired = Vec::new();
         self.flatten(Node::Fragment(fragment), &mut desired);
-        for (offset, id) in desired.into_iter().enumerate() {
-            if self.elements[host].children.get(start + offset) != Some(&id) {
-                self.detach(id);
-                self.attach(host, start + offset, id);
+        let current = self.elements[host].children.iter().skip(start);
+        if current.take(desired.len()).eq(&desired) {
+            return;
+        }
+        let mut added = Vec::new();
+        for id in &desired {
+            if self.elements[*id].parent == Some(host) {
+                self.elements[*id].parent = None;
+            } else {
+                self.detach(*id);
+                added.push(*id);
+            }
+        }
+        let mut children = take(&mut self.elements[host].children);
+        children.retain(|id| self.elements[*id].parent.is_some());
+        let start = start.min(children.len());
+        children.splice(start..start, desired.iter().copied());
+        self.elements[host].children = children;
+        for id in desired {
+            self.elements[id].parent = Some(host);
+        }
+        self.restructured(host);
+        if self.is_connected(host) {
+            for id in added {
+                self.connect(id);
             }
         }
     }
@@ -111,21 +133,7 @@ impl Tree {
             return;
         };
         let nodes = take(&mut record.nodes);
-        let mut tops = Vec::new();
-        for node in &nodes {
-            self.flatten(*node, &mut tops);
-        }
-        for node in nodes {
-            if let Node::Fragment(child) = node {
-                self.free(child);
-            }
-        }
-        self.replace_focus(&tops);
-        if let Some(host) = self.host(fragment) {
-            let start = self.start(fragment);
-            self.detach_range(host, start, tops.len());
-        }
-        self.discard(tops, exit);
+        self.discard_nodes(fragment, nodes, exit);
     }
 
     pub(crate) fn remove_fragment(&mut self, fragment: FragmentId, exit: Exit) {
@@ -148,6 +156,48 @@ impl Tree {
             }
             Parent::Detached => {}
         }
+    }
+
+    pub(crate) fn remove_children(
+        &mut self,
+        parent: FragmentId,
+        removed: &FxHashSet<FragmentId>,
+        exit: Exit,
+    ) {
+        let Some(record) = self
+            .fragments
+            .get_mut(parent)
+            .filter(|_| !removed.is_empty())
+        else {
+            return;
+        };
+        let leaves = |node: &Node| matches!(node, Node::Fragment(child) if removed.contains(child));
+        let gone = record.nodes.extract_if(.., |node| leaves(node)).collect();
+        self.discard_nodes(parent, gone, exit);
+    }
+
+    fn discard_nodes(&mut self, parent: FragmentId, nodes: Vec<Node>, exit: Exit) {
+        let mut tops = Vec::new();
+        for node in nodes {
+            self.flatten(node, &mut tops);
+            if let Node::Fragment(child) = node {
+                self.free(child);
+            }
+        }
+        if tops.is_empty() {
+            return;
+        }
+        self.replace_focus(&tops);
+        if let Some(host) = self.host(parent) {
+            for id in &tops {
+                self.elements[*id].parent = None;
+            }
+            let mut children = take(&mut self.elements[host].children);
+            children.retain(|id| self.elements[*id].parent.is_some());
+            self.elements[host].children = children;
+            self.restructured(host);
+        }
+        self.discard(tops, exit);
     }
 
     fn free(&mut self, fragment: FragmentId) {
@@ -237,21 +287,6 @@ impl Tree {
         }
     }
 
-    fn detach_range(&mut self, parent: ElementId, start: usize, count: usize) {
-        if count == 0 {
-            return;
-        }
-        self.mark_layer(parent, true);
-        self.mark_access(parent);
-        let range = start..start + count;
-        let removed: Vec<_> = self.elements[parent].children.drain(range).collect();
-        self.invalidate_layout(parent);
-        for id in removed {
-            self.elements[id].parent = None;
-        }
-        self.mark(Dirty::Layout);
-    }
-
     fn discard(&mut self, tops: Vec<ElementId>, exit: Exit) {
         if tops.is_empty() {
             return;
@@ -268,14 +303,18 @@ impl Tree {
                 }
                 _ => false,
             };
+            self.pieces.forget(top);
             let mut stack = vec![top];
-            while let Some(element) = stack.pop().and_then(|id| {
+            while let Some((id, element)) = stack.pop().and_then(|id| {
                 if let Some(access) = &mut self.access {
                     access.editors.remove(&id);
                 }
                 self.layouts.remove(id);
-                self.elements.remove(id)
+                self.elements.remove(id).map(|element| (id, element))
             }) {
+                if element.children.len() >= CACHED {
+                    self.pieces.release(id, &element.children);
+                }
                 self.stats.elements_removed += 1;
                 if let Kind::Surface(surface) = &element.kind {
                     self.surface_sinks.remove(&surface.id);

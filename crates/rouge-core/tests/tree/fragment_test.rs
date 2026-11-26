@@ -1,3 +1,6 @@
+mod common;
+
+use common::{Random, edit};
 use rouge_core::Wake;
 use rouge_core::testing::{LINEAR, RED, TestResult, TestUi, TestUiBuilder};
 use rouge_core::{
@@ -61,16 +64,15 @@ fn shows_inside_each_rows_inside_a_show_keep_their_order_through_reorders() {
 }
 
 #[test]
-fn a_row_removed_from_an_each_inside_a_show_animates_out_while_the_rest_close_the_gap() -> TestResult
-{
+fn rows_removed_together_inside_a_show_animate_out_while_the_rest_close_the_gap() -> TestResult {
     let _rt = Runtime::new().enter();
-    let items = signal(vec![1u32, 2]);
+    let items = signal(vec![1u32, 2, 3]);
     let mut ui = TestUi::new(move || {
         let row = |id: ReadSignal<u32>| {
-            let color = if id.get_untracked() == 1 {
-                Color::RED
-            } else {
+            let color = if id.get_untracked() == 3 {
                 Color::BLUE
+            } else {
+                Color::RED
             };
             div().w(20.0).h(10.0).bg(color)
         };
@@ -83,8 +85,8 @@ fn a_row_removed_from_an_each_inside_a_show_animates_out_while_the_rest_close_th
             .child(show(|| true, rows))
             .child(div().w(30.0).h(10.0))
     });
-    assert_eq!(row_widths(&mut ui), [20.0, 20.0, 30.0]);
-    items.set(vec![2]);
+    assert_eq!(row_widths(&mut ui), [20.0, 20.0, 20.0, 30.0]);
+    items.set(vec![3]);
     ui.advance(0.0);
     assert_eq!(
         row_widths(&mut ui),
@@ -95,6 +97,7 @@ fn a_row_removed_from_an_each_inside_a_show_animates_out_while_the_rest_close_th
     assert_eq!(ui.first_x(RED, 5)?, 0, "the removed row is still drawn");
     ui.run(0.5);
     assert_eq!(ui.first_x(RED, 5)?, 50, "running its exit animation");
+    assert_eq!(ui.pixel(75, 5)?, RED, "the second row is leaving too");
     ui.run(0.55);
     assert_eq!(ui.first_x(RED, 5)?, 200, "until it is done");
     assert_eq!(ui.next_frame(), Wake::Idle);
@@ -104,7 +107,7 @@ fn a_row_removed_from_an_each_inside_a_show_animates_out_while_the_rest_close_th
 #[test]
 fn a_focused_field_rebuilt_inside_a_reordered_each_row_keeps_focus_and_its_caret() -> TestResult {
     let _rt = Runtime::new().enter();
-    let items = signal(vec![1u32, 2]);
+    let items = signal((1..=200u32).collect::<Vec<_>>());
     let version = signal(0u32);
     let value = signal("hello".to_owned());
     let (mut ui, focus) = TestUiBuilder::default().build_with(move || {
@@ -120,7 +123,7 @@ fn a_focused_field_rebuilt_inside_a_reordered_each_row_keeps_focus_and_its_caret
                         .test_id("field")
                         .into_any()
                 } else {
-                    div().w(width).h(10.0).into_any()
+                    div().w(width).min_h(10.0).into_any()
                 }
             };
             show(|| true, move || dynamic(field))
@@ -131,13 +134,73 @@ fn a_focused_field_rebuilt_inside_a_reordered_each_row_keeps_focus_and_its_caret
     ui.click_on("field")?;
     ui.press("end");
     ui.press("left");
+    ui.advance(0.0);
+    let before = ui.stats();
+    items.update(|ids| ids.swap(0, 199));
+    ui.advance(0.0);
+    let work = ui.stats() - before;
+    assert_eq!((work.elements_created, work.elements_removed), (0, 0));
+    assert_eq!((work.style_resolutions, work.layouts), (0, 1));
+    assert!(focus.is_focused());
+    assert_eq!(ui.rect_of("field")?.origin.y, 1990.0);
     version.set(1);
-    items.set(vec![2, 1]);
+    items.update(|ids| ids.swap(0, 199));
     ui.advance(0.0);
     assert!(focus.is_focused(), "the replacement takes over focus");
     ui.type_text("!");
     assert_eq!(value.get(), "hell!o", "with the caret where it was");
+    items.set(vec![]);
+    ui.advance(0.0);
+    assert!(
+        !focus.is_focused(),
+        "removing the focused row releases focus"
+    );
     Ok(())
+}
+
+#[test]
+fn any_edit_to_an_each_leaves_its_rows_in_order_between_their_siblings() {
+    let _rt = Runtime::new().enter();
+    let items = signal(Vec::<u32>::new());
+    let hidden = signal(0u32);
+    let mut ui = TestUi::new(move || {
+        let row = move |id: ReadSignal<u32>| {
+            let id = id.get_untracked();
+            let boxes = move || {
+                let count = (id % 3) as usize;
+                (0..count)
+                    .map(|index| div().size(1.0).test_id(box_name(id, index)))
+                    .collect::<Vec<_>>()
+            };
+            show(move || hidden.get() != id % 5, boxes)
+        };
+        div()
+            .flex()
+            .col()
+            .child(div().size(1.0).test_id("above"))
+            .child(each(move || items.get(), |id| *id, row))
+            .child(div().size(1.0).test_id("below"))
+    });
+    let (mut random, mut next) = (Random(7), 0);
+    for step in 0..300 {
+        let mut ids = items.get_untracked();
+        for _ in 0..=random.below(3) {
+            edit(&mut ids, &mut next, &mut random);
+        }
+        items.set(ids.clone());
+        if random.below(4) == 0 {
+            hidden.set(random.below(5) as u32);
+        }
+        ui.update();
+        let shown = ids.iter().filter(|id| hidden.get_untracked() != **id % 5);
+        let boxes = shown.flat_map(|id| (0..(id % 3) as usize).map(|i| box_name(*id, i)));
+        let mut expected = vec!["above".to_owned()];
+        expected.extend(boxes);
+        expected.push("below".to_owned());
+        assert_eq!(names_down(&ui), expected, "step {step}: {ids:?}");
+        let elements = 2 + expected.len();
+        assert_eq!(ui.stats().elements, elements, "step {step}: {ids:?}");
+    }
 }
 
 #[test]
@@ -243,4 +306,14 @@ fn row_widths(ui: &mut TestUi) -> Vec<f32> {
         x = b.origin.x + b.size.width + 0.5;
     }
     widths
+}
+
+fn box_name(id: u32, index: usize) -> String {
+    format!("{id}/{index}")
+}
+
+fn names_down(ui: &TestUi) -> Vec<String> {
+    let mut named = ui.named_bounds();
+    named.sort_by(|a, b| a.1.origin.y.total_cmp(&b.1.origin.y));
+    named.into_iter().map(|(name, _)| name).collect()
 }
