@@ -6,11 +6,12 @@ use common::{
 };
 use rouge_render::headless::{Image, assert_near};
 use rouge_render::{
-    Affine, Color, Command, Corners, DrawList, Edges, EffectDraw, Glass, Glyph, GpuError, Group,
-    ImageData, ImageQuad, LayerDraw, ListKey, Point, Quad, Rect, Shadow,
+    Affine, Color, Command, Corners, DrawList, DrawLists, Edges, EffectDraw, Glass, Glyph,
+    GpuError, Group, ImageData, ImageQuad, LayerDraw, ListKey, Point, Quad, Rect, Shadow,
 };
 use std::error::Error;
 use std::f32::consts::FRAC_PI_4;
+use std::iter::repeat_n;
 
 #[test]
 fn solid_quad_fills_exactly_its_bounds() -> Result<(), GpuError> {
@@ -460,6 +461,12 @@ fn unchanged_lists_are_not_uploaded_again() -> Result<(), Box<dyn Error>> {
         "both lists uploaded once"
     );
     assert_eq!((first.layers, first.draw_calls), (2, 2));
+    canvas.list(a)?.replace(square(Color::RED));
+    let identical = frame(&mut canvas, 0.0);
+    assert_eq!(
+        (identical.instance_bytes_uploaded, identical.damaged),
+        (0, 0)
+    );
     for x in 1..10 {
         assert_eq!(
             frame(&mut canvas, x as f32).instance_bytes_uploaded,
@@ -557,6 +564,114 @@ fn lists_uploaded_before_the_instance_buffer_grows_still_draw() -> Result<(), Gp
         "the earlier list survives the growth",
     );
     assert_near(img.pixel(49, 59), RED, "the new list is drawn");
+    Ok(())
+}
+
+#[test]
+fn cloned_lists_can_grow_and_reuse_slots_without_disturbing_the_original()
+-> Result<(), Box<dyn Error>> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let bounds = Rect::new(0.0, 0.0, 2.0, 2.0);
+    let blue = quads(repeat_n(Quad::new(bounds, Color::BLUE), 512));
+    let kept = canvas.add(blue.clone());
+    let mut plateau = None;
+    for (color, pixel) in [(Color::RED, RED), (Color::GREEN, [0, 255, 0, 255])]
+        .into_iter()
+        .cycle()
+        .take(16)
+    {
+        let copy = canvas.add(blue.clone());
+        let draws = [LayerDraw::new(kept), moved(copy, 10.0, 0.0)];
+        canvas.frame(&draws);
+        canvas.list(copy)?.push_quad(Quad::new(bounds, color));
+        assert_eq!(
+            canvas.frame(&draws).instance_bytes_uploaded,
+            513 * INSTANCE_BYTES
+        );
+        let memory = canvas.memory().instances;
+        assert_eq!(*plateau.get_or_insert(memory), memory);
+        let image = canvas.image()?;
+        assert_near(image.pixel(1, 1), BLUE, "original");
+        assert_near(image.pixel(11, 1), pixel, "grown copy");
+        canvas.remove(copy);
+    }
+    Ok(())
+}
+
+#[test]
+fn removing_a_list_frees_only_its_own_slot_across_scenes() -> Result<(), Box<dyn Error>> {
+    let mut canvas = Canvas::new(64, 1.0, Color::WHITE)?;
+    let kept = canvas.add(square(Color::RED));
+    let mut other = DrawLists::new();
+    let theirs = other.insert(square(Color::BLUE));
+    let doomed = other.insert(square(Color::BLUE));
+    let draws = [LayerDraw::new(theirs), moved(doomed, 20.0, 0.0)];
+    assert_eq!(
+        canvas
+            .frame(&[LayerDraw::new(kept)])
+            .instance_bytes_uploaded,
+        INSTANCE_BYTES
+    );
+    assert_eq!(
+        canvas.frame_of(&other, &draws).instance_bytes_uploaded,
+        2 * INSTANCE_BYTES
+    );
+    other.remove(doomed);
+    let memory = canvas.memory().instances;
+    for _ in 0..3 {
+        let replacement = other.insert(square(Color::RED));
+        let draws = [LayerDraw::new(theirs), moved(replacement, 20.0, 0.0)];
+        assert_eq!(
+            canvas.frame_of(&other, &draws).instance_bytes_uploaded,
+            INSTANCE_BYTES,
+            "only the new list is uploaded"
+        );
+        assert_near(canvas.image()?.pixel(45, 20), RED, "into the freed slot");
+        assert_eq!(
+            canvas
+                .frame(&[LayerDraw::new(kept)])
+                .instance_bytes_uploaded,
+            0,
+            "the other scene keeps its slot"
+        );
+        other.remove(replacement);
+    }
+    assert_eq!(canvas.memory().instances, memory);
+    Ok(())
+}
+
+#[test]
+fn appended_lists_match_the_same_primitives_pushed_in_place() -> Result<(), Box<dyn Error>> {
+    let piece = |at: Point| -> Result<DrawList, Box<dyn Error>> {
+        let place = |x: f32, y: f32, w: f32, h: f32| Rect::new(at.x + x, at.y + y, w, h);
+        let mut list = quads([Quad::new(place(0.0, 0.0, 12.0, 12.0), Color::RED)]);
+        list.push_quad(Quad {
+            clip: place(2.0, 2.0, 4.0, 20.0),
+            ..Quad::new(place(0.0, 0.0, 12.0, 12.0), Color::BLUE)
+        });
+        list.push_image(ImageQuad {
+            clip: place(12.0, 0.0, 6.0, 12.0),
+            ..ImageQuad::new(place(12.0, 0.0, 12.0, 12.0), checker()?)
+        });
+        Ok(list)
+    };
+    let places = [Point::new(3.0, 5.0), Point::new(30.5, 40.25)];
+    let source = piece(Point::ZERO)?;
+    let (mut appended, mut pushed) = (DrawList::new(), DrawList::new());
+    appended.append(&DrawList::new(), Point::new(500.0, 500.0));
+    assert!(appended.is_empty() && appended.extent().is_none());
+    for at in places {
+        appended.append(&source, at);
+        pushed.append(&piece(at)?, Point::ZERO);
+    }
+    assert_eq!(appended.len(), 2 * source.len());
+    assert_eq!(appended.extent(), pushed.extent());
+    assert_eq!(source.extent(), piece(Point::ZERO)?.extent());
+    let appended = render(1.0, 64, Color::WHITE, appended)?;
+    let pushed = render(1.0, 64, Color::WHITE, pushed)?;
+    assert!(appended.pixels == pushed.pixels);
+    assert_near(appended.pixel(7, 9), BLUE, "the clip moved with its quad");
+    assert_near(appended.pixel(13, 9), RED, "and still clips");
     Ok(())
 }
 
@@ -1032,7 +1147,19 @@ fn images_are_sampled_into_their_bounds_between_other_primitives() -> Result<(),
     list.push_quad(Quad::new(Rect::new(40.0, 40.0, 20.0, 20.0), Color::BLUE));
     let mut canvas = Canvas::new(100, 1.0, Color::TRANSPARENT)?;
     let list = canvas.add(list);
+    let offscreen = LayerDraw {
+        backdrop: Some(backdrop(Rect::new(-200.0, 0.0, 20.0, 20.0), 2.0)),
+        ..moved(list, 200.0, 0.0)
+    };
+    let hidden = canvas.frame(&[offscreen]);
+    assert_eq!(
+        (hidden.instance_bytes_uploaded, hidden.image_bytes_uploaded),
+        (0, 0)
+    );
+    assert_eq!(hidden.backdrop_passes, 1);
+    assert_near(canvas.image()?.pixel(45, 45), CLEAR, "list is outside");
     let stats = canvas.frame(&[LayerDraw::new(list)]);
+    assert_eq!(stats.instance_bytes_uploaded, 3 * INSTANCE_BYTES);
     let img = canvas.image()?;
     assert_near(img.pixel(12, 12), RED, "top-left texel");
     assert_near(img.pixel(48, 12), BLUE, "top-right texel");

@@ -974,6 +974,8 @@ struct Instances {
     buffer: Buffer,
     used: u64,
     slots: FxHashMap<u64, Slot>,
+    free: FxHashMap<u32, Vec<u32>>,
+    seen: FxHashMap<u64, u64>,
 }
 
 impl Instances {
@@ -982,6 +984,25 @@ impl Instances {
             buffer: instance_buffer(device, INSTANCE_MIN_BYTES),
             used: 0,
             slots: FxHashMap::default(),
+            free: FxHashMap::default(),
+            seen: FxHashMap::default(),
+        }
+    }
+
+    fn release_removed(&mut self, lists: &DrawLists) {
+        let seen = self.seen.entry(lists.id()).or_default();
+        let (removed, now) = lists.removed_since(*seen);
+        *seen = now;
+        for id in removed {
+            if let Some(slot) = self.slots.remove(id) {
+                self.free.entry(slot.capacity).or_default().push(slot.start);
+            }
+        }
+    }
+
+    fn release(&mut self, gone: impl Fn(u64, &Slot) -> bool) {
+        for (_, slot) in self.slots.extract_if(|id, slot| gone(*id, slot)) {
+            self.free.entry(slot.capacity).or_default().push(slot.start);
         }
     }
 
@@ -1001,24 +1022,28 @@ impl Instances {
             }
         }
         let capacity = len.next_power_of_two();
-        let offset = self.reserve(device, queue, u64::from(capacity) * Instance::SIZE);
+        let start = match self.free.get_mut(&capacity).and_then(Vec::pop) {
+            Some(start) => start,
+            None => self.reserve(device, queue, capacity),
+        };
+        let offset = u64::from(start) * Instance::SIZE;
         queue.write_buffer(&self.buffer, offset, bytes);
-        let start = (offset / Instance::SIZE) as u32;
-        self.slots.insert(
-            list.id(),
-            Slot {
-                start,
-                capacity,
-                revision: list.revision(),
-                used: frame,
-            },
-        );
+        let slot = Slot {
+            start,
+            capacity,
+            revision: list.revision(),
+            used: frame,
+        };
+        if let Some(outgrown) = self.slots.insert(list.id(), slot) {
+            let free = self.free.entry(outgrown.capacity).or_default();
+            free.push(outgrown.start);
+        }
         (start, uploaded)
     }
 
-    fn reserve(&mut self, device: &Device, queue: &Queue, bytes: u64) -> u64 {
+    fn reserve(&mut self, device: &Device, queue: &Queue, capacity: u32) -> u32 {
         let offset = self.used;
-        self.used += bytes;
+        self.used += u64::from(capacity) * Instance::SIZE;
         if self.used > self.buffer.size() {
             let buffer = instance_buffer(device, self.used.next_power_of_two());
             if offset > 0 {
@@ -1030,18 +1055,16 @@ impl Instances {
             }
             self.buffer = buffer;
         }
-        offset
+        (offset / Instance::SIZE) as u32
     }
 
     fn maintain(&mut self, frame: u64) {
-        let mut live = 0;
-        self.slots.retain(|_, slot| {
-            let keep = frame - slot.used < IDLE_FRAMES;
-            live += u64::from(keep) * u64::from(slot.capacity) * Instance::SIZE;
-            keep
-        });
+        self.release(|_, slot| frame - slot.used >= IDLE_FRAMES);
+        let capacities = self.slots.values().map(|slot| u64::from(slot.capacity));
+        let live = capacities.sum::<u64>() * Instance::SIZE;
         if self.used > INSTANCE_MIN_BYTES && self.used > live * 2 {
             self.slots.clear();
+            self.free.clear();
             self.used = 0;
         }
     }
@@ -1480,14 +1503,6 @@ impl Renderer {
             return false;
         };
         let list = draw.list.and_then(|key| lists.get(key));
-        let start = list
-            .filter(|list| !list.is_empty())
-            .map(|list| self.sync_list(list));
-        for batch in list.map_or(&[][..], DrawList::batches) {
-            if let Some(image) = &batch.image {
-                self.sync_image(image);
-            }
-        }
         if let Some(backdrop) = &draw.backdrop {
             let margin = backdrop.effect.margin();
             let placed = Placed {
@@ -1513,7 +1528,15 @@ impl Renderer {
             (Some(scissor), Some(extent)) => Some(scissor.intersect(&extent)),
             (scissor, extent) => scissor.or(extent),
         };
-        if let (Some(start), Some(list), Some(scissor)) = (start, list, area.scissor(bounded)) {
+        if let (Some(list), Some(scissor)) =
+            (list.filter(|list| !list.is_empty()), area.scissor(bounded))
+        {
+            let start = self.sync_list(list);
+            for batch in list.batches() {
+                if let Some(image) = &batch.image {
+                    self.sync_image(image);
+                }
+            }
             let record = plan.records.push(&DrawRecord {
                 layer: Layer::new(&draw.transform, draw.opacity, area, plan.scale, draw.radii),
                 fill: draw.fill,
@@ -2085,6 +2108,7 @@ impl Renderer {
             origin: (0, 0),
             size: (viewport.width.max(1), viewport.height.max(1)),
         };
+        self.instances.release_removed(scene.lists);
         let mut plan = take(&mut self.plan);
         plan.begin(viewport.scale, area);
         let mut base = FxHasher::default();

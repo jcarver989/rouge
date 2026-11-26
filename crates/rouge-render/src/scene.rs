@@ -1,20 +1,37 @@
 use crate::atlas::AtlasRect;
 use crate::image::{ImageData, ImageFormat};
 use crate::{Color, Corners, Edges, Point, Rect, Size};
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{Pod, Zeroable, cast_slice};
 use slotmap::{SlotMap, new_key_type};
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use wgpu::{VertexAttribute, vertex_attr_array};
 
+const REMOVED_LOG: usize = 4096;
 static NEXT_LIST: AtomicU64 = AtomicU64::new(1);
 
 new_key_type! {
     pub struct ListKey;
 }
 
-#[derive(Default)]
-pub struct DrawLists(SlotMap<ListKey, DrawList>);
+pub struct DrawLists {
+    id: u64,
+    lists: SlotMap<ListKey, DrawList>,
+    removed: Vec<u64>,
+    forgotten: u64,
+}
+
+impl Default for DrawLists {
+    fn default() -> Self {
+        DrawLists {
+            id: NEXT_LIST.fetch_add(1, Ordering::Relaxed),
+            lists: SlotMap::default(),
+            removed: Vec::new(),
+            forgotten: 0,
+        }
+    }
+}
 
 impl DrawLists {
     pub fn new() -> Self {
@@ -22,19 +39,35 @@ impl DrawLists {
     }
 
     pub fn insert(&mut self, list: DrawList) -> ListKey {
-        self.0.insert(list)
+        self.lists.insert(list)
     }
 
     pub fn get(&self, key: ListKey) -> Option<&DrawList> {
-        self.0.get(key)
+        self.lists.get(key)
     }
 
     pub fn get_mut(&mut self, key: ListKey) -> Option<&mut DrawList> {
-        self.0.get_mut(key)
+        self.lists.get_mut(key)
     }
 
     pub fn remove(&mut self, key: ListKey) -> Option<DrawList> {
-        self.0.remove(key)
+        let list = self.lists.remove(key)?;
+        if self.removed.len() == REMOVED_LOG {
+            self.forgotten += REMOVED_LOG as u64;
+            self.removed.clear();
+        }
+        self.removed.push(list.id);
+        Some(list)
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub(crate) fn removed_since(&self, seen: u64) -> (&[u64], u64) {
+        let known = seen.saturating_sub(self.forgotten) as usize;
+        let removed = self.removed.get(known..).unwrap_or_default();
+        (removed, self.forgotten + self.removed.len() as u64)
     }
 }
 
@@ -144,6 +177,7 @@ impl ImageQuad {
     }
 }
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct Batch {
     pub image: Option<ImageData>,
     pub instances: Range<u32>,
@@ -187,10 +221,15 @@ fn unorm(color: Color) -> [u16; 4] {
         .map(|channel| (channel.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16)
 }
 
-pub struct DrawList {
-    id: u64,
+#[derive(Clone, Default)]
+struct Geometry {
     instances: Vec<Instance>,
     batches: Vec<Batch>,
+}
+
+pub struct DrawList {
+    id: u64,
+    geometry: Arc<Geometry>,
     extent: Option<Rect>,
     revision: u64,
 }
@@ -199,10 +238,20 @@ impl Default for DrawList {
     fn default() -> Self {
         DrawList {
             id: NEXT_LIST.fetch_add(1, Ordering::Relaxed),
-            instances: Vec::new(),
-            batches: Vec::new(),
+            geometry: Arc::default(),
             extent: None,
             revision: 0,
+        }
+    }
+}
+
+impl Clone for DrawList {
+    fn clone(&self) -> Self {
+        Self {
+            id: NEXT_LIST.fetch_add(1, Ordering::Relaxed),
+            geometry: self.geometry.clone(),
+            extent: self.extent,
+            revision: self.revision,
         }
     }
 }
@@ -213,17 +262,28 @@ impl DrawList {
     }
 
     pub fn clear(&mut self) {
-        self.instances.clear();
-        self.batches.clear();
+        if let Some(geometry) = Arc::get_mut(&mut self.geometry) {
+            geometry.instances.clear();
+            geometry.batches.clear();
+        } else {
+            self.geometry = Arc::default();
+        }
         self.extent = None;
         self.revision += 1;
     }
 
     pub fn replace(&mut self, other: DrawList) {
-        self.instances = other.instances;
-        self.batches = other.batches;
-        self.extent = other.extent;
-        self.revision += 1;
+        if !Arc::ptr_eq(&self.geometry, &other.geometry) {
+            if self.extent != other.extent
+                || self.batches() != other.batches()
+                || cast_slice::<Instance, u8>(self.instances())
+                    != cast_slice::<Instance, u8>(other.instances())
+            {
+                self.revision += 1;
+            }
+            self.geometry = other.geometry;
+            self.extent = other.extent;
+        }
     }
 
     pub(crate) fn id(&self) -> u64 {
@@ -239,11 +299,52 @@ impl DrawList {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.instances.is_empty()
+        self.geometry.instances.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.instances.len()
+        self.geometry.instances.len()
+    }
+
+    pub fn append(&mut self, other: &DrawList, offset: Point) {
+        let Some(extent) = other.extent else {
+            return;
+        };
+        let everything = Rect::EVERYTHING.to_array();
+        let geometry = Arc::make_mut(&mut self.geometry);
+        let base = geometry.instances.len() as u32;
+        if offset == Point::ZERO {
+            geometry.instances.extend_from_slice(other.instances());
+        } else {
+            let moved = other.instances().iter().map(|instance| {
+                let mut instance = *instance;
+                instance.bounds[0] += offset.x;
+                instance.bounds[1] += offset.y;
+                if instance.clip != everything {
+                    instance.clip[0] += offset.x;
+                    instance.clip[1] += offset.y;
+                }
+                instance
+            });
+            geometry.instances.extend(moved);
+        }
+        for batch in other.batches() {
+            let instances = base + batch.instances.start..base + batch.instances.end;
+            match geometry
+                .batches
+                .last_mut()
+                .filter(|last| last.image == batch.image)
+            {
+                Some(last) => last.instances.end = instances.end,
+                None => geometry.batches.push(Batch {
+                    image: batch.image.clone(),
+                    instances,
+                }),
+            }
+        }
+        let extent = extent.translate(offset);
+        self.extent = Some(self.extent.map_or(extent, |known| known.union(&extent)));
+        self.revision += 1;
     }
 
     pub fn push_quad(&mut self, quad: Quad) {
@@ -351,24 +452,29 @@ impl DrawList {
     }
 
     fn push(&mut self, image: Option<ImageData>, reach: Rect, instance: Instance) {
-        let index = self.instances.len() as u32;
-        match self.batches.last_mut().filter(|batch| batch.image == image) {
+        let geometry = Arc::make_mut(&mut self.geometry);
+        let index = geometry.instances.len() as u32;
+        match geometry
+            .batches
+            .last_mut()
+            .filter(|batch| batch.image == image)
+        {
             Some(batch) => batch.instances.end = index + 1,
-            None => self.batches.push(Batch {
+            None => geometry.batches.push(Batch {
                 image,
                 instances: index..index + 1,
             }),
         }
-        self.instances.push(instance);
+        geometry.instances.push(instance);
         self.extent = Some(self.extent.map_or(reach, |extent| extent.union(&reach)));
         self.revision += 1;
     }
 
     pub(crate) fn instances(&self) -> &[Instance] {
-        &self.instances
+        &self.geometry.instances
     }
 
     pub(crate) fn batches(&self) -> &[Batch] {
-        &self.batches
+        &self.geometry.batches
     }
 }

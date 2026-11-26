@@ -41,6 +41,10 @@ impl Canvas {
         self.lists.insert(list)
     }
 
+    pub(crate) fn remove(&mut self, key: ListKey) {
+        self.lists.remove(key);
+    }
+
     pub(crate) fn list(&mut self, key: ListKey) -> Result<&mut DrawList, &'static str> {
         self.lists.get_mut(key).ok_or("the list was never added")
     }
@@ -48,6 +52,12 @@ impl Canvas {
     pub(crate) fn frame(&mut self, layers: &[LayerDraw]) -> RenderStats {
         let commands: Vec<_> = layers.iter().copied().map(Command::Draw).collect();
         self.commands_frame(&commands)
+    }
+
+    pub(crate) fn frame_of(&mut self, lists: &DrawLists, layers: &[LayerDraw]) -> RenderStats {
+        let commands: Vec<_> = layers.iter().copied().map(Command::Draw).collect();
+        let scene = Scene::new(&commands, lists);
+        self.headless.render(self.clear, scene, &mut self.atlas)
     }
 
     pub(crate) fn commands_frame(&mut self, commands: &[Command]) -> RenderStats {
