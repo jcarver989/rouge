@@ -177,6 +177,7 @@ mise run run smoke android   # connected arm64 Android device or emulator
 | `diff` | A sample diff with syntax highlighting | Desktop |
 | `settings` | A settings screen | Desktop |
 | `surface` | GPU content from a different thread, shown with no copy | Desktop |
+| `webview` | A thread of cards that embed live web pages | Desktop, web, iOS |
 | `smoke` | A form with two text fields, a sheet and a list, packaged by `rouge-framer` | Android |
 
 Use `mise tasks` to list workspace tasks, including the `platform:web:*`, `platform:ios:*`, and `platform:android:*` build and check tasks and the `perf:*` benchmark and profiling tasks. The web and iOS `build` tasks take Cargo example names (such as `component_gallery`); `mise run run` takes the IDs in the table above.
@@ -234,6 +235,7 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 | `rouge-theme` | Colors and palettes. |
 | `rouge-markdown` | Markdown documents that you can parse in parts. |
 | `rouge-syntax` | Tree-sitter syntax highlighting. |
+| `rouge-webview` | System web views placed by layout, behind the `webview` feature. |
 | `rouge-framer` | An opt-in Framer preset for packaging and publishing Rouge apps. |
 
 `rouge-reactive`, `rouge-theme`, `rouge-markdown` and `rouge-syntax` do not need a GPU or a window. You can use them in other apps, for example in a terminal UI.
@@ -245,6 +247,7 @@ For most apps, use only the `rouge` crate. It exports all of the other crates.
 - Rouge draws all widgets itself. The widgets do not look like the native widgets of the platform.
 - The macOS and Linux hosts expose widget roles, names and states through AccessKit. Plain-text fields expose their text, caret and selection, and accept selection and replacement requests. Native macOS range read/write has been verified; [VoiceOver listening checks](design.md#accessible-plain-text-editing) and Linux screen-reader verification are still pending. Android attaches `accesskit_android` to the activity's surface; TalkBack editing has not been verified on hardware. The browser has no accessibility bridge.
 - Color emoji are not available yet.
+- Web views (the `webview` feature) use the system web view: WKWebView on macOS and iOS, WebKitGTK on Linux, the system WebView on Android and an iframe in the browser. A page sits above everything Rouge draws, so menus, tooltips and glass cannot cover it. On Linux this needs X11 (run through XWayland on a Wayland session) and `libwebkit2gtk-4.1` 2.40 or later; on Android, WebView 82 or later. The Android backend compiles but has not been run on a device.
 
 For the full design and the list of planned work, read [design.md](design.md).
 

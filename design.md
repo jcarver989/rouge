@@ -35,7 +35,7 @@ The performance contract: a signal change costs work proportional to what change
 - Windows. Nothing in the design blocks it, but it is not targeted. iOS and Android run on the native host (section 14.2) and are experimental.
 - Native-looking platform widgets. Rouge draws everything itself.
 - A software renderer.
-- System web views (WKWebView, WebKitGTK) as child windows. They cannot be composited: no glass over them, no overlays above them, no compositor transforms. Embedded web content is planned through surfaces and Servo (section 20).
+- Compositing system web views. `rouge-webview` places the system web view (or an iframe) over the window by layout (section 20), but nothing Rouge draws can appear above them: no glass over a page, no overlays above it, no compositor transforms. Composited web content is planned through surfaces and Servo (section 20.6).
 - Any per-frame CPU copy of surface pixels, including as a fallback (section 12).
 
 ### A note on "avoiding Metal"
@@ -64,7 +64,7 @@ wgpu on macOS runs on Metal. What Rouge avoids is Metal-specific code: all shade
 | Effects | Built-ins plus the `ShaderEffect` trait for custom WGSL with up to 16 uniforms |
 | Foreign content | Surfaces: a buffer queue from producers to a registry, shared zero-copy, never read back |
 | Platform | One `Driver`; a winit host on desktop and iOS, a custom DOM host in the browser and a custom `android-activity` host on Android |
-| Web view | Planned: Servo rendering into a shared buffer, in an optional crate |
+| Web view | `rouge-webview`, optional: the system web view placed over the window by layout. Planned: Servo rendering into a shared buffer behind the same element |
 | Performance | 120Hz on modern GPUs; idle is zero frames |
 
 ### 3.2 Protected decisions
@@ -103,8 +103,9 @@ These are deliberate. Do not remove or "simplify" them away.
 | `rouge-theme` | Renderer-neutral colours, `UiPalette` and `MarkdownPalette`, semantic control states. |
 | `rouge-syntax` | Tree-sitter highlighting and symbol tags, incremental by appending. |
 | `rouge-markdown` | Renderer-neutral Markdown documents and append streams. |
+| `rouge-webview` | Optional. `web_page(content)`, `web_view(page)`, the `WebEngine` trait and the system engines: WKWebView on macOS and iOS, WebKitGTK on Linux (X11), the system WebView on Android and an iframe in the browser. `rouge` and `rouge-widgets` re-export it behind their `webview` feature. |
 
-There is no `rouge-text`, `rouge-interop`, `rouge-web` or `rouge-platform` crate: text lives in `rouge-core`, interop in `rouge-render`, and both hosts in `rouge`. `rouge-devtools` and `rouge-webview` are planned and do not exist.
+There is no `rouge-text`, `rouge-interop`, `rouge-web` or `rouge-platform` crate: text lives in `rouge-core`, interop in `rouge-render`, and both hosts in `rouge`. `rouge-devtools` is planned and does not exist.
 
 ### 4.2 The frame
 
@@ -300,6 +301,7 @@ Components run once, so structure changes go through helpers that each manage ch
 - `switch(on, |value| view)` remounts when the memoized value changes; the view is built untracked.
 - `dynamic(|| view)` re-runs a closure and replaces its subtree. Reusing the same `FocusHandle`, `VirtualListHandle` or scroll-state signal across replacements restores focus, caret, selection, history and scroll offset.
 - `overlay(|| view)` portals content to the window's overlay root.
+- `occlude(|| rect)` registers a window rectangle that Rouge cannot draw over, such as a native view placed above the surface, for as long as the calling scope lives; `occlusions()` reads the non-empty ones, and anchored overlays avoid them.
 
 `View::build` builds into the current parent rather than returning an element. Each helper owns a **fragment**: a contiguous run of children in its real parent, recorded in a side table, with no element or layout node of its own. Fragments nest (each `each` row is one), keep their place among siblings as they grow and shrink, and are what removal, reordering and enter/exit transitions act on. `()`, `Option<impl View>` and `Vec<impl View>` build zero or more children in place, so an absent child needs no placeholder. `Apply::when` and `Apply::when_some` do the same for builder chains. Plain `if` and `for` work for structure that is static after construction.
 
@@ -526,7 +528,7 @@ div().animate(Keyframes::new().at(0.0, |p| p.rotate(0.0)).at(1.0, |p| p.rotate(3
 
 ### 11.4 Layout properties
 
-Width, height, padding and gap are not compositor properties. Animating them means writing a signal each frame, which relayouts the affected subtree per frame. That is correct and bounded, but it is the slow path; prefer layout transitions.
+Width, height, padding and gap are not compositor properties. Animating them means writing a signal each frame, which relayouts the affected subtree per frame. That is correct and bounded, but it is the slow path; prefer layout transitions. `Motion::value()` is the reactive read for this path: a binding that reads it re-runs on every frame the motion moves, and the UI keeps stepping for as long as it does even when no layer is bound to the motion. It is how something the compositor cannot move, such as a native web view changing shape, follows a spring.
 
 ## 12. Surfaces
 
@@ -672,6 +674,8 @@ A host drives the registry around each composite and from its idle wakeup:
 ## 14. Platform hosts (`rouge`)
 
 ### 14.1 App and windows
+
+With the `webview` feature, each host installs a window-bound page engine (section 20).
 
 `App::new().window(options, root).run()` is the entry point on both hosts. `App` also takes `menus`, `fonts` and (with `tokio-rt`) a Tokio handle; each `window` call opens a window with its own `Ui`. `WindowOptions` covers title, size, minimum size, resizable, maximized, decorations and, in the browser, the canvas id. The window clears to `Ui::clear_color()`: the background of the root view's outermost painted element, or the theme's `canvas` when nothing paints one.
 
@@ -826,37 +830,16 @@ How the design meets them:
 | **Cross-API synchronization**: wgpu cannot see a foreign API writing a buffer it samples. | Read-only buffers from submit until the pool hands them out again, releases after GPU completion. Fences are deferred until the first foreign-API producer; they can be added to `Frame` without changing the rest of the protocol. |
 | **Linux GL-to-Vulkan sharing** varies by driver (DMA-BUF export, modifiers, NVIDIA). | Opaque-fd sharing is the contingency; a GPU blit into a shared image is the last resort. A CPU copy is not on the list. |
 
-## 20. Planned: web view (`rouge-webview`)
+## 20. Web views (`rouge-webview`)
 
-An optional crate embedding [Servo](https://servo.org) as a surface producer. Nothing else will depend on it, and it does not apply to the browser target.
-
-**Scope.** Content the app author controls (bundled HTML, rendered documents, embedded tools); arbitrary sites are best-effort. Fully composited as a surface, with zero CPU copies per frame.
-
-**Approach.**
-
-| Option | Verdict |
-|---|---|
-| Servo with a software context or `read_to_image` | Rejected: CPU readback and re-upload on every repaint. |
-| Blit Servo's framebuffer into a shared texture | Contingency only: a GPU copy that a custom context avoids. |
-| **Servo with a custom `RenderingContext` that renders into the shared buffer** | **Chosen.** |
-| System web view as a child window | Rejected: cannot be composited. |
-| CEF offscreen rendering with shared textures | A possible second producer if open-web compatibility is ever required. |
-
-**Rendering path.** A `SharedRenderingContext` owns the web view's `SurfaceProducer`, configured with three native-shared buffers, each attached to a GL framebuffer once. `prepare_for_rendering` acquires a free buffer and binds its framebuffer, and WebRender draws straight into shared memory; `present` submits the buffer, gated on the GL fence (this is the producer that brings back the deferred fences of section 12.6); `Configure` reallocates the chain at the new size. A page repaint is one WebRender draw and one compositor sample, with no copy on the CPU or GPU.
-
-**Threading.** One Servo instance lives on a dedicated web thread, an actor with commands in over a channel, frames out through each producer, and state out through `signal.sender()`. Page animations are paced by frame requests, so hidden or occluded pages stop, and a static page produces no frames.
-
-**Input.** Events arrive through normal dispatch in surface-local coordinates and are forwarded to Servo. Because Servo answers whether it consumed an event only after a round trip, frames will carry input regions (areas that consume wheel events, and cursor zones) so Rouge can decide scroll chaining synchronously from the current frame. Focus maps to `set_focused`, keys go to the page first, and the page's cursor drives the platform cursor.
-
-**Constraints.** Pin an exact Servo release and gate upgrades on the crate's tests; build in its own CI job; Servo is MPL-2.0 while Rouge stays MIT; build without Servo's `webgpu` feature.
-
-**Known and open.** On macOS, Servo drawing through a custom `RenderingContext` into an IOSurface imported into wgpu without copies, fence-gated triple buffering without stale or torn frames, and Servo running off the main thread are known to work. Open: DMA-BUF export from GL on Mesa and NVIDIA, forcing Servo's GL context onto the wgpu adapter's GPU on Linux, Servo's paint budget for heavy pages, how much of Servo's scroll tree is exposed for input regions, and custom-scheme resource loading.
+`rouge-webview` is an optional crate, re-exported by `rouge` and `rouge-widgets` behind their `webview` feature, that embeds the platform's own web view rather than bundling a browser engine: WKWebView on macOS and iOS, WebKitGTK on Linux, the system WebView on Android and an iframe in the browser. A `web_view` element is laid out like any other, and the window's engine places a native view over the window at the element's frame and clip, so an app adds nothing to its binary and gets the engine the OS already ships and updates. The cost is that the native view sits above Rouge's surface: nothing Rouge draws can appear over a page, compositor transforms and effects do not apply to it, and anchored overlays steer around pages (`occlude`) instead of covering them. An offscreen Chromium (CEF) engine was prototyped behind the same element and removed for its size, helper processes and packaging; a Servo engine rendering into a shared surface (section 12) is the planned route to pages that composite like everything else.
 
 ## 21. Not built yet
 
 - Accessibility beyond the desktop adapter. `rouge-core` builds an AccessKit tree from element semantics (`rouge_core::access`; `Ui::accessibility_tree`, `accessibility_update` and `accessibility_action`), `TestUi` queries it by role and name, and the native host connects it through `accesskit_winit` (`platform/native/runner.rs`): the adapter delivers requests to the target window through the winit event loop proxy, the first tree is sent when an assistive technology asks, and each step publishes what changed. The widgets declare roles, names and states, an element with `on_activate` is a button unless it says otherwise, and a control with no label of its own is named by the text inside it; `tests/gallery_test.rs` fails when an interactive element in the gallery has no role or name. The [plain-text editor](#accessible-plain-text-editing) has native macOS range checks; Linux/Orca has not been verified. Not built: the browser ARIA bridge, Android accessibility, accessible canvas text and rich document navigation.
 - Devtools (`rouge-devtools`): inspector, invalidation flashing, layer view with pass breaks and surface sources, frame HUD, signal graph, warnings for per-frame layout animation and untracked reads in view code, hot reload as a stretch goal.
-- `rouge-webview` (section 20). The compositor thread is the native default; its input-to-present latency and macOS live resize are not yet measured against the inline transport.
+- Web views (section 20): Android and Linux engines, the Android engine verified on a device, keyboard focus for a Linux page, native Wayland, the underlay mode that lets Rouge draw over a page, a navigation policy and new-window requests, page snapshots, inline HTML through the `rouge-page` scheme on Android, app-defined schemes for bundled resources, and the composited engine.
+- The compositor thread is the native default; its input-to-present latency and macOS live resize are not yet measured against the inline transport.
 - Surfaces: Linux native sharing (DMA-BUF), fences (CPU-signalled, then native), frame damage and colour-space metadata, input regions, video sources (YUV, timed queues), CEF across processes, browser video through `copyExternalImageToTexture`.
 - Partial present: frames redraw fully from retained buffers.
 - Compositor: clip animation, non-uniform scale, `Motion` beyond `f32`, effect values in keyframes or bound to motions, backdrop effects inside rasterized layers.
