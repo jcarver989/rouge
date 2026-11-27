@@ -57,6 +57,8 @@ mod transcript;
 mod tree;
 pub mod typography;
 mod util;
+#[cfg(feature = "webview")]
+mod web_card;
 mod wheel;
 mod window_chrome;
 
@@ -126,5 +128,7 @@ pub use tokens::Radii;
 pub use transcript::{Composer, Message, Transcript, composer, transcript};
 pub use tree::{TreeRow, indent, tree_row};
 pub use typography::UiStyles;
+#[cfg(feature = "webview")]
+pub use web_card::{WebCard, web_card};
 pub use wheel::{Wheel, wheel};
 pub use window_chrome::window_chrome;

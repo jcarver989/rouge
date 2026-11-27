@@ -18,6 +18,7 @@ default = ["all-languages"]
 all-languages = ["rouge-syntax?/all-languages", "rouge-markdown?/all-languages"]
 markdown = ["syntax", "dep:rouge-markdown"]
 syntax = ["dep:rouge-syntax"]
+webview = ["dep:rouge-webview"]
 
 [dependencies]
 rouge-core.workspace = true
@@ -25,6 +26,7 @@ rouge-markdown = { workspace = true, default-features = false, optional = true }
 rouge-reactive.workspace = true
 rouge-syntax = { workspace = true, default-features = false, optional = true }
 rouge-theme.workspace = true
+rouge-webview = { workspace = true, optional = true }
 nucleo-matcher.workspace = true
 
 [dev-dependencies]
@@ -37,3 +39,8 @@ workspace = true
 [[test]]
 name = "macros_component_test"
 path = "tests/macros/component_test.rs"
+
+[[test]]
+name = "web_card_test"
+path = "tests/web_card_test.rs"
+required-features = ["webview"]
