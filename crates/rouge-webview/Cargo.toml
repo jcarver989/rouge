@@ -1,0 +1,94 @@
+[package]
+name = "rouge-webview"
+description = "System web views placed by Rouge layout: WKWebView, WebKitGTK, Android WebView and iframes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["gui", "ui", "webview", "html", "browser"]
+categories = ["gui", "web-programming"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+rouge-core.workspace = true
+rouge-reactive.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.3"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSKeyValueObserving", "NSObject", "NSString", "NSURL",
+    "NSURLRequest", "NSURLResponse", "NSValue",
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "std", "WKContentWorld", "WKPreferences", "WKScriptMessage", "WKScriptMessageHandler", "WKURLSchemeHandler", "WKURLSchemeTask",
+    "WKUserContentController", "WKUserScript", "WKWebViewConfiguration",
+] }
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "objc2-quartz-core"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "UIResponder", "UIView", "objc2-core-foundation", "objc2-quartz-core"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22.4"
+android-activity = { version = "0.6.1", features = ["game-activity"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gdk = "0.18"
+gdkx11 = "0.18"
+glib = "0.18"
+gtk = "0.18"
+raw-window-handle = "0.6"
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-events = "0.3"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "CssStyleDeclaration", "Document", "DomRect", "Element", "Event", "EventTarget", "HtmlCanvasElement",
+    "HtmlElement", "HtmlIFrameElement", "MessageEvent", "Node", "Window",
+] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "view_test"
+path = "tests/view_test.rs"
+
+[[test]]
+name = "engine_test"
+path = "tests/engine_test.rs"
+
+[[test]]
+name = "platform_apple_test"
+path = "tests/platform/apple_test.rs"
+harness = false
+
+[[test]]
+name = "platform_linux_test"
+path = "tests/platform/linux_test.rs"
+harness = false
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gdkx11 = "0.18"
+glib = "0.18"
+gtk = "0.18"
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSView"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSObjCRuntime", "NSRunLoop", "NSString"] }
+raw-window-handle = "0.6"

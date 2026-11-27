@@ -1,0 +1,148 @@
+#![allow(unsafe_code)]
+
+#[cfg(target_os = "macos")]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    macos::run()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2::MainThreadMarker;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSApplication, NSView};
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
+    use raw_window_handle::{
+        AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle,
+    };
+    use rouge_webview::{
+        EnginePage, PageCommand, SystemEngine, WebContent, WebEngine, WebViewEvent, WebViewEvents,
+        WebViewOptions,
+    };
+    use std::env::args;
+    use std::error::Error;
+    use std::ptr::NonNull;
+    use std::sync::mpsc::{Receiver, channel};
+
+    type TestResult = Result<(), Box<dyn Error>>;
+    type Test = fn(MainThreadMarker) -> TestResult;
+
+    const ANNOUNCES: &str = "<script>parent.postMessage('loaded', '*')</script>";
+    const ECHOES: &str = "<script>addEventListener('message', (event) => {\
+                          if (!event.source) parent.postMessage('echo ' + event.data, '*');\
+                          });parent.postMessage('ready', '*')</script>";
+    const AWKWARD: &str = "she said \"</script>\" \\ and\nleft\u{2028}";
+    const THROWS: &str = "<script>addEventListener('error', (event) => parent.postMessage(event.message, '*'))</script>\
+                          <script>null.missing</script>";
+
+    pub(super) fn run() -> TestResult {
+        let mtm = MainThreadMarker::new().ok_or("the engine test runs on the main thread")?;
+        let _app = NSApplication::sharedApplication(mtm);
+        let tests: [(&str, Test); 3] = [
+            (
+                "an_inline_page_runs_again_when_reloaded",
+                an_inline_page_runs_again_when_reloaded,
+            ),
+            (
+                "an_inline_page_reads_its_own_script_errors",
+                an_inline_page_reads_its_own_script_errors,
+            ),
+            (
+                "a_posted_message_reaches_the_page_as_it_was_written",
+                a_posted_message_reaches_the_page_as_it_was_written,
+            ),
+        ];
+        let filter = args().nth(1).filter(|arg| !arg.starts_with('-'));
+        for (name, test) in tests {
+            if filter
+                .as_deref()
+                .is_some_and(|filter| !name.contains(filter))
+            {
+                continue;
+            }
+            test(mtm)?;
+            println!("test {name} ... ok");
+        }
+        Ok(())
+    }
+
+    fn an_inline_page_runs_again_when_reloaded(mtm: MainThreadMarker) -> TestResult {
+        let mut stage = Stage::open(mtm)?;
+        stage
+            .page
+            .apply(PageCommand::Load(WebContent::html(ANNOUNCES)));
+        assert_eq!(stage.message(), "loaded");
+        stage.page.apply(PageCommand::Reload);
+        assert_eq!(stage.message(), "loaded");
+        Ok(())
+    }
+
+    fn an_inline_page_reads_its_own_script_errors(mtm: MainThreadMarker) -> TestResult {
+        let mut stage = Stage::open(mtm)?;
+        stage
+            .page
+            .apply(PageCommand::Load(WebContent::html(THROWS)));
+        let message = stage.message();
+        assert!(message.contains("null"), "the page saw {message:?}");
+        Ok(())
+    }
+
+    fn a_posted_message_reaches_the_page_as_it_was_written(mtm: MainThreadMarker) -> TestResult {
+        let mut stage = Stage::open(mtm)?;
+        stage
+            .page
+            .apply(PageCommand::Load(WebContent::html(ECHOES)));
+        assert_eq!(stage.message(), "ready");
+        stage.page.apply(PageCommand::Post(AWKWARD.into()));
+        assert_eq!(stage.message(), format!("echo {AWKWARD}"));
+        Ok(())
+    }
+
+    struct Stage {
+        page: Box<dyn EnginePage>,
+        events: Receiver<WebViewEvent>,
+    }
+
+    impl Stage {
+        fn open(mtm: MainThreadMarker) -> Result<Self, Box<dyn Error>> {
+            let (sender, events) = channel();
+            let engine = SystemEngine(Host(NSView::new(mtm)));
+            let page = engine.open(
+                WebViewOptions::default(),
+                WebViewEvents::new(move |event| {
+                    let _ = sender.send(event);
+                }),
+            )?;
+            Ok(Stage { page, events })
+        }
+
+        fn message(&self) -> String {
+            loop {
+                while let Ok(event) = self.events.try_recv() {
+                    if let WebViewEvent::Message(text) = event {
+                        return text;
+                    }
+                }
+                NSRunLoop::currentRunLoop().runMode_beforeDate(
+                    // SAFETY: a constant Foundation exports.
+                    unsafe { NSDefaultRunLoopMode },
+                    &NSDate::dateWithTimeIntervalSinceNow(0.01),
+                );
+            }
+        }
+    }
+
+    struct Host(Retained<NSView>);
+
+    impl HasWindowHandle for Host {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            let view = NonNull::from(&*self.0).cast();
+            // SAFETY: the view is retained by `self`, so it outlives the borrowed handle.
+            Ok(unsafe {
+                WindowHandle::borrow_raw(RawWindowHandle::AppKit(AppKitWindowHandle::new(view)))
+            })
+        }
+    }
+}

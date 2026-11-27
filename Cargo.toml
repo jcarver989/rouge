@@ -33,6 +33,7 @@ rouge-widgets = { path = "crates/rouge-widgets", version = "0.6.0" }
 rouge-theme = { path = "crates/rouge-theme", version = "0.6.0" }
 rouge-syntax = { path = "crates/rouge-syntax", version = "0.6.0" }
 rouge-markdown = { path = "crates/rouge-markdown", version = "0.6.0" }
+rouge-webview = { path = "crates/rouge-webview", version = "0.6.0" }
 nucleo-matcher = "0.3"
 crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
