@@ -127,6 +127,15 @@ impl Rect {
         }
     }
 
+    pub fn scale(&self, factor: f32) -> Rect {
+        Rect::new(
+            self.origin.x * factor,
+            self.origin.y * factor,
+            self.size.width * factor,
+            self.size.height * factor,
+        )
+    }
+
     pub fn inflate(&self, amount: f32) -> Rect {
         Rect::new(
             self.origin.x - amount,
