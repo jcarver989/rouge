@@ -43,6 +43,8 @@ mod touch;
 
 use crate::app::{App, AppError, RootFn};
 use rouge_core::{AnyView, Cursor, Menu, Styled, View, div, safe_area, window_handle};
+#[cfg(feature = "webview")]
+use rouge_webview::{SystemEngine, WebEngine, provide_web_engine};
 use rouge_widgets::{menu_bar, window_chrome};
 #[cfg(all(feature = "persist", not(target_arch = "wasm32")))]
 use std::env::var_os;
@@ -131,7 +133,27 @@ pub(crate) fn default_menus(mut menus: Vec<Menu>) -> Vec<Menu> {
     menus
 }
 
-pub(crate) fn window_root(title: String, menus: Vec<Menu>, chrome: bool, root: RootFn) -> AnyView {
+#[cfg(feature = "webview")]
+pub(crate) fn web_engine<T>(host: T) -> impl FnOnce()
+where
+    SystemEngine<T>: WebEngine,
+{
+    move || provide_web_engine(SystemEngine(host))
+}
+
+#[cfg(not(feature = "webview"))]
+pub(crate) fn web_engine<T>(_host: T) -> impl FnOnce() {
+    || {}
+}
+
+pub(crate) fn window_root(
+    title: String,
+    menus: Vec<Menu>,
+    chrome: bool,
+    root: RootFn,
+    provide_engine: impl FnOnce(),
+) -> AnyView {
+    provide_engine();
     let handle = window_handle();
     handle.set_title(title);
     let root = safe_area_root(menu_root(menus, root()));

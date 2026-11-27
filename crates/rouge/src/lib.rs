@@ -17,6 +17,8 @@ pub use rouge_reactive as reactive;
 pub use rouge_render as render;
 #[cfg(feature = "syntax")]
 pub use rouge_syntax as syntax;
+#[cfg(feature = "webview")]
+pub use rouge_webview as webview;
 pub use rouge_widgets as widgets;
 
 pub mod prelude {

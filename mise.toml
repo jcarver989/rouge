@@ -32,7 +32,7 @@ run = [
 
 [tasks."platform:web:test"]
 description = "Run browser tests in headless Chrome (requires matching chromedriver and wasm-bindgen-test-runner)"
-run = 'CHROMEDRIVER="$(command -v chromedriver)" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner cargo test --locked --target wasm32-unknown-unknown -p rouge --test platform_web_test --test platform_web_host_test --test platform_web_host_webgl_test'
+run = 'CHROMEDRIVER="$(command -v chromedriver)" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner cargo test --locked --target wasm32-unknown-unknown -p rouge --test platform_web_test --test platform_web_host_test --test platform_web_host_webgl_test --test platform_web_webview_test'
 
 [tasks."platform:web:build"]
 description = "Build a browser example into target/web (requires wasm-bindgen; uses wasm-opt and brotli when installed)"

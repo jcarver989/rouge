@@ -4,7 +4,7 @@ use super::trace::PerformanceLayer;
 use crate::app::{App, AppError, RootFn, WindowOptions};
 use crate::changes::{TextInput, Tracked};
 use crate::driver::{Driver, Inline, Setup, connect};
-use crate::platform::{LINE_SCROLL, css_cursor, default_menus, window_root};
+use crate::platform::{LINE_SCROLL, css_cursor, default_menus, web_engine, window_root};
 use crate::profile::{ProfileSettings, subscribe};
 use js_sys::{Array, Error as JsError, Function, Reflect};
 use rouge_core::{
@@ -336,6 +336,7 @@ impl Host {
         let driver = {
             let _entered = runtime.enter();
             let title = options.title;
+            let engine = web_engine(canvas.clone());
             let bar = if bar { menus.to_vec() } else { Vec::new() };
             let setup = Setup {
                 pixels,
@@ -355,7 +356,7 @@ impl Host {
                 setup,
                 messages,
                 clipboard.clone(),
-                move || window_root(title, bar, false, root),
+                move || window_root(title, bar, false, root, engine),
             )?;
             driver.attach(target);
             driver.ui().set_route(route(&window));

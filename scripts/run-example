@@ -13,6 +13,7 @@ motion   demo               -                  -                  -             
 diff     demo               -                  -                  -                diff
 settings demo               -                  -                  -                settings
 surface  surface            -                  -                  -
+webview  webview            webview            webview            -
 smoke    -                  -                  -                  mobile_smoke
 CATALOG
 }

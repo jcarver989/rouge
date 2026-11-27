@@ -5,11 +5,15 @@
 mod shared;
 #[path = "../examples/shared/todo/mod.rs"]
 mod todo;
+#[path = "../examples/shared/web_thread_view.rs"]
+mod web_thread_view;
 
 use rouge::core::WindowCommand;
 use rouge::core::testing::{TestResult, TestUi, TestUiBuilder};
 use rouge::persist::MemoryStorage;
 use rouge::prelude::*;
+use rouge::webview::testing::FakeEngine;
+use rouge::webview::{PageCommand, WebViewEvent, provide_web_engine};
 use rouge::widgets::bundled_fonts;
 use rouge::widgets::tokens::MotionScale;
 use shared::counter_view::counter;
@@ -20,6 +24,7 @@ use shared::motion_view::motion_demo;
 use shared::settings_view::settings;
 use std::error::Error;
 use std::rc::Rc;
+use web_thread_view::web_thread;
 
 #[test]
 fn the_counter_example_counts() -> TestResult {
@@ -373,6 +378,30 @@ fn toggle_work(count: u64) -> Result<[u64; 4], Box<dyn Error>> {
         work.layer_paints,
         work.layouts,
     ])
+}
+
+#[test]
+fn the_web_view_example_exchanges_messages_with_its_artifact() -> TestResult {
+    let _entered = Runtime::new().enter();
+    let engine = FakeEngine::new();
+    let mut ui = example(880.0, 760.0, || {
+        provide_web_engine(engine.clone());
+        web_thread()
+    });
+    assert_eq!(engine.opened(), 2, "an HTML artifact and a live site");
+    engine.emit(0, WebViewEvent::Message("Chose the Team plan".into()));
+    ui.run(0.2);
+    assert_eq!(
+        ui.text_of("heard").as_deref(),
+        Some("Last from the page: Chose the Team plan")
+    );
+    ui.click_on("pricing-note")?;
+    ui.run(0.2);
+    assert!(engine.calls(0).iter().any(|call| matches!(
+        call,
+        PageCommand::Post(note) if note.contains("Rouge says hello")
+    )));
+    Ok(())
 }
 
 fn example<T: View>(width: f32, height: f32, root: impl FnOnce() -> T) -> TestUi {

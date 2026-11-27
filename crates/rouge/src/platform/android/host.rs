@@ -3,7 +3,7 @@ use crate::app::{App, AppError, RootFn, WindowOptions};
 use crate::compositing::Compositing;
 use crate::driver::{Driver, Setup, connect};
 use crate::platform::editing::{Editing, Previous, selected};
-use crate::platform::{PrimaryTouch, default_menus, warn, window_root};
+use crate::platform::{PrimaryTouch, default_menus, warn, web_engine, window_root};
 use crate::profile::{ProfileSettings, trace};
 use accesskit_android::InjectingAdapter;
 use accesskit_android::jni::JavaVM;
@@ -499,6 +499,7 @@ impl Host {
             profile: &self.profile,
         };
         let title = options.title;
+        let engine = web_engine(self.android.clone());
         let (driver, target) = Driver::open(
             WindowId(0),
             &gpu,
@@ -506,7 +507,7 @@ impl Host {
             setup,
             compositor.messages.clone(),
             AndroidClipboard,
-            move || window_root(title, Vec::new(), false, root),
+            move || window_root(title, Vec::new(), false, root, engine),
         )?;
         driver.attach(target);
         let mut window = Window {

@@ -6,7 +6,7 @@ use crate::app::{App, AppError, RootFn, WindowOptions};
 use crate::changes::Tracked;
 use crate::compositing::Compositing;
 use crate::driver::{Driver, Setup, connect};
-use crate::platform::{Current, Platform, PrimaryTouch, default_menus, window_root};
+use crate::platform::{Current, Platform, PrimaryTouch, default_menus, web_engine, window_root};
 use crate::profile::{ProfileSettings, trace};
 use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
 use pollster::block_on;
@@ -150,6 +150,7 @@ impl Runner {
             Vec::new()
         };
         let title = options.title;
+        let engine = web_engine(window.clone());
         let setup = Setup {
             pixels: (physical.width, physical.height),
             scale: window.scale_factor() as f32,
@@ -174,7 +175,7 @@ impl Runner {
             setup,
             compositor.messages.clone(),
             Current::clipboard(),
-            move || window_root(title, bar, chrome, root),
+            move || window_root(title, bar, chrome, root, engine),
         )?;
         driver.attach(present_target(compositor, target, &window));
         let driver = Rc::new(RefCell::new(driver));

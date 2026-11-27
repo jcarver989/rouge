@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pricing</title>
+<style>
+  :root { color-scheme: light dark; --ink: #1c1b18; --soft: #6b675e; --line: #e4e0d6; --page: #faf8f3; --card: #fff; --accent: #0f7b54; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #f1eee6; --soft: #a39e92; --line: #34312b; --page: #171613; --card: #1f1d1a; --accent: #54c79a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 48px 56px; background: var(--page); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
+  h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: -0.02em; }
+  p.lead { margin: 0 0 28px; color: var(--soft); }
+  .switch { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 28px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); }
+  .switch button { border: 0; border-radius: 999px; padding: 6px 16px; font: inherit; color: var(--soft); background: transparent; cursor: pointer; }
+  .switch button[aria-pressed="true"] { background: var(--ink); color: var(--page); }
+  .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .plan { padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+  .plan.featured { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .plan h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--soft); }
+  .price { margin: 8px 0 16px; font-size: 40px; font-weight: 650; letter-spacing: -0.03em; }
+  .price small { font-size: 15px; font-weight: 400; color: var(--soft); }
+  .plan button { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font: inherit; font-weight: 600; color: var(--ink); background: transparent; cursor: pointer; }
+  .plan.featured button { border-color: var(--accent); background: var(--accent); color: var(--page); }
+  #note { margin-top: 24px; min-height: 24px; color: var(--soft); }
+</style>
+</head>
+<body>
+  <h1>Pricing</h1>
+  <p class="lead">Simple plans that grow with your team.</p>
+  <div class="switch" role="group" aria-label="Billing period">
+    <button id="monthly" aria-pressed="true">Monthly</button>
+    <button id="yearly" aria-pressed="false">Yearly</button>
+  </div>
+  <div class="plans">
+    <div class="plan"><h2>Starter</h2><div class="price" data-monthly="0">$0<small> / mo</small></div><button data-plan="Starter">Choose Starter</button></div>
+    <div class="plan featured"><h2>Team</h2><div class="price" data-monthly="24">$24<small> / mo</small></div><button data-plan="Team">Choose Team</button></div>
+    <div class="plan"><h2>Scale</h2><div class="price" data-monthly="96">$96<small> / mo</small></div><button data-plan="Scale">Choose Scale</button></div>
+  </div>
+  <p id="note"></p>
+<script>
+  const tell = (text) => window.parent.postMessage(text, "*");
+  const period = (yearly) => {
+    document.getElementById("monthly").setAttribute("aria-pressed", String(!yearly));
+    document.getElementById("yearly").setAttribute("aria-pressed", String(yearly));
+    for (const price of document.querySelectorAll(".price")) {
+      const monthly = Number(price.dataset.monthly);
+      const shown = yearly ? Math.round(monthly * 0.8) : monthly;
+      price.firstChild.textContent = "$" + shown;
+    }
+  };
+  document.getElementById("monthly").onclick = () => { period(false); tell("Billing set to monthly"); };
+  document.getElementById("yearly").onclick = () => { period(true); tell("Billing set to yearly"); };
+  for (const button of document.querySelectorAll("[data-plan]")) {
+    button.onclick = () => tell("Chose the " + button.dataset.plan + " plan");
+  }
+  window.addEventListener("message", (event) => {
+    if (event.source === window || typeof event.data !== "string") return;
+    document.getElementById("note").textContent = event.data;
+    tell("The page received a note");
+  });
+</script>
+</body>
+</html>
