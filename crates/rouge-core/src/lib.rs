@@ -69,7 +69,9 @@ pub use tree::{
     ContentType, EditTransaction, Editor, EditorId, EnterKey, FrameStats, InputHints, Interaction,
     PaintRegion,
 };
-pub use ui::{Ui, Wake, keyboard_inset, modifiers, safe_area, window_scope, window_size, zoom};
+pub use ui::{
+    Ui, Wake, device_scale, keyboard_inset, modifiers, safe_area, window_scope, window_size, zoom,
+};
 pub use view::{AnyView, Apply, BuildCx, Div, FocusPolicy, Text, View, div, rich_text, text};
 
 #[doc(hidden)]

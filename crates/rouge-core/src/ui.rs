@@ -64,6 +64,13 @@ pub fn keyboard_inset() -> ReadSignal<f32> {
 }
 
 #[derive(Clone, Copy)]
+struct DeviceScale(ReadSignal<f32>);
+
+pub fn device_scale() -> ReadSignal<f32> {
+    expect_context::<DeviceScale>().0
+}
+
+#[derive(Clone, Copy)]
 struct Zoom(Signal<f32>);
 
 pub fn zoom() -> Signal<f32> {
@@ -145,7 +152,7 @@ pub struct Ui {
     keyboard_inset: Signal<f32>,
     keyboard: f32,
     presentation: Signal<Presentation>,
-    device_scale: f32,
+    device_scale: Signal<f32>,
     zoom: Signal<f32>,
     zoomed: f32,
     queue: Queue,
@@ -205,6 +212,7 @@ impl Ui {
         }
         let scope = Scope::root();
         let viewport = size;
+        let device_scale = scope.run(|| signal(1.0));
         let (size, safe_area, keyboard_inset, presentation, zoom, modifiers, window_handle) = scope
             .run(|| {
                 let window_handle = WindowHandle {
@@ -229,6 +237,7 @@ impl Ui {
                 provide_context(Presented(presentation.read_only()));
                 let zoom = signal(1.0);
                 provide_context(Zoom(zoom));
+                provide_context(DeviceScale(device_scale.read_only()));
                 let modifiers = signal(Modifiers::NONE);
                 provide_context(HeldModifiers(modifiers.read_only()));
                 provide_context(UiContext::new(queue.clone()));
@@ -265,7 +274,7 @@ impl Ui {
             keyboard_inset,
             keyboard: 0.0,
             presentation,
-            device_scale: 1.0,
+            device_scale,
             zoom,
             zoomed: 1.0,
             queue,
@@ -468,7 +477,7 @@ impl Ui {
     }
 
     pub fn set_device_scale(&mut self, scale: f32) {
-        self.device_scale = scale;
+        self.device_scale.set_if_changed(scale);
         self.rescale();
     }
 
@@ -491,7 +500,7 @@ impl Ui {
     }
 
     fn rescale(&mut self) {
-        let scale = self.device_scale * self.zoomed;
+        let scale = self.device_scale.get_untracked() * self.zoomed;
         if self.cache.scale != scale {
             self.cache.scale = scale;
             self.tree.invalidate_paint();

@@ -3,12 +3,14 @@ use super::{ElementId, Tree};
 use crate::canvas::{PaintOp, TextHit};
 use crate::event::DragAxis;
 use rouge_reactive::batch;
-use rouge_render::{Affine, Point, Rect, Size};
+use rouge_render::{Affine, Corners, Point, Rect, Size};
 use std::borrow::Cow;
 use std::iter::{from_fn, successors};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaintRegion {
+    pub frame: Rect,
+    pub corners: Corners,
     pub bounds: Rect,
     pub order: Vec<usize>,
 }
@@ -157,19 +159,24 @@ impl Tree {
     }
 
     fn clipped_region(&self, id: ElementId, rect: Rect) -> PaintRegion {
+        let region = PaintRegion {
+            frame: rect,
+            corners: self.elements[id].effective_style().corner_radii,
+            ..PaintRegion::default()
+        };
         let chain = self.chain(id);
         let mut bounds = rect.intersect(&Rect::new(0.0, 0.0, self.size.width, self.size.height));
         let mut order = Vec::with_capacity(chain.len());
         for (i, &node) in chain.iter().enumerate() {
             let element = &self.elements[node];
             if element.unseen() || bounds.is_empty() {
-                return PaintRegion::default();
+                return region;
             }
             let Some(child) = chain.get(i + 1) else {
                 break;
             };
             let Some(index) = element.children.iter().position(|id| id == child) else {
-                return PaintRegion::default();
+                return region;
             };
             order.push(index);
             if element.clips_children() {
@@ -184,7 +191,11 @@ impl Tree {
                 bounds = bounds.intersect(&self.to_window(node, clip));
             }
         }
-        PaintRegion { bounds, order }
+        PaintRegion {
+            bounds,
+            order,
+            ..region
+        }
     }
 
     pub(super) fn to_window(&self, id: ElementId, rect: Rect) -> Rect {
