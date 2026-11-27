@@ -39,6 +39,7 @@ android {
 dependencies {
     implementation 'androidx.appcompat:appcompat:@@APPCOMPAT@@'
     implementation 'androidx.games:games-activity:@@GAMES_ACTIVITY@@'
+    implementation 'androidx.webkit:webkit:@@WEBKIT@@'
 }
 
 ['Debug', 'Release'].each { variant ->

@@ -429,6 +429,7 @@ fn generates_a_gradle_project_that_builds_the_rust_library()
         "'--lib', '--package', 'fixture-app']",
         "from '../icon.png'",
         "implementation 'androidx.games:games-activity:4.4.0'",
+        "implementation 'androidx.webkit:webkit:1.18.0'",
         "proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'",
     ] {
         assert!(gradle.contains(expected), "missing {expected} in {gradle}");
@@ -442,6 +443,9 @@ fn generates_a_gradle_project_that_builds_the_rust_library()
     assert!(activity.contains("package com.example.app;"));
     assert!(activity.contains("class RougeActivity extends GameActivity"));
     assert!(activity.contains("public void stateChanged(State state, boolean dismissed)"));
+    let web_page = file("android/src/main/java/rouge/webview/WebPage.java")?;
+    assert!(web_page.contains("package rouge.webview;"));
+    assert!(web_page.contains("private static native void onClosed(long peer);"));
     assert!(
         file("android/proguard-rules.pro")?.contains("-keep class com.example.app.RougeActivity")
     );

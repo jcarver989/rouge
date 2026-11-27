@@ -15,6 +15,7 @@ use xshell::cmd;
 const SUPPORTED_SDK: u32 = 30;
 const GAMES_ACTIVITY: &str = "4.4.0";
 const APPCOMPAT: &str = "1.7.0";
+const WEBKIT: &str = "1.18.0";
 const PLAY_TARGET_SDK: u32 = 36;
 const COMPILE_SDK: u32 = 37;
 const SDK_COMMAND_LINE_TOOLS: &str = "16111833";
@@ -277,6 +278,7 @@ impl Platform for Android {
             )
             .replace("@@GAMES_ACTIVITY@@", GAMES_ACTIVITY)
             .replace("@@APPCOMPAT@@", APPCOMPAT)
+            .replace("@@WEBKIT@@", WEBKIT)
             .replace("@@LIBRARY@@", &quoted(library.map_or("", String::as_str)))
             .replace("@@PACKAGE@@", &package);
         vec![
@@ -304,6 +306,10 @@ impl Platform for Android {
                     config.id.replace('.', "/")
                 ),
                 include_str!("RougeActivity.java").replace("@@ID@@", &config.id),
+            ),
+            (
+                "android/src/main/java/rouge/webview/WebPage.java".to_owned(),
+                include_str!("WebPage.java").to_owned(),
             ),
             (
                 "android/proguard-rules.pro".to_owned(),
