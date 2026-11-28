@@ -588,6 +588,14 @@ impl Layer {
         latest(self.motion_ends().chain([self.keyframes_end()]))
     }
 
+    fn rests_at(&self) -> Option<f64> {
+        latest(
+            self.motion_ends()
+                .chain([self.keyframes_end()])
+                .map(|end| end.filter(|end| end.is_finite())),
+        )
+    }
+
     fn next_change(&self, at: f64) -> Option<f64> {
         let running = latest(self.motion_ends())
             .filter(|end| *end > at)
@@ -786,6 +794,19 @@ impl LayerModel {
 
     pub fn settles_at(&self) -> Option<f64> {
         self.settles
+    }
+
+    pub fn rests_at(&self) -> Option<f64> {
+        let motions = self.moving.iter().map(|id| self.motions.get(id)?.end());
+        let layers = self
+            .animating
+            .iter()
+            .map(|id| self.layers.get(*id)?.rests_at());
+        latest(
+            motions
+                .chain(layers)
+                .map(|end| end.filter(|end| end.is_finite())),
+        )
     }
 
     pub fn next_change(&self, since: f64) -> Option<f64> {

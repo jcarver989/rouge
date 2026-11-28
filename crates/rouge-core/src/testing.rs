@@ -4,7 +4,7 @@ use crate::compositor::{CompositorActor, Message, WindowConfig, WindowId};
 use crate::event::{FileDropPhase, KeyEvent, PointerButton, TouchPhase};
 use crate::presentation::InputKind;
 use crate::theme::{Palette, Theme};
-use crate::ui::Ui;
+use crate::ui::{Ui, Wake};
 use crate::view::View;
 use crate::window::{Menu, WindowCommand};
 use accesskit_consumer::{NodeRef, Tree as AccessTree, TreeChangeHandler, common_filter};
@@ -39,6 +39,8 @@ pub enum TestError {
     NoAccessNode { role: Role, name: String },
     #[error("{0:?} never scrolled into view")]
     NotScrolledIntoView(String),
+    #[error("the ui was still busy after {0} frames")]
+    NeverIdle(usize),
     #[error("the test window is closed")]
     Closed,
     #[error(transparent)]
@@ -57,8 +59,10 @@ const WINDOW: WindowId = WindowId(0);
 const CLICK_PAUSE: f64 = 1.0;
 const DRAG_STEPS: u8 = 8;
 const MAX_SCROLLS: usize = 100;
+const MAX_IDLE_FRAMES: usize = 2000;
 
 pub struct TestUiBuilder {
+    setup: Vec<Box<dyn FnOnce()>>,
     menus: Vec<Menu>,
     palette: Option<Palette>,
     fonts: Vec<Cow<'static, [u8]>>,
@@ -72,6 +76,7 @@ pub struct TestUiBuilder {
 impl Default for TestUiBuilder {
     fn default() -> Self {
         TestUiBuilder {
+            setup: Vec::new(),
             menus: Vec::new(),
             palette: None,
             fonts: Vec::new(),
@@ -85,6 +90,11 @@ impl Default for TestUiBuilder {
 }
 
 impl TestUiBuilder {
+    pub fn setup(mut self, setup: impl FnOnce() + 'static) -> Self {
+        self.setup.push(Box::new(setup));
+        self
+    }
+
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.size = Size::new(width, height);
         self
@@ -138,6 +148,9 @@ impl TestUiBuilder {
         let mut ui = Ui::with_input(self.size, input, self.fonts, || {
             if let Some(palette) = palette {
                 Theme::current().set(palette);
+            }
+            for setup in self.setup {
+                setup();
             }
             let (view, value) = root();
             extra = Some(value);
@@ -313,8 +326,12 @@ impl TestUi {
     }
 
     pub fn advance(&mut self, seconds: f64) -> bool {
+        self.advance_to(self.clock + seconds)
+    }
+
+    fn advance_to(&mut self, at: f64) -> bool {
         self.ui.flush();
-        self.clock += seconds;
+        self.clock = at;
         let changed = self.ui.update_at(self.clock);
         loop {
             let commands = self.ui.take_window_commands();
@@ -342,9 +359,26 @@ impl TestUi {
 
     pub fn run(&mut self, seconds: f64) {
         self.advance(0.0);
-        for _ in 0..(seconds / STEP).round() as usize {
+        self.advance_frames((seconds / STEP).round() as usize);
+    }
+
+    pub fn advance_frames(&mut self, frames: usize) {
+        for _ in 0..frames {
             self.advance(STEP);
         }
+    }
+
+    pub fn wait_for_idle(&mut self) -> Result<(), TestError> {
+        self.advance(0.0);
+        for _ in 0..MAX_IDLE_FRAMES {
+            let at = match self.ui.activity() {
+                Wake::Idle => return Ok(()),
+                Wake::At(at) if at > self.clock => at,
+                Wake::At(_) | Wake::Now => self.clock + STEP,
+            };
+            self.advance_to(at);
+        }
+        Err(TestError::NeverIdle(MAX_IDLE_FRAMES))
     }
 
     pub fn wait_until(&mut self, mut done: impl FnMut(&mut TestUi) -> bool) -> bool {
@@ -381,6 +415,7 @@ impl TestUi {
     }
 
     pub fn click_nth(&mut self, name: &str, index: usize) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         self.advance(0.0);
         let point = self.ui.bounds_of_all(name).get(index).map(Rect::center);
         let point = point.ok_or_else(|| TestError::NoTestId(format!("{name} #{index}")))?;
@@ -389,6 +424,7 @@ impl TestUi {
     }
 
     pub fn click_text(&mut self, needle: &str) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         self.advance(0.0);
         let point = self.ui.text_bounds(needle).map(|bounds| bounds.center());
         let point = point.ok_or_else(|| TestError::NoText(needle.to_owned()))?;
@@ -397,6 +433,7 @@ impl TestUi {
     }
 
     pub fn double_click_on(&mut self, name: &str) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         let point = self.center_of(name)?;
         self.press_pointer(point, PointerButton::Primary);
         self.ui.pointer_down(PointerButton::Primary);
@@ -406,6 +443,7 @@ impl TestUi {
     }
 
     pub fn right_click_on(&mut self, name: &str) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         let point = self.center_of(name)?;
         self.press_pointer(point, PointerButton::Secondary);
         Ok(())
@@ -422,6 +460,7 @@ impl TestUi {
     }
 
     pub fn hover_on(&mut self, name: &str) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         let point = self.center_of(name)?;
         self.settle_pointer(point);
         Ok(())
@@ -443,6 +482,7 @@ impl TestUi {
     }
 
     pub fn drag_on(&mut self, name: &str, to: Point) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         let from = self.center_of(name)?;
         self.drag_between(from, to);
         Ok(())
@@ -476,6 +516,7 @@ impl TestUi {
     }
 
     pub fn tap_on(&mut self, name: &str) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         let point = self.center_of(name)?;
         self.tap(point);
         Ok(())
@@ -488,6 +529,7 @@ impl TestUi {
     }
 
     pub fn scroll_on(&mut self, name: &str, delta: Point) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         let point = self.center_of(name)?;
         self.ui.pointer_moved(point);
         self.ui.scroll(delta);
@@ -515,6 +557,7 @@ impl TestUi {
     }
 
     pub fn drop_files_on(&mut self, name: &str, paths: Vec<PathBuf>) -> Result<(), TestError> {
+        self.wait_for_idle()?;
         let point = self.center_of(name)?;
         self.ui.pointer_moved(point);
         self.ui.file_drop(FileDropPhase::Hover, paths.clone());

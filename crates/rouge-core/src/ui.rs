@@ -435,19 +435,25 @@ impl Ui {
     }
 
     pub fn next_frame(&self) -> Wake {
+        let now = self.time();
+        self.pending()
+            .sooner(self.tree.caret_wake(now))
+            .sooner(self.tree.selection_wake(now))
+    }
+
+    pub fn activity(&self) -> Wake {
+        let rests = self.tree.layers.rests_at().map_or(Wake::Idle, Wake::At);
+        self.pending().sooner(rests)
+    }
+
+    fn pending(&self) -> Wake {
         if !self.queue.is_empty() || self.tree.dirty() != Dirty::None || self.following {
             return Wake::Now;
         }
-        let completions = self
-            .tree
+        self.tree
             .layers
             .completion_deadline()
-            .map_or(Wake::Idle, Wake::At);
-        let now = self.time();
-        self.tree
-            .caret_wake(now)
-            .sooner(completions)
-            .sooner(self.tree.selection_wake(now))
+            .map_or(Wake::Idle, Wake::At)
     }
 
     pub fn is_animating(&self) -> bool {
