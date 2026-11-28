@@ -52,7 +52,6 @@ fn main() -> ExitCode {
                 Release::new().release_plz(
                     ReleasePlz::new()
                         .publish_to_crates_io()
-                        .github_token()
                         .setup(install_system_libraries()),
                 ),
             )
