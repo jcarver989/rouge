@@ -7,6 +7,7 @@ use crate::event::{
 };
 use crate::keymap::Keymap;
 use crate::motion::UiContext;
+use crate::occlusion::Occlusions;
 use crate::presentation::{InputKind, Presentation, Presented, WidthClass};
 use crate::style::Dirty;
 use crate::text::TextSystem;
@@ -238,6 +239,7 @@ impl Ui {
                 let zoom = signal(1.0);
                 provide_context(Zoom(zoom));
                 provide_context(DeviceScale(device_scale.read_only()));
+                provide_context(Occlusions::new());
                 let modifiers = signal(Modifiers::NONE);
                 provide_context(HeldModifiers(modifiers.read_only()));
                 provide_context(UiContext::new(queue.clone()));
