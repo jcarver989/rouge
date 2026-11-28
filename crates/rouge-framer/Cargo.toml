@@ -10,7 +10,7 @@ keywords = ["rouge", "framer", "release", "publishing"]
 categories = ["development-tools::build-utils"]
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 cargo_metadata = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
 framer = "0.1.4"
