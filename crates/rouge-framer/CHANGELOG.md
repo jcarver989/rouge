@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jcarver989/rouge/compare/rouge-framer-v0.6.0...rouge-framer-v0.7.0) - 2026-11-28
+
+### Added
+
+- *(webview)* fade a page with page_opacity
+- *(framer)* generate the Android half of the web view engine
+
 ## [0.6.0](https://github.com/jcarver989/rouge/compare/rouge-framer-v0.5.0...rouge-framer-v0.6.0) - 2026-11-25
 
 ### Added

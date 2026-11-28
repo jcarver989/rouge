@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jcarver989/rouge/compare/rouge-render-v0.6.0...rouge-render-v0.7.0) - 2026-11-28
+
+### Added
+
+- *(render)* scale a Rect by a factor
+
+### Other
+
+- *(webview)* describe web views, their engines and their limits
+- *(render)* share draw geometry and recycle visible list uploads
+
 ## [0.6.0](https://github.com/jcarver989/rouge/compare/rouge-render-v0.5.0...rouge-render-v0.6.0) - 2026-11-25
 
 ### Added

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.6.0...rouge-widgets-v0.7.0) - 2026-11-28
+
+### Added
+
+- *(widgets)* grow a full-screen web_card as a container transform
+- *(widgets)* open a web_card's page full screen
+- *(widgets)* place popovers clear of occluded regions
+- *(widgets)* add web_card behind the webview feature
+
+### Other
+
+- *(webview)* describe web views, their engines and their limits
+
 ## [0.6.0](https://github.com/jcarver989/rouge/compare/rouge-widgets-v0.5.0...rouge-widgets-v0.6.0) - 2026-11-25
 
 ### Added

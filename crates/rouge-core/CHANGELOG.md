@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jcarver989/rouge/compare/rouge-core-v0.6.0...rouge-core-v0.7.0) - 2026-11-28
+
+### Added
+
+- *(core)* track window regions that rouge cannot draw over
+- *(core)* read a motion with value() to drive layout on every frame
+- *(core)* let tests wait for the ui to go idle
+- *(core)* [**breaking**] report an element's frame and corners in its paint region
+
+### Other
+
+- *(webview)* describe web views, their engines and their limits
+- *(core)* [**breaking**] cache the paint of each child of a large container
+- *(text)* reuse fitting label layouts and skip undecorated spans
+- *(core)* reconcile keyed fragment removals and reorders in bulk
+
 ## [0.6.0](https://github.com/jcarver989/rouge/compare/rouge-core-v0.5.0...rouge-core-v0.6.0) - 2026-11-25
 
 ### Added
