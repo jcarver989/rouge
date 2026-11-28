@@ -65,6 +65,34 @@ fn animate_to_runs_in_the_compositor_and_can_be_sampled_and_awaited() -> TestRes
 }
 
 #[test]
+fn a_motion_read_with_value_drives_layout_on_every_frame() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let (mut ui, width) = TestUiBuilder::default().size(200.0, 100.0).build_with(|| {
+        let width = motion(20.0);
+        let bar = view! { <div test_id="bar" h=10.0 w={move || width.value()}/> };
+        (bar, width)
+    });
+    assert_eq!(ui.rect_of("bar")?.size.width, 20.0);
+    assert_eq!(ui.next_frame(), Wake::Idle);
+    drop(width.animate_to(120.0, LINEAR));
+    ui.run(0.5);
+    let halfway = ui.rect_of("bar")?.size.width;
+    assert!(
+        (halfway - 70.0).abs() < 1.0,
+        "laid out part of the way: {halfway}"
+    );
+    assert_eq!(
+        ui.next_frame(),
+        Wake::Now,
+        "nothing draws with this motion, but its reader must see every frame"
+    );
+    ui.wait_for_idle()?;
+    assert_eq!(ui.rect_of("bar")?.size.width, 120.0);
+    assert_eq!(ui.next_frame(), Wake::Idle, "idle once settled");
+    Ok(())
+}
+
+#[test]
 fn stop_and_retarget_interrupt_a_running_animation() -> TestResult {
     let _rt = Runtime::new().enter();
     let (mut ui, x) = moving_box(0.0);

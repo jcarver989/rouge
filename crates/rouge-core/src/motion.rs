@@ -3,7 +3,7 @@ use crate::compositor::MotionId;
 use crate::prop::PropFrom;
 use crate::view::{Patch, Queue};
 use rouge_reactive::{Signal, expect_context, on_cleanup, signal};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -49,12 +49,14 @@ pub(crate) enum MotionOp {
         done: Completion,
     },
     Stop,
+    Follow,
     Remove,
 }
 
 struct Shared {
     value: Signal<f32>,
     queue: Queue,
+    followed: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,7 +75,11 @@ pub fn motion(initial: f32) -> Motion {
     on_cleanup(move || removed.push(Patch::Motion(id, MotionOp::Remove)));
     Motion {
         id,
-        shared: signal(Shared { value, queue }),
+        shared: signal(Shared {
+            value,
+            queue,
+            followed: Cell::new(false),
+        }),
     }
 }
 
@@ -101,6 +107,19 @@ impl Motion {
         }
         self.shared
             .with_untracked(|shared| shared.value.get_untracked())
+    }
+
+    pub fn value(&self) -> f32 {
+        if !self.shared.is_alive() {
+            return 0.0;
+        }
+        let id = self.id;
+        self.shared.with_untracked(|shared| {
+            if !shared.followed.replace(true) {
+                shared.queue.push(Patch::Motion(id, MotionOp::Follow));
+            }
+            shared.value.get()
+        })
     }
 
     pub fn set(&self, value: f32) {

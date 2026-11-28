@@ -185,9 +185,16 @@ impl Tree {
                 done,
             } => layers.decay_motion(id, velocity, decay, done),
             MotionOp::Stop => layers.stop_motion(id),
+            MotionOp::Follow => {
+                if !self.followed.contains(&id) {
+                    self.followed.push(id);
+                }
+                return;
+            }
             MotionOp::Remove => {
                 layers.remove_motion(id);
                 self.motions.remove(&id);
+                self.followed.retain(|followed| *followed != id);
             }
         }
         self.mark(Dirty::Composite);

@@ -29,7 +29,9 @@ impl Tree {
     }
 
     pub(crate) fn following(&self) -> bool {
-        self.layers.is_animating() && self.observers.iter().any(|id| self.follows(*id))
+        self.layers.is_animating()
+            && (self.followed.iter().any(|id| self.layers.is_moving(*id))
+                || self.observers.iter().any(|id| self.follows(*id)))
     }
 
     pub(crate) fn publish_motions(&self) {
