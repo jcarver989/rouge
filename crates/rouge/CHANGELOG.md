@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/jcarver989/rouge/compare/rouge-v0.6.0...rouge-v0.7.0) - 2026-11-28
+
+### Added
+
+- *(webview)* add exclusive web views and pages laid out at a fixed size
+- *(rouge)* install the window's web engine behind the webview feature
+
+### Other
+
+- *(webview)* describe web views, their engines and their limits
+
 ## [0.6.0](https://github.com/jcarver989/rouge/compare/rouge-v0.5.0...rouge-v0.6.0) - 2026-11-25
 
 ### Added
