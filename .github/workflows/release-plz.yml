@@ -23,8 +23,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@v2
-      - name: Install Fontconfig development files
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Fontconfig and WebKitGTK development files
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwebkit2gtk-4.1-dev
       - name: Authenticate with crates.io
         id: crates-io-auth
         uses: rust-lang/crates-io-auth-action@v1
@@ -51,8 +51,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@v2
-      - name: Install Fontconfig development files
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Fontconfig and WebKitGTK development files
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwebkit2gtk-4.1-dev
       - name: Run release-plz release-pr
         uses: release-plz/action@v0.5.148
         with:

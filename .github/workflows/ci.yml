@@ -32,11 +32,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install Fontconfig development files
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Fontconfig and WebKitGTK development files
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwebkit2gtk-4.1-dev
       - name: Install Vulkan software rendering
         if: github.job == 'test' && runner.os == 'Linux'
         run: sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+      - name: Start a virtual X display
+        if: github.job == 'test' && runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb && (Xvfb :99 -screen 0 1280x1024x24 &) && echo "DISPLAY=:99" >> "$GITHUB_ENV"
       - run: mise run lint
   test:
     name: Test
@@ -51,11 +54,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install Fontconfig development files
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Fontconfig and WebKitGTK development files
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwebkit2gtk-4.1-dev
       - name: Install Vulkan software rendering
         if: github.job == 'test' && runner.os == 'Linux'
         run: sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+      - name: Start a virtual X display
+        if: github.job == 'test' && runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb && (Xvfb :99 -screen 0 1280x1024x24 &) && echo "DISPLAY=:99" >> "$GITHUB_ENV"
       - run: mise run test-ci
       - name: Upload test results
         if: always()
@@ -77,11 +83,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install Fontconfig development files
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+      - name: Install Fontconfig and WebKitGTK development files
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwebkit2gtk-4.1-dev
       - name: Install Vulkan software rendering
         if: github.job == 'test' && runner.os == 'Linux'
         run: sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+      - name: Start a virtual X display
+        if: github.job == 'test' && runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb && (Xvfb :99 -screen 0 1280x1024x24 &) && echo "DISPLAY=:99" >> "$GITHUB_ENV"
       - run: mise run doc-check
   framer:
     name: Generated files

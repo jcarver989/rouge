@@ -12,8 +12,12 @@ fn main() {}
 mod documents;
 
 #[cfg(target_os = "linux")]
+mod harness;
+
+#[cfg(target_os = "linux")]
 mod linux {
     use super::documents::{ANNOUNCES, AWKWARD, ECHOES, echo};
+    use super::harness;
     use gdkx11::X11Window;
     use glib::object::Cast;
     use gtk::prelude::{GtkWindowExt, WidgetExt};
@@ -24,7 +28,6 @@ mod linux {
     use rouge_core::{Styled, div, view};
     use rouge_reactive::{Runtime, Scope, Signal, signal};
     use rouge_webview::{SystemEngine, WebContent, provide_web_engine, web_page, web_view};
-    use std::env::args;
     use std::error::Error;
     use std::os::raw::c_ulong;
     use std::thread::sleep;
@@ -46,14 +49,7 @@ mod linux {
                 a_posted_message_reaches_the_page_as_it_was_written,
             ),
         ];
-        let filter = args().nth(1).filter(|arg| !arg.starts_with('-'));
-        for (name, test) in tests {
-            if filter
-                .as_deref()
-                .is_some_and(|filter| !name.contains(filter))
-            {
-                continue;
-            }
+        for (name, test) in harness::selected(&tests) {
             test()?;
             println!("test {name} ... ok");
         }

@@ -17,6 +17,8 @@ const ALLOWED_PEDANTIC_LINTS: [&str; 8] = [
     "unreadable_literal",
 ];
 
+const TEST_ON_LINUX: &str = "github.job == 'test' && runner.os == 'Linux'";
+
 fn main() -> ExitCode {
     let mut project = Project::new();
     project.apply(
@@ -32,17 +34,26 @@ fn main() -> ExitCode {
                     .members(["crates/*", "crates/rouge-framer/tests/fixtures/mobile"]),
             )
             .tools(Tools::new().mise_toml())
-            .ci(Ci::new().setup(install_fontconfig()).setup(
-                Step::run("sudo apt-get install -y libvulkan1 mesa-vulkan-drivers")
-                    .name("Install Vulkan software rendering")
-                    .condition("github.job == 'test' && runner.os == 'Linux'"),
-            ))
+            .ci(Ci::new()
+                .setup(install_system_libraries())
+                .setup(
+                    Step::run("sudo apt-get install -y libvulkan1 mesa-vulkan-drivers")
+                        .name("Install Vulkan software rendering")
+                        .condition(TEST_ON_LINUX),
+                )
+                .setup(
+                    Step::run(
+                        "sudo apt-get install -y xvfb && (Xvfb :99 -screen 0 1280x1024x24 &) && echo \"DISPLAY=:99\" >> \"$GITHUB_ENV\"",
+                    )
+                    .name("Start a virtual X display")
+                    .condition(TEST_ON_LINUX),
+                ))
             .release(
                 Release::new().release_plz(
                     ReleasePlz::new()
                         .publish_to_crates_io()
                         .github_token()
-                        .setup(install_fontconfig()),
+                        .setup(install_system_libraries()),
                 ),
             )
             .without_conventions(),
@@ -62,7 +73,9 @@ fn main() -> ExitCode {
     project.synth()
 }
 
-fn install_fontconfig() -> Step {
-    Step::run("sudo apt-get update && sudo apt-get install -y libfontconfig-dev")
-        .name("Install Fontconfig development files")
+fn install_system_libraries() -> Step {
+    Step::run(
+        "sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwebkit2gtk-4.1-dev",
+    )
+    .name("Install Fontconfig and WebKitGTK development files")
 }

@@ -12,8 +12,12 @@ fn main() {}
 mod documents;
 
 #[cfg(target_os = "macos")]
+mod harness;
+
+#[cfg(target_os = "macos")]
 mod macos {
     use super::documents::{ANNOUNCES, AWKWARD, ECHOES, echo};
+    use super::harness;
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{NSApplication, NSView};
@@ -26,7 +30,6 @@ mod macos {
         EnginePage, PageCommand, Placement, SystemEngine, WebContent, WebEngine, WebViewEvent,
         WebViewEvents, WebViewOptions,
     };
-    use std::env::args;
     use std::error::Error;
     use std::ptr::NonNull;
     use std::sync::mpsc::{Receiver, channel};
@@ -63,14 +66,7 @@ mod macos {
                 a_page_scaled_at_one_layout_size_is_never_resized,
             ),
         ];
-        let filter = args().nth(1).filter(|arg| !arg.starts_with('-'));
-        for (name, test) in tests {
-            if filter
-                .as_deref()
-                .is_some_and(|filter| !name.contains(filter))
-            {
-                continue;
-            }
+        for (name, test) in harness::selected(&tests) {
             test(mtm)?;
             println!("test {name} ... ok");
         }
