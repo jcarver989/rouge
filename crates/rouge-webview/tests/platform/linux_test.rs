@@ -9,7 +9,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn main() {}
 
 #[cfg(target_os = "linux")]
+mod documents;
+
+#[cfg(target_os = "linux")]
 mod linux {
+    use super::documents::{ANNOUNCES, AWKWARD, ECHOES, echo};
     use gdkx11::X11Window;
     use glib::object::Cast;
     use gtk::prelude::{GtkWindowExt, WidgetExt};
@@ -29,11 +33,6 @@ mod linux {
     type TestResult = Result<(), Box<dyn Error>>;
     type Test = fn() -> TestResult;
 
-    const ANNOUNCES: &str = "<script>parent.postMessage('loaded', '*')</script>";
-    const ECHOES: &str = "<script>addEventListener('message', (event) => {\
-                          if (!event.source) parent.postMessage('echo ' + event.data, '*');\
-                          });parent.postMessage('ready', '*')</script>";
-    const AWKWARD: &str = "she said \"</script>\" \\ and\nleft\u{2028}";
     const PATIENCE: Duration = Duration::from_secs(30);
 
     pub(super) fn run() -> TestResult {
@@ -105,10 +104,7 @@ mod linux {
         until(&mut ui, || heard.with(Vec::len) == 1)?;
         page.post_message(AWKWARD);
         until(&mut ui, || heard.with(Vec::len) == 2)?;
-        assert_eq!(
-            heard.get(),
-            vec!["ready".to_owned(), format!("echo {AWKWARD}")]
-        );
+        assert_eq!(heard.get(), vec!["ready".to_owned(), echo()]);
         Ok(())
     }
 

@@ -9,7 +9,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn main() {}
 
 #[cfg(target_os = "macos")]
+mod documents;
+
+#[cfg(target_os = "macos")]
 mod macos {
+    use super::documents::{ANNOUNCES, AWKWARD, ECHOES, echo};
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{NSApplication, NSView};
@@ -17,9 +21,10 @@ mod macos {
     use raw_window_handle::{
         AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle,
     };
+    use rouge_core::Rect;
     use rouge_webview::{
-        EnginePage, PageCommand, SystemEngine, WebContent, WebEngine, WebViewEvent, WebViewEvents,
-        WebViewOptions,
+        EnginePage, PageCommand, Placement, SystemEngine, WebContent, WebEngine, WebViewEvent,
+        WebViewEvents, WebViewOptions,
     };
     use std::env::args;
     use std::error::Error;
@@ -29,18 +34,18 @@ mod macos {
     type TestResult = Result<(), Box<dyn Error>>;
     type Test = fn(MainThreadMarker) -> TestResult;
 
-    const ANNOUNCES: &str = "<script>parent.postMessage('loaded', '*')</script>";
-    const ECHOES: &str = "<script>addEventListener('message', (event) => {\
-                          if (!event.source) parent.postMessage('echo ' + event.data, '*');\
-                          });parent.postMessage('ready', '*')</script>";
-    const AWKWARD: &str = "she said \"</script>\" \\ and\nleft\u{2028}";
+    const MEASURES: &str = "<script>const size = () => innerWidth + ' by ' + innerHeight;\
+                            addEventListener('resize', () => parent.postMessage('resized to ' + size(), '*'));\
+                            addEventListener('message', (event) => {\
+                            if (!event.source) parent.postMessage(size(), '*');\
+                            });parent.postMessage(size(), '*')</script>";
     const THROWS: &str = "<script>addEventListener('error', (event) => parent.postMessage(event.message, '*'))</script>\
                           <script>null.missing</script>";
 
     pub(super) fn run() -> TestResult {
         let mtm = MainThreadMarker::new().ok_or("the engine test runs on the main thread")?;
         let _app = NSApplication::sharedApplication(mtm);
-        let tests: [(&str, Test); 3] = [
+        let tests: [(&str, Test); 4] = [
             (
                 "an_inline_page_runs_again_when_reloaded",
                 an_inline_page_runs_again_when_reloaded,
@@ -52,6 +57,10 @@ mod macos {
             (
                 "a_posted_message_reaches_the_page_as_it_was_written",
                 a_posted_message_reaches_the_page_as_it_was_written,
+            ),
+            (
+                "a_page_scaled_at_one_layout_size_is_never_resized",
+                a_page_scaled_at_one_layout_size_is_never_resized,
             ),
         ];
         let filter = args().nth(1).filter(|arg| !arg.starts_with('-'));
@@ -96,7 +105,47 @@ mod macos {
             .apply(PageCommand::Load(WebContent::html(ECHOES)));
         assert_eq!(stage.message(), "ready");
         stage.page.apply(PageCommand::Post(AWKWARD.into()));
-        assert_eq!(stage.message(), format!("echo {AWKWARD}"));
+        assert_eq!(stage.message(), echo());
+        Ok(())
+    }
+
+    fn a_page_scaled_at_one_layout_size_is_never_resized(mtm: MainThreadMarker) -> TestResult {
+        let mut stage = Stage::open(mtm)?;
+        let place = |stage: &mut Stage, width: f32, height: f32| {
+            let frame = Rect::new(20.0, 30.0, width, 600.0 * width / 900.0);
+            stage.page.apply(PageCommand::Place(Placement {
+                frame,
+                clip: Rect::new(20.0, 30.0, width, height),
+                page_zoom: width / 900.0,
+                device_scale: 2.0,
+                interactive: true,
+                ..Placement::default()
+            }));
+        };
+        place(&mut stage, 300.0, 169.0);
+        stage
+            .page
+            .apply(PageCommand::Load(WebContent::html(MEASURES)));
+        assert_eq!(stage.message(), "900 by 600");
+        for (width, height) in [(451.0, 277.0), (743.0, 512.0), (900.0, 600.0)] {
+            place(&mut stage, width, height);
+        }
+        stage.page.apply(PageCommand::Post("measure".into()));
+        assert_eq!(
+            stage.message(),
+            "900 by 600",
+            "the page heard a resize, or changed size, while its frame grew"
+        );
+        place(&mut stage, 450.0, 300.0);
+        stage.page.apply(PageCommand::Place(Placement {
+            frame: Rect::new(0.0, 0.0, 450.0, 300.0),
+            clip: Rect::new(0.0, 0.0, 450.0, 300.0),
+            page_zoom: 1.0,
+            device_scale: 2.0,
+            interactive: true,
+            ..Placement::default()
+        }));
+        assert_eq!(stage.message(), "resized to 450 by 300");
         Ok(())
     }
 

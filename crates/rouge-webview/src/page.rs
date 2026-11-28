@@ -3,9 +3,9 @@ use crate::engine::{
     EnginePage, PageCommand, Placement, WebEngine, WebViewEvent, WebViewEvents, WebViewOptions,
 };
 use crate::error::WebViewError;
-use rouge_reactive::{
-    Callback, ReadSignal, Signal, Stored, effect, on_cleanup, signal, stored, use_context, watch,
-};
+use crate::mounts::Presentation;
+use rouge_core::Rect;
+use rouge_reactive::{Callback, ReadSignal, Signal, Stored, effect, signal, stored, use_context};
 use std::mem::take;
 use std::rc::Rc;
 
@@ -75,8 +75,7 @@ impl WebViewOptions {
                 error,
                 content,
                 on_message: Callback::default(),
-                mounts: Vec::new(),
-                mounted: 0,
+                presentation: None,
             }),
             state: signal(PageState::default()),
         };
@@ -137,16 +136,21 @@ impl WebPage {
         self.send(PageCommand::Post(message.into()));
     }
 
-    pub(crate) fn attach(self, placement: impl Fn() -> Placement + 'static) {
-        let Some(mount) = self.with_inner(Inner::mount) else {
-            return;
-        };
-        on_cleanup(move || {
-            self.with_inner(|inner| inner.unmount(mount));
+    pub(crate) fn attach(self, exclusive: bool, request: impl Fn() -> (Placement, Rect) + 'static) {
+        let id = self.state.id();
+        let mounts = self.with_inner(|inner| {
+            inner
+                .presentation
+                .get_or_insert_with(|| {
+                    Presentation::new(id, move |placement| {
+                        self.send(PageCommand::Place(placement));
+                    })
+                })
+                .mounts
         });
-        watch(placement, move |placed, _| {
-            self.with_inner(|inner| inner.place(mount, *placed));
-        });
+        if let Some(mounts) = mounts {
+            mounts.attach(id, exclusive, request);
+        }
     }
 
     fn send(self, command: PageCommand) {
@@ -174,45 +178,7 @@ struct Inner {
     error: Option<WebViewError>,
     content: WebContent,
     on_message: Callback<(String,)>,
-    mounts: Vec<Mount>,
-    mounted: u64,
-}
-
-struct Mount {
-    id: u64,
-    placement: Placement,
-}
-
-impl Inner {
-    fn mount(&mut self) -> u64 {
-        self.mounted += 1;
-        self.mounts.push(Mount {
-            id: self.mounted,
-            placement: Placement::default(),
-        });
-        self.mounted
-    }
-
-    fn place(&mut self, id: u64, placement: Placement) {
-        let Some(index) = self.mounts.iter().position(|mount| mount.id == id) else {
-            return;
-        };
-        self.mounts[index].placement = placement;
-        if index + 1 == self.mounts.len() {
-            self.native.apply(PageCommand::Place(placement));
-        }
-    }
-
-    fn unmount(&mut self, id: u64) {
-        let Some(index) = self.mounts.iter().position(|mount| mount.id == id) else {
-            return;
-        };
-        self.mounts.remove(index);
-        if index == self.mounts.len() {
-            let shown = self.mounts.last().map_or_default(|mount| mount.placement);
-            self.native.apply(PageCommand::Place(shown));
-        }
-    }
+    presentation: Option<Presentation>,
 }
 
 struct Closed;

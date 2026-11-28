@@ -4,7 +4,7 @@ use crate::engine::Layout;
 use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSResponder, NSView};
-use objc2_core_foundation::{CGFloat, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use raw_window_handle::RawWindowHandle;
 use std::cell::Cell;
 use std::ptr::null_mut;
@@ -44,26 +44,32 @@ define_class!(
     }
 );
 
+impl Container {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Cell::new(true));
+        // SAFETY: NSView's designated initializer, on the main thread.
+        unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] }
+    }
+}
+
 pub(super) struct Clip {
     parent: Retained<NSView>,
     container: Retained<Container>,
-    zoom: Cell<f32>,
+    scaled: Retained<Container>,
 }
 
 impl Clip {
     pub(super) fn new(mtm: MainThreadMarker, parent: Retained<View>, web: &WebKitView) -> Self {
-        let container = Container::alloc(mtm).set_ivars(Cell::new(true));
-        // SAFETY: NSView's designated initializer, on the main thread.
-        let container: Retained<Container> =
-            unsafe { msg_send![super(container), initWithFrame: CGRect::ZERO] };
+        let (container, scaled) = (Container::new(mtm), Container::new(mtm));
         container.setWantsLayer(true);
         container.setHidden(true);
-        container.addSubview(web);
+        scaled.addSubview(web);
+        container.addSubview(&scaled);
         parent.addSubview(&container);
         Clip {
             parent,
             container,
-            zoom: Cell::new(1.0),
+            scaled,
         }
     }
 
@@ -73,6 +79,7 @@ impl Clip {
 
     pub(super) fn set_interactive(&self, _web: &WebKitView, interactive: bool) {
         self.container.ivars().set(interactive);
+        self.scaled.ivars().set(interactive);
         if !interactive && let Some(window) = self.parent.window() {
             window.makeFirstResponder(Some(&self.parent));
         }
@@ -90,13 +97,25 @@ impl Clip {
             CGPoint::new(f64::from(clip.origin.x), top),
             CGSize::new(f64::from(clip.size.width), f64::from(clip.size.height)),
         ));
-        web.setFrame(CGRect::new(
-            CGPoint::new(f64::from(page.origin.x), f64::from(page.origin.y)),
-            CGSize::new(f64::from(page.size.width), f64::from(page.size.height)),
-        ));
-        if self.zoom.replace(layout.zoom) != layout.zoom {
-            web.set_page_zoom(CGFloat::from(layout.zoom));
+        let zoom = f64::from(layout.zoom);
+        let (shown, unzoomed) = (
+            CGSize::new(f64::from(clip.size.width), f64::from(clip.size.height)),
+            CGSize::new(
+                f64::from(layout.unzoomed.width),
+                f64::from(layout.unzoomed.height),
+            ),
+        );
+        self.scaled.setFrame(CGRect::new(CGPoint::ZERO, shown));
+        self.scaled
+            .setBoundsSize(CGSize::new(shown.width / zoom, shown.height / zoom));
+        let origin = CGPoint::new(
+            f64::from(page.origin.x) / zoom,
+            f64::from(page.origin.y) / zoom,
+        );
+        if web.frame().size != unzoomed {
+            web.setFrameSize(unzoomed);
         }
+        web.setFrameOrigin(origin);
         if let Some(layer) = self.container.layer() {
             round(&layer, layout.corners);
         }

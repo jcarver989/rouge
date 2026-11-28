@@ -4,8 +4,6 @@ use block2::DynBlock;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject, Sel};
 use objc2::{MainThreadOnly, extern_class, extern_methods};
-#[cfg(target_os = "macos")]
-use objc2_core_foundation::CGFloat;
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSDictionary, NSError, NSString, NSURL, NSURLRequest};
 use objc2_web_kit::{WKContentWorld, WKWebViewConfiguration};
@@ -85,10 +83,6 @@ impl WebKitView {
 
         #[unsafe(method(canGoForward))]
         pub(in crate::platform::apple) fn can_go_forward(&self) -> bool;
-
-        #[cfg(target_os = "macos")]
-        #[unsafe(method(setPageZoom:))]
-        pub(in crate::platform::apple) fn set_page_zoom(&self, zoom: CGFloat);
 
         #[cfg(target_os = "ios")]
         #[unsafe(method(endEditing:))]

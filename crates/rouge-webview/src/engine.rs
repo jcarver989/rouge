@@ -30,20 +30,42 @@ pub struct Layout {
     pub interactive: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PageScale {
+    Zoom(f32),
+    Fit(Size),
+}
+
 impl Placement {
     pub fn from_region(
         region: &PaintRegion,
         window_zoom: f32,
         device_scale: f32,
-        page_zoom: f32,
+        scale: PageScale,
         interactive: bool,
     ) -> Self {
+        let frame = region.frame.scale(window_zoom);
+        let (frame, page_zoom) = match scale {
+            PageScale::Zoom(zoom) => (frame, zoom * window_zoom),
+            PageScale::Fit(size) if size.width > 0.0 => {
+                let zoom = frame.size.width / size.width;
+                let fitted = Size::new(frame.size.width, size.height * zoom);
+                (
+                    Rect {
+                        origin: frame.origin,
+                        size: fitted,
+                    },
+                    zoom,
+                )
+            }
+            PageScale::Fit(_) => (frame, window_zoom),
+        };
         Placement {
-            frame: region.frame.scale(window_zoom),
+            frame,
             clip: region.bounds.scale(window_zoom),
             corners: region.corners.map(|radius| radius * window_zoom),
             device_scale,
-            page_zoom: page_zoom * window_zoom,
+            page_zoom,
             interactive,
         }
     }
@@ -69,7 +91,10 @@ impl Placement {
         self.visible().then(|| Layout {
             clip: clip.scale(unit),
             page,
-            unzoomed: Size::new(page.size.width / zoom, page.size.height / zoom),
+            unzoomed: Size::new(
+                (page.size.width / zoom).round(),
+                (page.size.height / zoom).round(),
+            ),
             corners: Corners {
                 top_left: keep(left && top, self.corners.top_left),
                 top_right: keep(right && top, self.corners.top_right),

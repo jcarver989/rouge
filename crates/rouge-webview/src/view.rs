@@ -1,10 +1,10 @@
-use crate::engine::Placement;
+use crate::engine::{PageScale, Placement};
 use crate::error::WebViewError;
 use crate::page::WebPage;
 use rouge_core::access::Role;
 use rouge_core::{
-    AnyView, BuildCx, DelegateStyle, Div, FocusHandle, IntoProp, PaintRegion, Prop, Styled, View,
-    component, device_scale, div, zoom,
+    AnyView, BuildCx, DelegateStyle, Div, FocusHandle, IntoProp, PaintRegion, Prop, Size, Styled,
+    View, component, device_scale, div, zoom,
 };
 use rouge_reactive::signal;
 
@@ -15,6 +15,8 @@ pub struct WebView {
     page: WebPage,
     interactive: Prop<bool>,
     page_zoom: Prop<f32>,
+    page_size: Option<Prop<Size>>,
+    exclusive: bool,
     fallback: Option<Fallback>,
 }
 
@@ -25,6 +27,8 @@ pub fn web_view(page: WebPage) -> WebView {
         page,
         interactive: Prop::Static(true),
         page_zoom: Prop::Static(1.0),
+        page_size: None,
+        exclusive: false,
         fallback: None,
     }
 }
@@ -37,6 +41,16 @@ impl WebView {
 
     pub fn page_zoom<T>(mut self, zoom: impl IntoProp<f32, T>) -> Self {
         self.page_zoom = zoom.into_prop();
+        self
+    }
+
+    pub fn page_size<T>(mut self, size: impl IntoProp<Size, T>) -> Self {
+        self.page_size = Some(size.into_prop());
+        self
+    }
+
+    pub fn exclusive(mut self) -> Self {
+        self.exclusive = true;
         self
     }
 
@@ -78,15 +92,19 @@ impl View for WebView {
         }
         let region = signal(PaintRegion::default());
         let (window_zoom, device_scale) = (zoom(), device_scale());
-        page.attach(move || {
+        page.attach(self.exclusive, move || {
             region.with(|region| {
-                Placement::from_region(
+                let placement = Placement::from_region(
                     region,
                     window_zoom.get(),
                     device_scale.get(),
-                    self.page_zoom.get(),
+                    match &self.page_size {
+                        Some(size) => PageScale::Fit(size.get()),
+                        None => PageScale::Zoom(self.page_zoom.get()),
+                    },
                     self.interactive.get(),
-                )
+                );
+                (placement, region.bounds)
             })
         });
         self.div.track_paint_region(region).build(cx);

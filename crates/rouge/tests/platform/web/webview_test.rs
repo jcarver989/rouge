@@ -47,13 +47,12 @@ async fn a_web_view_is_an_iframe_over_the_canvas_that_talks_to_the_app() -> Resu
         )
         .run()
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    let canvas = drawn(&document, &host, "web view").await?;
+    let canvas = drawn(&document, &host, "echo hello").await?;
     let frame: HtmlElement = host
         .query_selector("iframe")?
         .ok_or("no iframe beside the canvas")?
         .dyn_into()?;
     let clip: Element = frame.parent_element().ok_or("no clip around the iframe")?;
-    until("the page's echo", || document.title() == "echo hello").await?;
     let (origin, placed) = (
         canvas.get_bounding_client_rect(),
         clip.get_bounding_client_rect(),

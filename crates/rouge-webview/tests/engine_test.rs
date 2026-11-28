@@ -1,5 +1,5 @@
 use rouge_core::{Corners, PaintRegion, Rect, Size};
-use rouge_webview::{Placement, WebContent};
+use rouge_webview::{PageScale, Placement, WebContent};
 
 #[test]
 fn a_layout_is_the_clip_with_the_page_inside_it_and_only_the_corners_in_view_round()
@@ -48,7 +48,7 @@ fn a_placement_is_its_paint_region_in_window_points() {
         ..PaintRegion::default()
     };
     assert_eq!(
-        Placement::from_region(&region, 2.0, 3.0, 0.5, true),
+        Placement::from_region(&region, 2.0, 3.0, PageScale::Zoom(0.5), true),
         Placement {
             frame: Rect::new(20.0, 40.0, 400.0, 200.0),
             clip: Rect::new(20.0, 40.0, 400.0, 120.0),
@@ -58,6 +58,32 @@ fn a_placement_is_its_paint_region_in_window_points() {
             interactive: true,
         }
     );
+}
+
+#[test]
+fn a_page_fitted_to_a_size_keeps_that_layout_size_whatever_its_frame() -> Result<(), &'static str> {
+    let fitted = Size::new(900.0, 600.0);
+    for (width, height) in [
+        (300.0, 169.0),
+        (451.0, 277.0),
+        (743.0, 512.0),
+        (900.0, 600.0),
+    ] {
+        let region = PaintRegion {
+            frame: Rect::new(40.0, 50.0, width, 900.0),
+            bounds: Rect::new(40.0, 50.0, width, height),
+            ..PaintRegion::default()
+        };
+        let placement = Placement::from_region(&region, 1.0, 2.0, PageScale::Fit(fitted), true);
+        assert_eq!(placement.page_zoom, width / 900.0);
+        assert_eq!(placement.clip.size, Size::new(width, height));
+        let layout = placement.layout(1.0).ok_or("a visible page has a layout")?;
+        assert_eq!(
+            layout.unzoomed, fitted,
+            "the web view would resize at {width} wide"
+        );
+    }
+    Ok(())
 }
 
 #[test]

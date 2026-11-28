@@ -1,6 +1,7 @@
 use crate::content::WebContent;
 use crate::engine::{
     EnginePage, PageCommand, Placement, WebEngine, WebViewEvent, WebViewEvents, WebViewOptions,
+    provide_web_engine,
 };
 use crate::error::WebViewError;
 use std::cell::{Cell, RefCell};
@@ -25,6 +26,11 @@ pub struct FakeEngine(Rc<RefCell<State>>);
 impl FakeEngine {
     pub fn new() -> Self {
         FakeEngine::default()
+    }
+
+    pub fn install(&self) -> impl FnOnce() + 'static {
+        let engine = self.clone();
+        move || provide_web_engine(engine)
     }
 
     pub fn failing(self, error: WebViewError) -> Self {
