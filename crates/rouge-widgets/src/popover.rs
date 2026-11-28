@@ -8,7 +8,8 @@ use rouge_core::component;
 use rouge_core::view;
 use rouge_core::{
     AnyView, BuildCx, Chord, DelegateStyle, Div, IntoChord, Key, Point, PointerEvent, Pose, Rect,
-    Size, Styled, View, div, dynamic, overlay, presentation, scroll, show, text, window_size,
+    Size, Styled, View, div, dynamic, occlusions, overlay, presentation, scroll, show, text,
+    window_size,
 };
 use rouge_reactive::{Signal, Task, memo, on_cleanup, signal, sleep, spawn};
 use std::cell::Cell;
@@ -45,12 +46,44 @@ impl Placement {
         )
     }
 
+    fn fallbacks(self) -> [Placement; 4] {
+        match self {
+            Placement::Below => [Self::Below, Self::Above, Self::Right, Self::Left],
+            Placement::Above => [Self::Above, Self::Below, Self::Right, Self::Left],
+            Placement::Right => [Self::Right, Self::Left, Self::Below, Self::Above],
+            Placement::Left => [Self::Left, Self::Right, Self::Below, Self::Above],
+        }
+    }
+
     fn place_near(self, panel: Div, anchor: impl Fn() -> Rect + 'static, gap: f32) -> Div {
         let window = window_size();
         let measured = signal(Size::ZERO);
-        let space = memo(move || PlacementSpace::new(self, anchor(), window.get(), gap));
+        let anchor = memo(anchor);
+        let space = memo(move || PlacementSpace::new(self, anchor.get(), window.get(), gap));
         let limit = memo(move || space.get().limit());
-        let position = memo(move || space.get().position(measured.get()));
+        let position = memo(move || {
+            let (size, window) = (measured.get(), window.get());
+            let preferred = space.get().position(size);
+            let covered = occlusions();
+            let clear = |origin: Point| {
+                let panel = Rect { origin, size };
+                covered.iter().all(|page| panel.intersect(page).is_empty())
+            };
+            if clear(preferred) {
+                return preferred;
+            }
+            let inside = |origin: Point| {
+                origin.x >= 0.0
+                    && origin.y >= 0.0
+                    && origin.x + size.width <= window.width
+                    && origin.y + size.height <= window.height
+            };
+            self.fallbacks()
+                .into_iter()
+                .map(|side| PlacementSpace::new(side, anchor.get(), window, gap).on_side(size))
+                .find(|origin| inside(*origin) && clear(*origin))
+                .unwrap_or(preferred)
+        });
         panel
             .absolute()
             .max_w(move || limit.get().width)
@@ -123,16 +156,29 @@ impl PlacementSpace {
     }
 
     fn position(self, size: Size) -> Point {
-        let (main_size, cross_size) = if self.horizontal {
-            (size.width, size.height)
+        let main_size = if self.horizontal {
+            size.width
         } else {
-            (size.height, size.width)
+            size.height
         };
         let after_space = self.main_extent - self.after;
         let use_after = if self.prefer_after {
             main_size <= after_space || after_space >= self.before
         } else {
             main_size > self.before && after_space > self.before
+        };
+        self.place(size, use_after)
+    }
+
+    fn on_side(self, size: Size) -> Point {
+        self.place(size, self.prefer_after)
+    }
+
+    fn place(self, size: Size, use_after: bool) -> Point {
+        let (main_size, cross_size) = if self.horizontal {
+            (size.width, size.height)
+        } else {
+            (size.height, size.width)
         };
         let main = if use_after {
             self.after
