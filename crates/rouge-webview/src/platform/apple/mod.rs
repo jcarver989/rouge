@@ -70,7 +70,7 @@ impl Page {
                 .set_interactive(self.web.view(), placement.interactive);
         }
         match placement.layout(1.0) {
-            Some(layout) => self.clip.place(self.web.view(), &layout),
+            Some(layout) => self.clip.place(self.web.view(), &layout, placement.opacity),
             None => self.clip.hide(),
         }
     }

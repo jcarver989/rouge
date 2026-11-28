@@ -8,7 +8,7 @@ bind_java_type! {
     methods {
         fn load_url(url: JString),
         fn load_html(html: JString, base_url: JString),
-        fn place(interactive: bool, frames: jint[], zoom: jfloat, radii: jfloat[]),
+        fn place(interactive: bool, opacity: jfloat, frames: jint[], zoom: jfloat, radii: jfloat[]),
         fn hide(interactive: bool),
         fn reload(),
         fn stop(),

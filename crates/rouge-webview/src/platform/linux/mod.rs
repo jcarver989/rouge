@@ -264,7 +264,7 @@ impl Page {
         let toolkit = self.window.scale_factor().max(1) as f32;
         let unit = placement.device_scale / toolkit;
         let layout = placement.layout(unit);
-        self.set_visible(layout.is_some());
+        self.set_visible(layout.is_some() && placement.visible());
         let Some(layout) = layout else {
             return;
         };

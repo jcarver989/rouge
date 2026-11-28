@@ -44,10 +44,11 @@ impl Clip {
         }
     }
 
-    pub(super) fn place(&self, web: &WebKitView, layout: &Layout) {
+    pub(super) fn place(&self, web: &WebKitView, layout: &Layout, opacity: f32) {
         let (clip, page, zoom) = (layout.clip, layout.page, f64::from(layout.zoom));
         let unzoomed = layout.unzoomed;
         self.container.setHidden(false);
+        self.container.setAlpha(f64::from(opacity));
         self.container.setFrame(CGRect::new(
             CGPoint::new(f64::from(clip.origin.x), f64::from(clip.origin.y)),
             CGSize::new(f64::from(clip.size.width), f64::from(clip.size.height)),

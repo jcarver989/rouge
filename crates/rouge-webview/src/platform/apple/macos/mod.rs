@@ -85,7 +85,7 @@ impl Clip {
         }
     }
 
-    pub(super) fn place(&self, web: &WebKitView, layout: &Layout) {
+    pub(super) fn place(&self, web: &WebKitView, layout: &Layout, opacity: f32) {
         let (clip, page) = (layout.clip, layout.page);
         let top = if self.parent.isFlipped() {
             f64::from(clip.origin.y)
@@ -93,6 +93,7 @@ impl Clip {
             self.parent.bounds().size.height - f64::from(clip.max().y)
         };
         self.container.setHidden(false);
+        self.container.setAlphaValue(f64::from(opacity));
         self.container.setFrame(CGRect::new(
             CGPoint::new(f64::from(clip.origin.x), top),
             CGSize::new(f64::from(clip.size.width), f64::from(clip.size.height)),

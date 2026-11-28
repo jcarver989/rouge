@@ -40,6 +40,29 @@ fn a_layout_is_the_clip_with_the_page_inside_it_and_only_the_corners_in_view_rou
 }
 
 #[test]
+fn a_transparent_page_keeps_its_layout_but_is_not_visible() -> Result<(), &'static str> {
+    let placement = Placement {
+        frame: Rect::new(0.0, 0.0, 300.0, 200.0),
+        clip: Rect::new(0.0, 0.0, 300.0, 200.0),
+        opacity: 0.0,
+        ..Placement::default()
+    };
+    assert!(!placement.visible());
+    let layout = placement
+        .layout(1.0)
+        .ok_or("a transparent page is still laid out")?;
+    assert_eq!(layout.unzoomed, Size::new(300.0, 200.0));
+    assert!(
+        Placement {
+            opacity: 0.4,
+            ..placement
+        }
+        .visible()
+    );
+    Ok(())
+}
+
+#[test]
 fn a_placement_is_its_paint_region_in_window_points() {
     let region = PaintRegion {
         frame: Rect::new(10.0, 20.0, 200.0, 100.0),
@@ -55,6 +78,7 @@ fn a_placement_is_its_paint_region_in_window_points() {
             corners: Corners::all(16.0),
             device_scale: 3.0,
             page_zoom: 1.0,
+            opacity: 1.0,
             interactive: true,
         }
     );

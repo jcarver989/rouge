@@ -77,9 +77,10 @@ public final class WebPage {
         onUi(() -> web.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null));
     }
 
-    public void place(boolean interactive, int[] frames, float zoom, float[] radii) {
+    public void place(boolean interactive, float opacity, int[] frames, float zoom, float[] radii) {
         onUi(() -> {
             takeInput(interactive);
+            clip.setAlpha(opacity);
             clip.setVisibility(View.VISIBLE);
             ViewGroup.LayoutParams outer = clip.getLayoutParams();
             outer.width = Math.max(frames[2], 1);

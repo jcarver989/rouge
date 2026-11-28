@@ -195,7 +195,7 @@ impl Page {
             placed.set_region(env, 0, &frames)?;
             let radii = env.new_float_array(RADII)?;
             radii.set_region(env, 0, &corners.to_array())?;
-            java.place(env, interactive, &placed, zoom, &radii)
+            java.place(env, interactive, placement.opacity, &placed, zoom, &radii)
         });
     }
 }

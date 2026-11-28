@@ -10,13 +10,14 @@ pub struct WebViewOptions {
     pub inspectable: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
     pub frame: Rect,
     pub clip: Rect,
     pub corners: Corners,
     pub device_scale: f32,
     pub page_zoom: f32,
+    pub opacity: f32,
     pub interactive: bool,
 }
 
@@ -34,6 +35,20 @@ pub struct Layout {
 pub enum PageScale {
     Zoom(f32),
     Fit(Size),
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Self {
+            frame: Rect::ZERO,
+            clip: Rect::ZERO,
+            corners: Corners::ZERO,
+            device_scale: 1.0,
+            page_zoom: 1.0,
+            opacity: 1.0,
+            interactive: false,
+        }
+    }
 }
 
 impl Placement {
@@ -66,12 +81,13 @@ impl Placement {
             corners: region.corners.map(|radius| radius * window_zoom),
             device_scale,
             page_zoom,
+            opacity: 1.0,
             interactive,
         }
     }
 
     pub fn visible(&self) -> bool {
-        !self.clip.is_empty()
+        !self.clip.is_empty() && self.opacity > 0.0
     }
 
     pub fn layout(&self, unit: f32) -> Option<Layout> {
@@ -88,7 +104,7 @@ impl Placement {
             size: frame.size,
         }
         .scale(unit);
-        self.visible().then(|| Layout {
+        (!clip.is_empty()).then(|| Layout {
             clip: clip.scale(unit),
             page,
             unzoomed: Size::new(

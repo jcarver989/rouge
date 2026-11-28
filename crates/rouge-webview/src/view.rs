@@ -3,8 +3,8 @@ use crate::error::WebViewError;
 use crate::page::WebPage;
 use rouge_core::access::Role;
 use rouge_core::{
-    AnyView, BuildCx, DelegateStyle, Div, FocusHandle, IntoProp, PaintRegion, Prop, Size, Styled,
-    View, component, device_scale, div, zoom,
+    AnyView, BuildCx, DelegateStyle, Div, FocusHandle, IntoProp, PaintRegion, Prop, Rect, Size,
+    Styled, View, component, device_scale, div, zoom,
 };
 use rouge_reactive::signal;
 
@@ -16,6 +16,7 @@ pub struct WebView {
     interactive: Prop<bool>,
     page_zoom: Prop<f32>,
     page_size: Option<Prop<Size>>,
+    page_opacity: Prop<f32>,
     exclusive: bool,
     fallback: Option<Fallback>,
 }
@@ -28,6 +29,7 @@ pub fn web_view(page: WebPage) -> WebView {
         interactive: Prop::Static(true),
         page_zoom: Prop::Static(1.0),
         page_size: None,
+        page_opacity: Prop::Static(1.0),
         exclusive: false,
         fallback: None,
     }
@@ -46,6 +48,11 @@ impl WebView {
 
     pub fn page_size<T>(mut self, size: impl IntoProp<Size, T>) -> Self {
         self.page_size = Some(size.into_prop());
+        self
+    }
+
+    pub fn page_opacity<T>(mut self, opacity: impl IntoProp<f32, T>) -> Self {
+        self.page_opacity = opacity.into_prop();
         self
     }
 
@@ -93,8 +100,9 @@ impl View for WebView {
         let region = signal(PaintRegion::default());
         let (window_zoom, device_scale) = (zoom(), device_scale());
         page.attach(self.exclusive, move || {
+            let opacity = self.page_opacity.get().clamp(0.0, 1.0);
             region.with(|region| {
-                let placement = Placement::from_region(
+                let mut placement = Placement::from_region(
                     region,
                     window_zoom.get(),
                     device_scale.get(),
@@ -102,9 +110,15 @@ impl View for WebView {
                         Some(size) => PageScale::Fit(size.get()),
                         None => PageScale::Zoom(self.page_zoom.get()),
                     },
-                    self.interactive.get(),
+                    self.interactive.get() && opacity == 1.0,
                 );
-                (placement, region.bounds)
+                placement.opacity = opacity;
+                let bounds = if placement.visible() {
+                    region.bounds
+                } else {
+                    Rect::ZERO
+                };
+                (placement, bounds)
             })
         });
         self.div.track_paint_region(region).build(cx);

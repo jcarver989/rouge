@@ -179,6 +179,8 @@ impl EnginePage for Page {
                 self.content = Some(content);
             }
             PageCommand::Place(placement) => {
+                let _ = (self.dom.container.style())
+                    .set_property("opacity", &placement.opacity.to_string());
                 self.dom.container.set_inert(!placement.interactive);
                 self.dom.placement.set(placement);
                 self.dom.lay_out();

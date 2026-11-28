@@ -361,6 +361,30 @@ fn a_page_that_is_not_interactive_is_placed_that_way() -> TestResult {
 }
 
 #[test]
+fn a_fading_page_takes_no_input_and_a_transparent_one_covers_nothing() -> TestResult {
+    let _rt = Runtime::new().enter();
+    let opacity = signal(0.0);
+    let (engine, mut ui, covered) = stage_with(move || {
+        let view = view! { <web_view page={site()} page_opacity={move || opacity.get()} w=300.0 h=200.0/> };
+        (view, memo(occlusions))
+    })?;
+    let hidden = placed(&engine)?;
+    assert_eq!(hidden.opacity, 0.0);
+    assert!(!hidden.visible() && hidden.layout(1.0).is_some());
+    assert_eq!(covered.get(), Vec::<Rect>::new());
+    opacity.set(0.5);
+    ui.wait_for_idle()?;
+    let fading = placed(&engine)?;
+    assert_eq!(fading.opacity, 0.5);
+    assert!(fading.visible() && !fading.interactive);
+    assert_eq!(covered.get(), [fading.clip]);
+    opacity.set(1.0);
+    ui.wait_for_idle()?;
+    assert!(placed(&engine)?.interactive);
+    Ok(())
+}
+
+#[test]
 fn the_page_reports_what_it_does() -> TestResult {
     let _rt = Runtime::new().enter();
     let (engine, mut ui, page) = staged_site()?;
