@@ -2,16 +2,20 @@ use crate::components::{empty_state, icon_button};
 use crate::icon::{Icon, IconName};
 use crate::progress::spinner;
 use crate::style::UiStyle;
-use crate::tokens::{BAR_HEIGHT, HAIRLINE, ICON_SIZE_SMALL, Pace, Radius, Space, TINT_ALPHA};
+use crate::tokens::{
+    BAR_HEIGHT, HAIRLINE, ICON_SIZE, ICON_SIZE_SMALL, MotionScale, Radius, Space, TINT_ALPHA,
+};
 use crate::typography::UiStyles;
 use crate::util::{TestId, by_touch, chrome};
 use rouge_core::{
-    AnyView, BoxShadow, BuildCx, Corners, Cursor, DelegateStyle, Div, Fill, FocusHandle, Key, Rect,
-    Role, Size, StyleDelta, Styled, Theme, Timing, View, access, component, div, focus_handle,
-    motion, overlay, safe_area, show, text, view, window_size,
+    AnyView, BackdropBlur, BoxShadow, BuildCx, Color, Corners, Cursor, DelegateStyle, Div, Ease,
+    Edges, Fill, FocusHandle, Key, Motion, PaintRegion, Rect, Role, Size, StyleDelta, Styled,
+    Theme, Tween, View, access, component, div, focus_handle, motion, overlay, safe_area, show,
+    text, view,
 };
 use rouge_reactive::{Callback, Signal, memo, signal, spawn};
 use rouge_webview::{WebPage, web_view};
+use std::f32::consts::PI;
 
 pub struct WebCard {
     page: WebPage,
@@ -111,7 +115,14 @@ impl View for WebCard {
                 None => format!("{hint} to interact"),
             })
         };
+        let (page_size, fill) = (self.page_size, self.fill);
         let home = signal(Rect::ZERO);
+        let card = signal(PaintRegion::default());
+        let fitted = move || {
+            let fitted = home.get().size.width / page_size.width;
+            if fitted > 0.0 { fitted } else { 1.0 }
+        };
+        let inner = UiStyle::current().radii.px(Radius::Floating) - HAIRLINE;
         let preview_label = format!("{} preview", self.name);
         let header = Header {
             page,
@@ -120,12 +131,20 @@ impl View for WebCard {
             tag: self.tag,
             open: self.on_open,
         };
-        let (expand, expand_label, screen) = if let Some(callback) = on_expand {
-            (callback, "Expand", None)
-        } else {
-            let (enter, screen) = full_screen(header.clone(), home, self.test_id.clone());
-            (enter, "Full screen", Some(screen))
+        let morph = on_expand.is_none().then(Morph::new);
+        let (expand, expand_label) = match (on_expand, morph) {
+            (Some(callback), _) => (callback, "Expand"),
+            (None, morph) => (
+                Callback::from(move || {
+                    if let Some(morph) = morph {
+                        morph.expand();
+                    }
+                }),
+                "Full screen",
+            ),
         };
+        let screen = morph
+            .map(|morph| full_screen(header.clone(), card, status, morph, self.test_id.clone()));
         let status = view! { <text small muted truncate test_id?=self.test_id.part("status")>{status}</text> };
         let mut actions = self.actions;
         actions.push(view! {
@@ -133,12 +152,6 @@ impl View for WebCard {
                  test_id?=self.test_id.part("expand")/>
         }.into_any());
         let header = header.bar(Some(status.into_any()), actions, &self.test_id);
-        let inner = UiStyle::current().radii.px(Radius::Floating) - HAIRLINE;
-        let (page_size, fill) = (self.page_size, self.fill);
-        let fitted = move || {
-            let fitted = home.get().size.width / page_size.width;
-            if fitted > 0.0 { fitted } else { 1.0 }
-        };
         let corners = Corners {
             top_left: 0.0,
             top_right: 0.0,
@@ -163,6 +176,7 @@ impl View for WebCard {
                  test_id?=self.test_id.part("viewport")>
                 <web_view page absolute inset=0.0 rounded=corners
                      interactive=awake page_zoom=fitted
+                     page_opacity={move || morph.map_or(1.0, |morph| morph.fade.value())}
                      track_focus?=focus access_label=preview_label
                      fallback={|error| view! {
                          <div size_full flex items_center justify_center>
@@ -186,9 +200,11 @@ impl View for WebCard {
                 Role::BorderSubtle
             }
         };
+        let lifted = move || morph.is_some_and(|morph| morph.shown.get());
         let root = view! {
             <div flex col min_w=0.0 rounded=Radius::Floating border=HAIRLINE border_color=border
-                 bg=Role::Surface shadow=ring overflow_hidden test_id?=self.test_id>
+                 bg=Role::Surface shadow=ring overflow_hidden track_paint_region=card
+                 opacity={move || if lifted() { 0.0 } else { 1.0 }} test_id?=self.test_id>
                 {header}
                 {viewport}
                 {screen}
@@ -231,75 +247,174 @@ impl Header {
     }
 }
 
-fn full_screen(header: Header, home: Signal<Rect>, id: Option<String>) -> (Callback, impl View) {
-    let page = header.page;
-    let (full_screen, grown) = (signal(false), motion(0.0));
-    let (grow, shrink): (Timing, Timing) = (Pace::Layout.into(), Pace::Exit.into());
-    let enter = move || {
-        full_screen.set(true);
-        grown.animate_to(1.0, grow);
-    };
-    let leave = move || {
-        let landed = grown.animate_to(0.0, shrink);
+#[derive(Clone, Copy)]
+struct Morph {
+    shown: Signal<bool>,
+    grown: Motion,
+    fade: Motion,
+    turn: Signal<u64>,
+    still: bool,
+}
+
+impl Morph {
+    fn new() -> Self {
+        Morph {
+            shown: signal(false),
+            grown: motion(0.0),
+            fade: motion(1.0),
+            turn: signal(0),
+            still: MotionScale::current() == MotionScale::None,
+        }
+    }
+
+    fn landed(self) -> bool {
+        self.shown.get() && self.grown.value() >= 1.0
+    }
+
+    fn expand(self) {
+        let Some(current) = self.begin(true) else {
+            return;
+        };
         spawn(async move {
-            if landed.await {
-                full_screen.set(false);
+            if !self.shown.get_untracked() {
+                if !self.fade.animate_to(0.0, FADE_OUT).await || !current() {
+                    return;
+                }
+                self.shown.set(true);
+            }
+            if self.grown.animate_to(1.0, GROW).await && current() {
+                self.fade.animate_to(1.0, FADE_IN);
             }
         });
-    };
-    let (insets, window) = (safe_area(), window_size());
-    let away = signal(Rect::ZERO);
-    let full_size = move || {
-        let (measured, window) = (away.get().size, window.get());
-        if measured.width > 0.0 {
-            measured
+    }
+
+    fn collapse(self) {
+        let Some(current) = self.begin(false) else {
+            return;
+        };
+        spawn(async move {
+            if self.shown.get_untracked() {
+                if !self.fade.animate_to(0.0, FADE_OUT).await || !current() {
+                    return;
+                }
+                if !self.grown.animate_to(0.0, SHRINK).await || !current() {
+                    return;
+                }
+                self.shown.set(false);
+            }
+            self.fade.animate_to(1.0, FADE_IN);
+        });
+    }
+
+    fn begin(self, expand: bool) -> Option<impl Fn() -> bool + 'static> {
+        let turn = self.turn.get_untracked() + 1;
+        self.turn.set(turn);
+        if self.still {
+            self.shown.set(expand);
+            self.grown.set(f32::from(expand));
+            self.fade.set(1.0);
+            return None;
+        }
+        Some(move || self.turn.get_untracked() == turn)
+    }
+}
+
+fn full_screen(
+    header: Header,
+    card: Signal<PaintRegion>,
+    status: impl Fn() -> String + Clone + 'static,
+    morph: Morph,
+    id: Option<String>,
+) -> impl View {
+    let (page, grown) = (header.page, morph.grown);
+    let leave = move || morph.collapse();
+    let (insets, theme) = (safe_area(), Theme::current());
+    let radius = UiStyle::current().radii.px(Radius::Floating);
+    let (window, area) = (signal(Rect::ZERO), signal(Rect::ZERO));
+    let progress = move || grown.value().clamp(0.0, 1.0);
+    let toward = move |from| {
+        let to = window.get();
+        if to.is_empty() {
+            from
         } else {
-            Size::new(window.width, (window.height - BAR_HEIGHT).max(1.0))
+            between(from, to, grown.value())
         }
     };
-    let frame = memo(move || {
-        let (home, away) = (home.get(), away.get());
-        if away.is_empty() {
-            home
-        } else {
-            between(home, away, grown.value())
-        }
-    });
+    let frame = memo(move || card.with(|region| toward(region.frame)));
+    let clip = memo(move || card.with(|region| toward(region.bounds)));
+    let corners = move || Corners::all(radius * (1.0 - progress()));
+    let border = move || {
+        let color = theme.resolve(Fill::Role(Role::BorderSubtle));
+        color.with_alpha(color.a * (1.0 - progress()))
+    };
+    let lift = move || {
+        let lift = (PI * progress()).sin();
+        BoxShadow::new(
+            0.0,
+            LIFT_Y * lift,
+            LIFT_BLUR * lift,
+            Color::BLACK.with_alpha(LIFT_ALPHA * lift),
+        )
+    };
+    let inset = move |side: fn(Edges) -> f32| side(insets.get()) * progress();
+    let reveal = move |length: f32| if morph.landed() { length } else { 0.0 };
     let screen = move || {
-        view! {
-            <div absolute inset=0.0 flex col focus_scope autofocus tab_index=-1
-                 pt={move || insets.get().top} pr={move || insets.get().right}
-                 pb={move || insets.get().bottom} pl={move || insets.get().left}
-                 role=access::Role::Dialog access_label={header.name.clone()}
-                 on_key_down={move |event| {
-                     if event.key == Key::Escape {
-                         event.stop_propagation();
-                         leave();
-                     }
-                 }}
-                 test_id?=id.part("screen")>
-                <div absolute inset=0.0 bg=Role::Canvas opacity=grown/>
-                {header.bar(None, Vec::new(), &None).bg(Role::Surface)
-                    .opacity(grown.map(HEADER_ENTERS, [0.0, 1.0]))
-                    .translate_y(grown.map(HEADER_ENTERS, [-HEADER_DROP, 0.0]))
-                    .child(view! {
-                        <icon_button icon=IconName::Minimize label="Exit full screen" on_click=leave
-                             test_id?=id.part("collapse")/>
-                    })}
-                <div flex_1 min_h=0.0 track_bounds=away/>
-                <div absolute overflow_hidden
-                     left={move || frame.get().origin.x} top={move || frame.get().origin.y}
-                     w={move || frame.get().size.width} h={move || frame.get().size.height}>
-                    <web_view page exclusive size_full page_size=full_size
-                         access_label={header.name.clone()} test_id?=id.part("screen-page")/>
+        let status = view! {
+            <div min_w=0.0 opacity=grown.map(LEAVES, [1.0, 0.0])>
+                <text small muted truncate>{status.clone()}</text>
+            </div>
+        };
+        let swap = view! {
+            <div relative flex_none>
+                <div opacity=grown.map(ENTERS, [0.0, 1.0])>
+                    <icon_button icon=IconName::Minimize label="Exit full screen" on_click=leave
+                         test_id?=id.part("collapse")/>
+                </div>
+                <div absolute inset=0.0 flex items_center justify_center pass_through access_hidden=true
+                     opacity=grown.map(LEAVES, [1.0, 0.0])>
+                    {Icon::new(IconName::Maximize, Role::TextMuted).size(ICON_SIZE)}
                 </div>
             </div>
+        };
+        let bar = header.bar(Some(status.into_any()), vec![swap.into_any()], &None);
+        view! {
+                <div absolute inset=0.0 focus_scope autofocus tab_index=-1 track_bounds=window
+                     role=access::Role::Dialog access_label={header.name.clone()}
+                     on_key_down={move |event| {
+                         if event.key == Key::Escape {
+                             event.stop_propagation();
+                             leave();
+                         }
+                     }}
+                     test_id?=id.part("screen")>
+                    <div absolute inset=0.0 pass_through bg=Role::Scrim backdrop=BackdropBlur::new(SCRIM_BLUR)
+                         opacity=grown.map(SCRIM_RISES, [0.0, 1.0])/>
+                    <div absolute rounded=corners bg=Role::Surface shadow=lift
+                         left={move || clip.get().origin.x} top={move || clip.get().origin.y}
+                         w={move || clip.get().size.width} h={move || clip.get().size.height}/>
+                    <div absolute overflow_hidden left={move || clip.get().origin.x} top={move || clip.get().origin.y}
+                         w={move || clip.get().size.width} h={move || clip.get().size.height}>
+                        <div absolute flex col overflow_hidden rounded=corners bg=Role::Surface
+                             border={move || HAIRLINE * (1.0 - progress())} border_color=border test_id?=id.part("screen-container")
+                             left={move || frame.get().origin.x - clip.get().origin.x}
+                             top={move || frame.get().origin.y - clip.get().origin.y}
+                             w={move || frame.get().size.width} h={move || frame.get().size.height}
+                             pt={move || inset(|edges| edges.top)} pr={move || inset(|edges| edges.right)}
+                             pb={move || inset(|edges| edges.bottom)} pl={move || inset(|edges| edges.left)}>
+                            {bar}
+                            <div relative flex_1 min_h=0.0 bg=Role::Canvas track_bounds=area
+                                 test_id?=id.part("screen-placeholder")>
+                                <web_view page exclusive absolute left=0.0 top=0.0
+                                     w={move || reveal(area.get().size.width)} h={move || reveal(area.get().size.height)}
+                                     page_opacity={move || morph.fade.value()}
+                                     access_label={header.name.clone()} test_id?=id.part("screen-page")/>
+                            </div>
+                        </div>
+                    </div>
+                </div>
         }
     };
-    (
-        enter.into(),
-        view! { <overlay><show when={move || full_screen.get()} children=screen/></overlay> },
-    )
+    view! { <overlay><show when={move || morph.shown.get()} children=screen/></overlay> }
 }
 
 fn title(icon: IconName, name: String, label: Option<String>) -> Div {
@@ -327,6 +442,12 @@ fn tag(tag: String) -> Div {
 }
 
 fn between(from: Rect, to: Rect, progress: f32) -> Rect {
+    if progress <= 0.0 {
+        return from;
+    }
+    if progress >= 1.0 {
+        return to;
+    }
     let mix = |from: f32, to: f32| (from + (to - from) * progress).round();
     Rect::new(
         mix(from.origin.x, to.origin.x),
@@ -337,5 +458,14 @@ fn between(from: Rect, to: Rect, progress: f32) -> Rect {
 }
 
 const PAGE: Size = Size::new(960.0, 600.0);
-const HEADER_ENTERS: [f32; 2] = [0.3, 0.9];
-const HEADER_DROP: f32 = 6.0;
+const LEAVES: [f32; 2] = [0.0, 0.3];
+const ENTERS: [f32; 2] = [0.3, 0.9];
+const SCRIM_RISES: [f32; 2] = [0.0, 0.5];
+const SCRIM_BLUR: f32 = 8.0;
+const LIFT_Y: f32 = 12.0;
+const LIFT_BLUR: f32 = 36.0;
+const LIFT_ALPHA: f32 = 0.24;
+const GROW: Tween = Tween::ms(300.0).ease(Ease::cubic_bezier(0.05, 0.7, 0.1, 1.0));
+const SHRINK: Tween = Tween::ms(250.0).ease(Ease::cubic_bezier(0.2, 0.0, 0.0, 1.0));
+const FADE_OUT: Tween = Tween::ms(90.0).ease(Ease::In);
+const FADE_IN: Tween = Tween::ms(180.0).ease(Ease::Out);

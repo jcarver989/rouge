@@ -1,8 +1,8 @@
 use rouge_core::testing::{TestError, TestResult, TestUi};
 use rouge_core::{
-    Corners, FocusHandle, InputKind, Rect, Size, Styled, View, div, focus_handle, view,
+    Corners, FocusHandle, InputKind, Rect, Styled, View, div, focus_handle, occlusions, view,
 };
-use rouge_reactive::{Runtime, signal};
+use rouge_reactive::{Runtime, memo, signal};
 use rouge_webview::testing::FakeEngine;
 use rouge_webview::{PageCommand, WebContent, WebPage, WebViewError, WebViewEvent, web_page};
 use rouge_widgets::testing::component_test;
@@ -181,8 +181,11 @@ fn a_card_opens_its_page_full_screen_and_brings_it_back() -> TestResult {
     let inline = engine.placement(0).ok_or("in the card")?;
     assert!(!inline.interactive);
     ui.click_on("card-expand")?;
-    ui.advance_frames(1);
-    assert!(!engine.placement(1).ok_or("covered card")?.visible());
+    assert!(ui.wait_until(|ui| ui.bounds_of("card-screen").is_some()));
+    assert!(
+        !engine.placement(1).ok_or("covered card")?.visible(),
+        "other pages hide as the container rises"
+    );
     ui.wait_for_idle()?;
     let (screen, full) = (
         ui.rect_of("card-screen")?,
@@ -206,56 +209,102 @@ fn a_card_opens_its_page_full_screen_and_brings_it_back() -> TestResult {
 }
 
 #[test]
-fn the_page_grows_out_of_the_card_without_changing_its_layout_size() -> TestResult {
+fn the_page_fades_out_of_the_card_rides_a_growing_container_and_fades_in_full_screen() -> TestResult
+{
     let _entered = Runtime::new().enter();
     let engine = FakeEngine::new();
-    let (mut ui, _focus) = card(&engine)?;
+    let (mut ui, blocked) = component_test()
+        .size(800.0, 600.0)
+        .setup(engine.install())
+        .build_with(|| {
+            let view = view! {
+                <div absolute top=18.0 left=25.0 w=500.0 h=205.0 overflow_hidden>
+                    <web_card page={pricing()} name="pricing.html" ml=-20.0 w=480.0 test_id="card"/>
+                </div>
+            };
+            (view, memo(occlusions))
+        });
+    ui.wait_for_idle()?;
     let inline = engine.placement(0).ok_or("in the card")?;
-    engine.take_calls(0);
+    let card = ui.rect_of("card")?;
+    assert!(inline.clip.origin.x > inline.frame.origin.x);
+    assert!(inline.clip.max().y < inline.frame.max().y);
     ui.click_on("card-expand")?;
     ui.advance_frames(1);
-    let growing = engine.placement(0).ok_or("growing")?;
-    let (from, shown) = (inline.clip.size, growing.clip.size);
+    let leaving = engine.placement(0).ok_or("leaving the card")?;
+    assert!(leaving.opacity > 0.0 && leaving.opacity < 1.0);
+    assert_eq!(leaving.frame, inline.frame, "it fades where it is");
+    assert!(ui.wait_until(|ui| {
+        ui.rect_of("card-screen-container")
+            .is_ok_and(|container| container.size.width > card.size.width)
+    }));
+    assert!(!engine.placement(0).ok_or("in flight")?.visible());
+    assert_eq!(blocked.get(), Vec::<Rect>::new());
+    let container = ui.rect_of("card-screen-container")?;
+    let shown = ui.visible_rect_of("card-screen-container")?;
     assert!(
-        shown.width > from.width && shown.width < 800.0,
-        "part of the way: {shown:?}"
+        container.size.width < 800.0,
+        "part of the way: {container:?}"
     );
-    assert!(shown.height > from.height && growing.clip.max().y < 600.0);
+    assert!(
+        shown.origin.x > container.origin.x && shown.max().y < container.max().y,
+        "it grows from the part of the card that shows: {shown:?} of {container:?}"
+    );
+    assert!(ui.wait_until(|_| {
+        engine
+            .placement(0)
+            .is_some_and(|placed| placed.opacity > 0.0 && placed.opacity < 1.0)
+    }));
+    let arriving = engine.placement(0).ok_or("arriving")?;
+    let full = ui.rect_of("card-screen-page")?;
+    assert_eq!(arriving.frame, full, "it fades in where it lands");
+    assert_eq!(
+        ui.rect_of("card-screen-container")?,
+        Rect::new(0.0, 0.0, 800.0, 600.0)
+    );
+    assert_eq!(full, ui.rect_of("card-screen-placeholder")?);
+    assert!(!arriving.interactive);
     ui.wait_for_idle()?;
-    let full = ui.rect_of("card-screen-page")?.size;
-    let sizes: Vec<Size> = engine
-        .calls(0)
-        .iter()
-        .filter_map(|call| match call {
-            PageCommand::Place(placed) => placed.layout(1.0),
-            _ => None,
-        })
-        .map(|layout| layout.unzoomed)
-        .collect();
-    assert!(sizes.len() > 10, "the page is placed on every frame");
-    assert!(
-        sizes.iter().all(|size| *size == full),
-        "the web view was resized while it grew: {sizes:?}"
-    );
+    let landed = engine.placement(0).ok_or("full screen")?;
+    assert_eq!((landed.frame, landed.opacity), (full, 1.0));
+    assert!(landed.interactive);
+    assert_eq!(blocked.get(), vec![full]);
+    ui.click_on("card-collapse")?;
+    ui.advance_frames(1);
+    let fading = engine.placement(0).ok_or("leaving full screen")?;
+    assert!(fading.opacity < 1.0 && fading.frame == full);
+    assert!(ui.wait_until(|ui| {
+        ui.rect_of("card-screen-container")
+            .is_ok_and(|container| container.size.width < 800.0)
+    }));
+    assert!(!engine.placement(0).ok_or("shrinking")?.visible());
+    ui.wait_for_idle()?;
+    assert_eq!(ui.bounds_of("card-screen"), None);
+    assert_eq!(engine.placement(0), Some(inline), "back in the card");
     Ok(())
 }
 
 #[test]
-fn leaving_full_screen_part_of_the_way_there_returns_from_where_the_page_is() -> TestResult {
+fn leaving_full_screen_part_of_the_way_there_returns_from_where_the_container_is() -> TestResult {
     let _entered = Runtime::new().enter();
     let engine = FakeEngine::new();
     let (mut ui, _focus) = card(&engine)?;
     let inline = engine.placement(0).ok_or("in the card")?;
+    let card = ui.rect_of("card")?;
     ui.click_on("card-expand")?;
-    ui.advance_frames(1);
-    let turned = engine.placement(0).ok_or("growing")?.clip.size.width;
+    assert!(ui.wait_until(|ui| {
+        ui.rect_of("card-screen-container")
+            .is_ok_and(|container| container.size.width > card.size.width + 40.0)
+    }));
+    let turned = ui.rect_of("card-screen-container")?.size.width;
     ui.press("escape");
     ui.advance_frames(1);
-    let returning = engine.placement(0).ok_or("returning")?.clip.size.width;
+    let returning = ui.rect_of("card-screen-container")?.size.width;
     assert!(
-        returning > inline.clip.size.width && returning < turned + 80.0,
+        returning > card.size.width && returning < turned + 80.0,
         "it turned around at {turned} and is now {returning}"
     );
+    assert!(!engine.placement(0).ok_or("returning")?.visible());
     ui.wait_for_idle()?;
     assert_eq!(
         ui.bounds_of("card-screen"),
@@ -264,7 +313,18 @@ fn leaving_full_screen_part_of_the_way_there_returns_from_where_the_page_is() ->
     );
     assert_eq!(engine.placement(0), Some(inline));
     ui.click_on("card-expand")?;
-    ui.click_on("card-collapse")?;
+    assert!(ui.wait_until(|_| {
+        engine.placement(0).is_some_and(|placed| {
+            placed.opacity > 0.0 && placed.opacity < 1.0 && placed.frame.size.width == 800.0
+        })
+    }));
+    ui.press("escape");
+    ui.wait_for_idle()?;
+    assert_eq!(
+        engine.placement(0),
+        Some(inline),
+        "leaving while the page fades in returns it to the card"
+    );
     ui.click_on("card-expand")?;
     ui.wait_for_idle()?;
     assert_eq!(
